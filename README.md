@@ -1,4 +1,4 @@
-<div style="text-align: center;">
+<div align="center">
   <h1>Supertooth</h1>
 
   <picture style="display: inline-block;">
