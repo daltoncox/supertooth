@@ -148,7 +148,11 @@ if(UNIX AND NOT APPLE)
 endif()
 
 # Add supertooth-btle executable (BTLE advertising packet detector)
-add_executable(supertooth-btle supertooth-btle.c hackrf.c hackrf.h ble_phy.c ble_phy.h)
+add_executable(supertooth-btle
+    supertooth-btle.c
+    hackrf.c hackrf.h
+    ble_phy.c ble_phy.h
+    bt_assigned_numbers.c bt_assigned_numbers.h)
 
 # Link libraries for supertooth-btle (doesn't need BTBB)
 target_link_libraries(supertooth-btle 
@@ -179,6 +183,7 @@ endif()
 add_executable(supertooth-hybrid
     supertooth-hybrid.c hackrf.c hackrf.h
     ble_phy.c ble_phy.h
+    bt_assigned_numbers.c bt_assigned_numbers.h
     bredr_phy.c bredr_phy.h
     bredr_piconet.c bredr_piconet.h)
 

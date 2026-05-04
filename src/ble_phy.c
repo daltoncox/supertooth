@@ -6,11 +6,11 @@
  */
 
 #include "ble_phy.h"
+#include "bt_assigned_numbers.h"
 
 #include <string.h>   /* memset, memcpy */
 #include <stddef.h>   /* NULL */
 #include <stdio.h>    /* printf, putchar */
-#include <ctype.h>    /* isprint */
 #include <inttypes.h> /* PRIX32 */
 
 /* ---------------------------------------------------------------------------
@@ -348,36 +348,6 @@ int ble_verify_crc(const ble_packet_t *pkt)
 #define RAND_ADDR_NRPA 0x00u   /* 00b = Random Private Non-Resolvable  */
 
 /**
- * Subset of well-known company identifiers from Bluetooth Assigned Numbers §7.
- * Used for Manufacturer Specific Data (AD type 0xFF) lookup.
- */
-static const struct
-{
-    uint16_t id;
-    const char *name;
-} s_company_ids[] = {
-    {0x0000, "Ericsson Technology Licensing"},
-    {0x0006, "Microsoft Corporation"},
-    {0x004C, "Apple, Inc."},
-    {0x0059, "Nordic Semiconductor ASA"},
-    {0x0075, "Samsung Electronics Co. Ltd."},
-    {0x0087, "Garmin International, Inc."},
-    {0x00E0, "Google"},
-    {0x0157, "Cypress Semiconductor"},
-    {0x02E5, "Espressif Incorporated"},
-    {0x0499, "Ruuvi Innovations Ltd."},
-};
-#define NUM_COMPANY_IDS (sizeof(s_company_ids) / sizeof(s_company_ids[0]))
-
-static const char *lookup_company_id(uint16_t id)
-{
-    for (unsigned int i = 0; i < NUM_COMPANY_IDS; i++)
-        if (s_company_ids[i].id == id)
-            return s_company_ids[i].name;
-    return NULL;
-}
-
-/**
  * Print a 6-byte BLE device address (little-endian, addr[0] = LSB) in
  * standard colon-separated notation with its address type in parentheses.
  */
@@ -415,8 +385,8 @@ static void print_ble_addr(const uint8_t *addr, int is_random)
 }
 
 /**
- * Parse and print AdvData AD structures: raw hex, ASCII attempt, and any
- * Manufacturer Specific Data (AD type 0xFF) with company name lookup.
+ * Parse and print AdvData AD structures: raw hex, AD type labeling, and
+ * Manufacturer Specific Data (AD type 0xFF) company lookup.
  */
 static void print_adv_data(const uint8_t *data, unsigned int len)
 {
@@ -432,13 +402,7 @@ static void print_adv_data(const uint8_t *data, unsigned int len)
         printf(" %02X", data[i]);
     printf("\n");
 
-    /* Best-effort ASCII display — non-printable bytes shown as '.'. */
-    printf("           ASCII: \"");
-    for (unsigned int i = 0; i < len; i++)
-        putchar(isprint((unsigned char)data[i]) ? data[i] : '.');
-    printf("\"\n");
-
-    /* Walk AD structures (length + type + value) looking for type 0xFF. */
+    /* Walk AD structures (length + type + value). */
     unsigned int i = 0;
     while (i < len)
     {
@@ -447,22 +411,27 @@ static void print_adv_data(const uint8_t *data, unsigned int len)
             break;
 
         uint8_t ad_type = data[i + 1u];
+        unsigned int val_begin = i + 2u;
+        unsigned int val_end = i + 1u + ad_len;
+
+        printf("├─ Type  : 0x%02X (%s)\n", ad_type, bt_assigned_ad_type_name(ad_type));
+        printf("├─ Data  :");
+        if (val_end > val_begin)
+        {
+            for (unsigned int j = val_begin; j < val_end; j++)
+                printf(" %02X", data[j]);
+        }
+        else
+        {
+            printf(" (none)");
+        }
+        printf("\n");
+
         if (ad_type == AD_TYPE_MANUF_SPEC && ad_len >= 3u)
         {
             /* Company ID is 2 bytes, little-endian. */
             uint16_t cid = (uint16_t)data[i + 2u] | ((uint16_t)data[i + 3u] << 8u);
-            const char *name = lookup_company_id(cid);
-            printf("Manuf    : %s (0x%04X)", name ? name : "Unknown", cid);
-
-            /* Remaining manufacturer-specific payload bytes. */
-            unsigned int val_end = i + 1u + ad_len;
-            if (val_end > i + 4u)
-            {
-                printf(" | Data:");
-                for (unsigned int j = i + 4u; j < val_end; j++)
-                    printf(" %02X", data[j]);
-            }
-            printf("\n");
+            printf("Manuf    : %s (0x%04X)\n", bt_assigned_company_name(cid), cid);
         }
 
         i += 1u + ad_len;
