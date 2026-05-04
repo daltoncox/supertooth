@@ -1,10 +1,12 @@
-# Supertooth
+<div style="text-align: center;">
+  <h1>Supertooth</h1>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="imgs/superT_gizmo_white.png">
-  <source media="(prefers-color-scheme: light)" srcset="imgs/superT_gizmo_black.png">
-  <img alt="Supertooth logo" src="imgs/superT_gizmo_black.png" width="180">
-</picture>
+  <picture style="display: inline-block;">
+    <source media="(prefers-color-scheme: dark)" srcset="imgs/superT_gizmo_white.png">
+    <source media="(prefers-color-scheme: light)" srcset="imgs/superT_gizmo_black.png">
+    <img alt="Supertooth logo" src="imgs/superT_gizmo_black.png" width="180">
+  </picture>
+</div>
 
 Supertooth is a C-based software-defined radio (SDR) project for receiving and decoding Bluetooth traffic with a HackRF.
 
