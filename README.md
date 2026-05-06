@@ -2,9 +2,9 @@
   <h1>Supertooth</h1>
 
   <picture style="display: inline-block;">
-    <source media="(prefers-color-scheme: dark)" srcset="imgs/superT_gizmo_white.png">
-    <source media="(prefers-color-scheme: light)" srcset="imgs/superT_gizmo_black.png">
-    <img alt="Supertooth logo" src="imgs/superT_gizmo_black.png" width="180">
+    <source media="(prefers-color-scheme: dark)" srcset="imgs/Behold_Supertooth.png">
+    <source media="(prefers-color-scheme: light)" srcset="imgs/Behold_Supertooth.png">
+    <img alt="Supertooth logo" src="imgs/Behold_Supertooth.png" width="180">
   </picture>
 </div>
 
