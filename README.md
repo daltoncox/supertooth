@@ -79,15 +79,22 @@ Output binaries are in:
 Main binaries (require HackRF hardware):
 
 ```bash
-./src/supertooth-btle
-./src/supertooth-rx
-./src/supertooth-hybrid
+./build/src/supertooth-btle --view full
+./build/src/supertooth-rx --view full
+./build/src/supertooth-hybrid --view full
 ```
 
 `supertooth-rx` supports runtime options:
 
 ```bash
 ./build/src/supertooth-rx --help
+```
+
+`supertooth-btle` and `supertooth-hybrid` also support:
+
+```bash
+--view full|summary
+--debug
 ```
 
 ## Basic architecture
