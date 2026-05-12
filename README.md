@@ -97,6 +97,12 @@ Main binaries (require HackRF hardware):
 --debug
 ```
 
+`supertooth-btle` additionally supports:
+
+```bash
+--ble-channel 37|38|39
+```
+
 ## Basic architecture
 
 ### Signal processing runtimes (`src/`)

@@ -599,14 +599,17 @@ static void print_usage(const char *argv0)
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|rssi] [-l|--lap LAP] "
             "[--rssi-averaging N|none] [-c|--channels N] [-b|--bottom-channel CH] [-d|--debug]\n", argv0);
-    fprintf(stderr, "  -v, --view       Packet view style (default: full)\n");
-    fprintf(stderr, "  -l, --lap        Only track/report this LAP (e.g. 0x1FC475)\n");
-    fprintf(stderr, "      --rssi-averaging  EMA window for piconet RSSI (default: 16; 0/none disables)\n");
-    fprintf(stderr, "  -c, --channels   Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
+    fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
+    fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
+    fprintf(stderr, "  %-30s EMA window for piconet RSSI (default: 16; 0/none disables)\n",
+            "--rssi-averaging N|none");
+    fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
+            "-c, --channels N",
             MAX_BREDR_CHANNELS, DEFAULT_BREDR_CHANNELS);
-    fprintf(stderr, "  -b, --bottom-channel  Lowest BR/EDR channel to process (0-%u, default: 0)\n",
+    fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
+            "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
-    fprintf(stderr, "  -d, --debug      Print drop/debug diagnostics\n");
+    fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "-d, --debug");
 }
 
 /* -------------------------------------------------------------------------

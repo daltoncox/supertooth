@@ -325,8 +325,8 @@ static int parse_output_mode(const char *arg, output_mode_t *out_mode)
 static void print_usage(const char *argv0)
 {
     fprintf(stderr, "Usage: %s [-v|--view full|summary] [-d|--debug]\n", argv0);
-    fprintf(stderr, "  -v, --view       Packet view style (default: full)\n");
-    fprintf(stderr, "  -d, --debug      Print block-drop diagnostics\n");
+    fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
+    fprintf(stderr, "  %-30s Print block-drop diagnostics\n", "-d, --debug");
 }
 
 // --- Setup -------------------------------------------------------------------

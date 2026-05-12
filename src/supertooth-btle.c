@@ -18,6 +18,10 @@
 // BTLE Advertising Channel 37 constants
 #define BTLE_CH37_INDEX 37         // BLE channel index for 2.402 GHz
 #define BTLE_CH37_FREQ 2402e6      // Channel 37 frequency (2.402 GHz)
+#define BTLE_CH38_INDEX 38         // BLE channel index for 2.426 GHz
+#define BTLE_CH38_FREQ 2426e6      // Channel 38 frequency (2.426 GHz)
+#define BTLE_CH39_INDEX 39         // BLE channel index for 2.480 GHz
+#define BTLE_CH39_FREQ 2480e6      // Channel 39 frequency (2.480 GHz)
 #define ADVERTISING_AA 0x8E89BED6U // BTLE advertising access address
 
 #define BTLE_SYMBOL_RATE 1e6 // 1 Mbps BTLE symbol rate
@@ -46,6 +50,8 @@ static unsigned long g_packet_count = 0;
 static int g_debug = 0;
 static unsigned long g_truncated_callback_blocks = 0;
 static volatile sig_atomic_t g_stop = 0;
+static uint8_t g_ble_channel = BTLE_CH37_INDEX;
+static uint64_t g_ble_freq_hz = (uint64_t)BTLE_CH37_FREQ;
 
 typedef enum
 {
@@ -133,11 +139,42 @@ static int parse_output_mode(const char *arg, output_mode_t *out_mode)
     return -1;
 }
 
+static int parse_ble_channel(const char *arg, uint8_t *out_channel, uint64_t *out_freq_hz)
+{
+    if (!arg || !out_channel || !out_freq_hz)
+        return -1;
+
+    char *endptr = NULL;
+    unsigned long ch = strtoul(arg, &endptr, 10);
+    if (*arg == '\0' || !endptr || *endptr != '\0')
+        return -1;
+
+    switch ((uint8_t)ch)
+    {
+    case BTLE_CH37_INDEX:
+        *out_channel = BTLE_CH37_INDEX;
+        *out_freq_hz = (uint64_t)BTLE_CH37_FREQ;
+        return 0;
+    case BTLE_CH38_INDEX:
+        *out_channel = BTLE_CH38_INDEX;
+        *out_freq_hz = (uint64_t)BTLE_CH38_FREQ;
+        return 0;
+    case BTLE_CH39_INDEX:
+        *out_channel = BTLE_CH39_INDEX;
+        *out_freq_hz = (uint64_t)BTLE_CH39_FREQ;
+        return 0;
+    default:
+        return -1;
+    }
+}
+
 static void print_usage(const char *argv0)
 {
-    fprintf(stderr, "Usage: %s [-v|--view full|summary] [-d|--debug]\n", argv0);
-    fprintf(stderr, "  -v, --view       Packet view style (default: full)\n");
-    fprintf(stderr, "  -d, --debug      Print drop/debug diagnostics\n");
+    fprintf(stderr, "Usage: %s [-v|--view full|summary] [-b|--ble-channel 37|38|39] [-d|--debug]\n", argv0);
+    fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
+    fprintf(stderr, "  %-30s BLE advertising channel (37, 38, or 39; default: 37)\n",
+            "-b, --ble-channel 37|38|39");
+    fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "-d, --debug");
 }
 
 static void print_ble_payload_preview(const ble_packet_t *pkt)
@@ -178,7 +215,7 @@ static void print_ble_packet_full(unsigned long packet_no,
            sample_index, (unsigned int)(SAMPLE_RATE / 1000000u));
     printf("Type         : BLE\n");
     printf("Frequency    : %u MHz (Channel %u)\n",
-           (unsigned int)(BTLE_CH37_FREQ / 1000000u), BTLE_CH37_INDEX);
+           (unsigned int)(g_ble_freq_hz / 1000000u), g_ble_channel);
     printf("RSSI         : %.2f dBm\n", rssi_dbm);
 
     printf("\n[BLE Packet Info]\n");
@@ -217,7 +254,7 @@ static void print_ble_packet_summary(unsigned long packet_no,
     printf("pkt=%-6lu type=BLE pdu=%-14s ch=%02u addr=%s len=%-3u crc=%s rssi=%.1f\n",
            packet_no,
            pdu_name,
-           BTLE_CH37_INDEX,
+           g_ble_channel,
            addr_buf,
            pkt->pdu[1],
            ble_verify_crc(pkt) ? "PASS" : "FAIL",
@@ -316,12 +353,13 @@ int main(int argc, char *argv[])
 {
     static const struct option long_opts[] = {
         {"view", required_argument, NULL, 'v'},
+        {"ble-channel", required_argument, NULL, 'b'},
         {"debug", no_argument, NULL, 'd'},
         {"help", no_argument, NULL, 'h'},
         {0, 0, 0, 0}
     };
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:dh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:b:dh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -329,6 +367,14 @@ int main(int argc, char *argv[])
             if (parse_output_mode(optarg, &g_output_mode) != 0)
             {
                 fprintf(stderr, "Invalid view mode: %s\n", optarg);
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            break;
+        case 'b':
+            if (parse_ble_channel(optarg, &g_ble_channel, &g_ble_freq_hz) != 0)
+            {
+                fprintf(stderr, "Invalid BLE channel: %s (expected 37, 38, or 39)\n", optarg);
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
@@ -345,13 +391,14 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("BTLE Advertising Packet Detector - Channel 37\n");
-    printf("==============================================\n");
+    printf("BTLE Advertising Packet Detector\n");
+    printf("================================\n");
+    printf("Channel     : %u (%.3f MHz)\n", g_ble_channel, (double)g_ble_freq_hz / 1e6);
     printf("View mode   : %s\n", g_output_mode == OUTPUT_MODE_SUMMARY ? "summary" : "full");
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
 
-    // Initialize BLE PHY processor for channel 37
-    ble_processor_init(&ble_proc, BTLE_CH37_INDEX);
+    // Initialize BLE PHY processor for selected advertising channel
+    ble_processor_init(&ble_proc, g_ble_channel);
 
     // Create BTLE GFSK demodulator (1 bit/symbol, h ~ 0.5, etc.).
     unsigned int bps = 1;                                         // bits/symbol
@@ -382,7 +429,7 @@ int main(int argc, char *argv[])
     }
 
     hackrf_config_t config = {
-        .lo_freq_hz = BTLE_CH37_FREQ,
+        .lo_freq_hz = g_ble_freq_hz,
         .sample_rate = SAMPLE_RATE,
         .lna_gain = LNA_GAIN,
         .vga_gain = VGA_GAIN,
@@ -406,7 +453,8 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    printf("Monitoring BTLE Channel 37 (2.402 GHz) for advertising packets...\n");
+    printf("Monitoring BTLE Channel %u (%.3f GHz) for advertising packets...\n",
+           g_ble_channel, (double)g_ble_freq_hz / 1e9);
     printf("Press Ctrl+C to exit\n\n");
 
     while (!g_stop)
@@ -418,6 +466,7 @@ int main(int argc, char *argv[])
     printf("\n\n=== Session Summary ===\n");
     printf("  Output mode    : %s\n", g_output_mode == OUTPUT_MODE_SUMMARY ? "summary" : "full");
     printf("  Debug mode     : %s\n", g_debug ? "enabled" : "disabled");
+    printf("  BLE channel    : %u (%.3f MHz)\n", g_ble_channel, (double)g_ble_freq_hz / 1e6);
     printf("  Total samples  : %" PRIu64 "\n", total_samples);
     printf("  Total packets  : %lu\n", g_packet_count);
     printf("\n=== Debug Summary ===\n");
