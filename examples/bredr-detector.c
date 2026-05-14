@@ -165,7 +165,7 @@ static int rx_callback(hackrf_transfer *transfer)
 
             printf("\n[Packet #%lu]\n", g_total_packets);
             bredr_print_packet(&pkt);
-            printf("RSSI     : %.1f dBm\n", pkt.rssi);
+            printf("RSSI     : %.1f dBr\n", pkt.rssi);
             fflush(stdout);
         }
     }

@@ -179,38 +179,11 @@ static void format_ble_addr(char out[18], const uint8_t *addr)
              addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]);
 }
 
-static void print_ble_payload_preview(const ble_packet_t *pkt)
-{
-    uint8_t pay_len = pkt->pdu[1];
-    if (pay_len == 0u)
-    {
-        printf("Payload      : (none)\n");
-        return;
-    }
-
-    unsigned int show = pay_len < 32u ? pay_len : 32u;
-    printf("Payload      : %u bytes", pay_len);
-    for (unsigned int i = 0; i < show; i++)
-    {
-        if (i % 16u == 0u)
-            printf("\n               ");
-        printf("%02X ", pkt->pdu[2u + i]);
-    }
-    if (pay_len > show)
-        printf("...");
-    printf("\n");
-}
-
 static void print_ble_packet_full(unsigned long packet_no,
                                   const ble_packet_t *pkt,
-                                  float rssi_dbm,
+                                  float rssi_dbr,
                                   unsigned long long sample_index)
 {
-    uint8_t pdu_type = pkt->pdu[0] & 0x0Fu;
-    const char *pdu_name = ble_pdu_type_name(pdu_type);
-    const uint8_t *addr = NULL;
-    char addr_buf[18];
-
     printf("\n------------------ Packet #%lu --------------------\n", packet_no);
     printf("[RX Info]\n");
     printf("Sample Index : %" PRIu64 " (%u Msps master clock)\n",
@@ -218,30 +191,15 @@ static void print_ble_packet_full(unsigned long packet_no,
     printf("Type         : BLE\n");
     printf("Frequency    : %u MHz (Channel %u)\n",
            (unsigned int)(BREDR_CHANNEL_0_FREQ / 1000000u), BLE_CH37_INDEX);
-    printf("RSSI         : %.2f dBm\n", rssi_dbm);
-
-    printf("\n[BLE Packet Info]\n");
-    printf("Access Addr  : 0x%08" PRIX32 "\n", pkt->access_address);
-    printf("PDU Type     : %s (%u)\n", pdu_name, pdu_type);
-    printf("Payload Len  : %u\n", pkt->pdu[1]);
-    if (ble_primary_addr(pkt, &addr))
-    {
-        format_ble_addr(addr_buf, addr);
-        printf("Address      : %s\n", addr_buf);
-    }
-    else
-    {
-        printf("Address      : (n/a)\n");
-    }
-    print_ble_payload_preview(pkt);
-    printf("CRC          : 0x%06" PRIX32 " [%s]\n",
-           pkt->crc, ble_verify_crc(pkt) ? "PASS" : "FAIL");
+    printf("RSSI         : %.2f dBr\n", rssi_dbr);
+    printf("\n");
+    ble_print_packet(pkt);
     printf("--------------------------------------------------\n");
 }
 
 static void print_ble_packet_summary(unsigned long packet_no,
                                      const ble_packet_t *pkt,
-                                     float rssi_dbm)
+                                     float rssi_dbr)
 {
     uint8_t pdu_type = pkt->pdu[0] & 0x0Fu;
     const char *pdu_name = ble_pdu_type_name(pdu_type);
@@ -260,7 +218,7 @@ static void print_ble_packet_summary(unsigned long packet_no,
            addr_buf,
            pkt->pdu[1],
            ble_verify_crc(pkt) ? "PASS" : "FAIL",
-           rssi_dbm);
+           rssi_dbr);
 }
 
 static void print_bredr_packet_full(unsigned long packet_no,
@@ -269,7 +227,7 @@ static void print_bredr_packet_full(unsigned long packet_no,
                                     uint32_t lap,
                                     uint32_t clkn,
                                     int ac_errors,
-                                    float rssi_dbm,
+                                    float rssi_dbr,
                                     unsigned long long sample_index)
 {
     printf("\n------------------ Packet #%lu --------------------\n", packet_no);
@@ -279,7 +237,7 @@ static void print_bredr_packet_full(unsigned long packet_no,
     printf("Type         : BR/EDR\n");
     printf("Frequency    : %u MHz (Channel %u)\n",
            (unsigned int)(BREDR_CHANNEL_0_FREQ / 1000000u) + channel, channel);
-    printf("RSSI         : %.2f dBm\n", rssi_dbm);
+    printf("RSSI         : %.2f dBr\n", rssi_dbr);
 
     printf("\n[BR/EDR Packet Info]\n");
     printf("Context      : %u\n", ctx_index);
@@ -294,7 +252,7 @@ static void print_bredr_packet_summary(unsigned long packet_no,
                                        uint32_t lap,
                                        uint32_t clkn,
                                        int ac_errors,
-                                       float rssi_dbm)
+                                       float rssi_dbr)
 {
     printf("pkt=%-6lu type=BREDR lap=%06" PRIX32 " ch=%02u ac=%d clkn=%u rssi=%.1f\n",
            packet_no,
@@ -302,7 +260,7 @@ static void print_bredr_packet_summary(unsigned long packet_no,
            channel,
            ac_errors,
            clkn,
-           rssi_dbm);
+           rssi_dbr);
 }
 
 static int parse_output_mode(const char *arg, output_mode_t *out_mode)
@@ -487,18 +445,18 @@ static void process_bredr_channel(bredr_channel_ctx_t *ctx, const rx_block_t *bl
             if (power > max_power)
                 max_power = power;
         }
-        float rssi_dbm = (max_power > 0.0f) ? 10.0f * log10f(max_power) - 30.0f : 0.0f;
+        float rssi_dbr = (max_power > 0.0f) ? 10.0f * log10f(max_power) : 0.0f;
 
         pthread_mutex_lock(&print_mutex);
         unsigned long packet_no = ++g_packet_count;
         if (g_output_mode == OUTPUT_MODE_SUMMARY)
         {
-            print_bredr_packet_summary(packet_no, ctx->bredr_channel, lap, clkn, ac_errors, rssi_dbm);
+            print_bredr_packet_summary(packet_no, ctx->bredr_channel, lap, clkn, ac_errors, rssi_dbr);
         }
         else
         {
             print_bredr_packet_full(packet_no, ctx->ctx_index, ctx->bredr_channel,
-                                    lap, clkn, ac_errors, rssi_dbm, absolute_sample);
+                                    lap, clkn, ac_errors, rssi_dbr, absolute_sample);
         }
         fflush(stdout);
         pthread_mutex_unlock(&print_mutex);
@@ -571,7 +529,7 @@ static void process_ble_channel(const rx_block_t *blk)
                         max_power = p;
                 }
             }
-            float rssi_dbm = (max_power > 0.0f) ? 10.0f * log10f(max_power) - 30.0f : 0.0f;
+            float rssi_dbr = (max_power > 0.0f) ? 10.0f * log10f(max_power) : 0.0f;
 
             ble_packet_t pkt;
             if (ble_get_packet(&ble_ctx.ble_proc, &pkt) == 0)
@@ -580,9 +538,9 @@ static void process_ble_channel(const rx_block_t *blk)
                 pthread_mutex_lock(&print_mutex);
                 unsigned long packet_no = ++g_packet_count;
                 if (g_output_mode == OUTPUT_MODE_SUMMARY)
-                    print_ble_packet_summary(packet_no, &pkt, rssi_dbm);
+                    print_ble_packet_summary(packet_no, &pkt, rssi_dbr);
                 else
-                    print_ble_packet_full(packet_no, &pkt, rssi_dbm, abs_sample);
+                    print_ble_packet_full(packet_no, &pkt, rssi_dbr, abs_sample);
                 fflush(stdout);
                 pthread_mutex_unlock(&print_mutex);
             }

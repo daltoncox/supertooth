@@ -189,7 +189,7 @@ typedef struct
     uint8_t  hec_valid;
 
     /**
-     * Received signal strength in dBm at the time this packet was captured.
+     * Received signal strength in dBr (relative dB) at capture time.
      * Set by the caller before or after bredr_get_packet().  Defaults to 0.0f
      * if the caller does not set it.
      */

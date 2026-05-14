@@ -177,38 +177,11 @@ static void print_usage(const char *argv0)
     fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "-d, --debug");
 }
 
-static void print_ble_payload_preview(const ble_packet_t *pkt)
-{
-    uint8_t pay_len = pkt->pdu[1];
-    if (pay_len == 0u)
-    {
-        printf("Payload      : (none)\n");
-        return;
-    }
-
-    unsigned int show = pay_len < 32u ? pay_len : 32u;
-    printf("Payload      : %u bytes", pay_len);
-    for (unsigned int i = 0; i < show; i++)
-    {
-        if (i % 16u == 0u)
-            printf("\n               ");
-        printf("%02X ", pkt->pdu[2u + i]);
-    }
-    if (pay_len > show)
-        printf("...");
-    printf("\n");
-}
-
 static void print_ble_packet_full(unsigned long packet_no,
                                   const ble_packet_t *pkt,
-                                  float rssi_dbm,
+                                  float rssi_dbr,
                                   unsigned long long sample_index)
 {
-    uint8_t pdu_type = pkt->pdu[0] & 0x0Fu;
-    const char *pdu_name = ble_pdu_type_name(pdu_type);
-    const uint8_t *addr = NULL;
-    char addr_buf[18];
-
     printf("\n------------------ Packet #%lu --------------------\n", packet_no);
     printf("[RX Info]\n");
     printf("Sample Index : %" PRIu64 " (%u Msps master clock)\n",
@@ -216,30 +189,15 @@ static void print_ble_packet_full(unsigned long packet_no,
     printf("Type         : BLE\n");
     printf("Frequency    : %u MHz (Channel %u)\n",
            (unsigned int)(g_ble_freq_hz / 1000000u), g_ble_channel);
-    printf("RSSI         : %.2f dBm\n", rssi_dbm);
-
-    printf("\n[BLE Packet Info]\n");
-    printf("Access Addr  : 0x%08" PRIX32 "\n", pkt->access_address);
-    printf("PDU Type     : %s (%u)\n", pdu_name, pdu_type);
-    printf("Payload Len  : %u\n", pkt->pdu[1]);
-    if (ble_primary_addr(pkt, &addr))
-    {
-        format_ble_addr(addr_buf, addr);
-        printf("Address      : %s\n", addr_buf);
-    }
-    else
-    {
-        printf("Address      : (n/a)\n");
-    }
-    print_ble_payload_preview(pkt);
-    printf("CRC          : 0x%06" PRIX32 " [%s]\n",
-           pkt->crc, ble_verify_crc(pkt) ? "PASS" : "FAIL");
+    printf("RSSI         : %.2f dBr\n", rssi_dbr);
+    printf("\n");
+    ble_print_packet(pkt);
     printf("--------------------------------------------------\n");
 }
 
 static void print_ble_packet_summary(unsigned long packet_no,
                                      const ble_packet_t *pkt,
-                                     float rssi_dbm)
+                                     float rssi_dbr)
 {
     uint8_t pdu_type = pkt->pdu[0] & 0x0Fu;
     const char *pdu_name = ble_pdu_type_name(pdu_type);
@@ -258,7 +216,7 @@ static void print_ble_packet_summary(unsigned long packet_no,
            addr_buf,
            pkt->pdu[1],
            ble_verify_crc(pkt) ? "PASS" : "FAIL",
-           rssi_dbm);
+           rssi_dbr);
 }
 
 // --- HackRF RX Callback ------------------------------------------------------
@@ -312,7 +270,7 @@ int btle_rx_cb(hackrf_transfer *transfer)
 
         if (status == BLE_VALID_PACKET)
         {
-            // Compute RSSI: max instantaneous power over the packet samples.
+            // Compute relative RSSI (dBr): max instantaneous power over packet samples.
             float max_power = 0.0f;
             if (pkt_start_abs >= 0)
             {
@@ -327,7 +285,7 @@ int btle_rx_cb(hackrf_transfer *transfer)
                         max_power = power;
                 }
             }
-            float rssi_dbm = (max_power > 0.0f) ? 10.0f * log10f(max_power) - 30.0f : 0.0f;
+            float rssi_dbr = (max_power > 0.0f) ? 10.0f * log10f(max_power) : 0.0f;
 
             // Retrieve and print the completed packet
             ble_packet_t pkt;
@@ -336,9 +294,9 @@ int btle_rx_cb(hackrf_transfer *transfer)
                 unsigned long long abs_sample_index = buf_start + sample_index;
                 unsigned long packet_no = ++g_packet_count;
                 if (g_output_mode == OUTPUT_MODE_SUMMARY)
-                    print_ble_packet_summary(packet_no, &pkt, rssi_dbm);
+                    print_ble_packet_summary(packet_no, &pkt, rssi_dbr);
                 else
-                    print_ble_packet_full(packet_no, &pkt, rssi_dbm, abs_sample_index);
+                    print_ble_packet_full(packet_no, &pkt, rssi_dbr, abs_sample_index);
                 fflush(stdout);
             }
         }

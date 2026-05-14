@@ -292,17 +292,17 @@ void bredr_piconet_print(const bredr_piconet_t *pnet)
 
     /* RSSI summary */
     if (pnet->combined_rssi_seen)
-        printf("  Combined RSSI: %.1f dBm", pnet->combined_rssi);
+        printf("  Combined RSSI: %.1f dBr", pnet->combined_rssi);
 
     float mr = bredr_piconet_master_rssi(pnet);
     if (!isnan(mr))
-        printf("  Master RSSI: %.1f dBm", mr);
+        printf("  Master RSSI: %.1f dBr", mr);
 
     for (int i = 1; i <= 7; i++)
     {
         float sr = bredr_piconet_slave_rssi(pnet, (uint8_t)i);
         if (!isnan(sr))
-            printf("  Slave[%d] RSSI: %.1f dBm", i, sr);
+            printf("  Slave[%d] RSSI: %.1f dBr", i, sr);
     }
 
     printf("\n");

@@ -196,7 +196,7 @@ static void print_bredr_packet_report(const rx_packet_t *rx_pkt,
     printf("Sample Index : %" PRIu64 " (20 Msps master clock)\n", rx_pkt->sample_index);
     printf("Type         : BR/EDR\n");
     printf("Frequency    : %u MHz (Channel %u)\n", freq_mhz, channel);
-    printf("RSSI         : %.2f dBm\n", rx_pkt->rssi);
+    printf("RSSI         : %.2f dBr\n", rx_pkt->rssi);
 
     printf("\n[%s Packet Info]\n",
            is_data ? "BR/EDR Data" : "BR/EDR Inquiry");

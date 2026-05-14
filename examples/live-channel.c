@@ -73,13 +73,13 @@ int bredr_channel_cb(hackrf_transfer *transfer)
                 max_power = power;
         }
 
-        // Convert power to RSSI in dBm
-        float rssi_dbm = 0.0f;
+        // Convert power to relative RSSI in dBr
+        float rssi_dbr = 0.0f;
         if (max_power > 0.0f)
         {
-            rssi_dbm = 10.0f * log10f(max_power) - 30.0f; // Bogus offset
+            rssi_dbr = 10.0f * log10f(max_power);
         }
-        printf("LAP: %06x, AC errors: %d, RSSI: %f \n", lap, btbb_packet_get_ac_errors(pkt), rssi_dbm);
+        printf("LAP: %06x, AC errors: %d, RSSI: %f dBr\n", lap, btbb_packet_get_ac_errors(pkt), rssi_dbr);
         fflush(stdout);
 
         btbb_packet_unref(pkt);

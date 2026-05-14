@@ -31,7 +31,7 @@ typedef struct
     /** RF center frequency in Hz. */
     uint32_t frequency_hz;
 
-    /** Measured receive power in dBm. */
+    /** Measured receive power in dBr (relative dB). */
     float rssi;
 
     /** Pointer to PHY-specific packet payload (cast by `type`). */

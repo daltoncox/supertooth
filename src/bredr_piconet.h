@@ -102,7 +102,7 @@ extern "C"
 
         /* -- Aggregate RSSI (used before tracking lock) ---------------------- */
 
-        /** Most recent RSSI (dBm) while no active clock track exists. */
+        /** Most recent RSSI (dBr) while no active clock track exists. */
         float combined_rssi;
 
         /** Non-zero if combined_rssi contains a valid value. */
@@ -111,7 +111,7 @@ extern "C"
         /* -- Per-role RSSI (valid only with active track + HEC-pass packet) ----- */
 
         /**
-         * Most recent RSSI (dBm) for master transmissions (CLK1 == 0).
+         * Most recent RSSI (dBr) for master transmissions (CLK1 == 0).
          */
         float master_rssi;
 
@@ -119,7 +119,7 @@ extern "C"
         int master_rssi_seen;
 
         /**
-         * Most recent RSSI (dBm) for slave transmissions, indexed by LT_ADDR
+         * Most recent RSSI (dBr) for slave transmissions, indexed by LT_ADDR
          * (0–7). Index 0 = broadcast / unaddressed frames from slaves.
          */
         float slave_rssi[8];
@@ -230,18 +230,18 @@ extern "C"
     void bredr_piconet_set_rssi_averaging(unsigned int window);
 
     /**
-     * @brief Return the latest RSSI (dBm) for master transmissions.
+     * @brief Return the latest RSSI (dBr) for master transmissions.
      *
-     * @return Latest RSSI in dBm, or NAN if no master packets with RSSI have
+     * @return Latest RSSI in dBr, or NAN if no master packets with RSSI have
      *         been received.
      */
     float bredr_piconet_master_rssi(const bredr_piconet_t *pnet);
 
     /**
-     * @brief Return the latest RSSI (dBm) for a specific slave LT_ADDR.
+     * @brief Return the latest RSSI (dBr) for a specific slave LT_ADDR.
      *
      * @param lt_addr  LT_ADDR to query (0–7).
-     * @return Latest RSSI in dBm, or NAN if no packets with RSSI have been
+     * @return Latest RSSI in dBr, or NAN if no packets with RSSI have been
      *         received for this LT_ADDR.
      */
     float bredr_piconet_slave_rssi(const bredr_piconet_t *pnet, uint8_t lt_addr);

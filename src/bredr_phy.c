@@ -537,7 +537,7 @@ bredr_status_t bredr_push_bit(bredr_processor_t *proc, uint8_t bit)
     return BREDR_VALID_PACKET;
 }
 
-static float compute_ac_ring_rssi_dbm(const bredr_processor_t *proc)
+static float compute_ac_ring_rssi_dbr(const bredr_processor_t *proc)
 {
     float sum_power = 0.0f;
     for (unsigned int k = 0u; k < BREDR_AC_SAMPLES; k++)
@@ -548,7 +548,7 @@ static float compute_ac_ring_rssi_dbm(const bredr_processor_t *proc)
     }
     float mean_power = sum_power * (1.0f / (float)BREDR_AC_SAMPLES);
     return (mean_power > 0.0f)
-        ? 10.0f * log10f(mean_power) - 30.0f
+        ? 10.0f * log10f(mean_power)
         : -99.0f;
 }
 
@@ -572,7 +572,7 @@ bredr_status_t bredr_push_bit_and_samples(bredr_processor_t *proc, uint8_t bit,
 
     /* AC matched on this call (including immediate inquiry packet path). */
     if (was_searching && status != BREDR_SEARCHING)
-        proc->last_packet.rssi = compute_ac_ring_rssi_dbm(proc);
+        proc->last_packet.rssi = compute_ac_ring_rssi_dbr(proc);
 
     return status;
 }

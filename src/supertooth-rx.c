@@ -64,7 +64,7 @@ typedef void (*packet_formatter_fn)(unsigned long packet_no,
                                     const bredr_packet_t *pkt,
                                     const bredr_piconet_t *pnet,
                                     unsigned int channel,
-                                    float rssi_dbm);
+                                    float rssi_dbr);
 
 typedef struct
 {
@@ -292,7 +292,7 @@ static void print_packet_full(unsigned long packet_no,
                               const bredr_packet_t *pkt,
                               const bredr_piconet_t *pnet,
                               unsigned int channel,
-                              float rssi_dbm)
+                              float rssi_dbr)
 {
     if (!pkt)
         return;
@@ -304,7 +304,7 @@ static void print_packet_full(unsigned long packet_no,
     printf("Type         : BR/EDR\n");
     printf("Frequency    : %u MHz (Channel %u)\n",
            (unsigned int)(g_bredr_channel_0_freq_hz / 1e6) + channel, channel);
-    printf("RSSI         : %.2f dBm\n", rssi_dbm);
+    printf("RSSI         : %.2f dBr\n", rssi_dbr);
 
     printf("\n[%s Packet Info]\n",
            pkt->has_header ? "BR/EDR Data" : "BR/EDR Inquiry");
@@ -361,7 +361,7 @@ static void print_packet_summary(unsigned long packet_no,
                                  const bredr_packet_t *pkt,
                                  const bredr_piconet_t *pnet,
                                  unsigned int channel,
-                                 float rssi_dbm)
+                                 float rssi_dbr)
 {
     if (!pkt)
         return;
@@ -387,7 +387,7 @@ static void print_packet_summary(unsigned long packet_no,
                pkt->ac_errors,
                clk_buf,
                pnet ? pnet->tracking_state : -1,
-               rssi_dbm);
+               rssi_dbr);
     }
     else
     {
@@ -397,7 +397,7 @@ static void print_packet_summary(unsigned long packet_no,
                channel,
                pkt->ac_errors,
                pnet ? pnet->tracking_state : -1,
-               rssi_dbm);
+               rssi_dbr);
     }
 }
 
@@ -405,11 +405,11 @@ static void print_packet_rssi(unsigned long packet_no,
                               const bredr_packet_t *pkt,
                               const bredr_piconet_t *pnet,
                               unsigned int channel,
-                              float rssi_dbm)
+                              float rssi_dbr)
 {
     (void)pnet;
     (void)channel;
-    (void)rssi_dbm;
+    (void)rssi_dbr;
     if (!pkt)
         return;
 
@@ -444,7 +444,7 @@ static void print_packet_rssi(unsigned long packet_no,
         {
             char combined_buf[8];
             format_rssi_value(combined_buf, cur->combined_rssi_seen, cur->combined_rssi);
-            printf("Piconet: %-10s | Track: %2d | Combined: %s dBm\n",
+            printf("Piconet: %-10s | Track: %2d | Combined: %s dBr\n",
                    piconet_id,
                    cur->tracking_state,
                    combined_buf);
@@ -453,7 +453,7 @@ static void print_packet_rssi(unsigned long packet_no,
 
         char central_buf[8];
         format_rssi_value(central_buf, cur->master_rssi_seen, cur->master_rssi);
-        printf("Piconet: %-10s | Track: %2d | Central: %s dBm",
+        printf("Piconet: %-10s | Track: %2d | Central: %s dBr",
                piconet_id,
                cur->tracking_state,
                central_buf);
@@ -466,7 +466,7 @@ static void print_packet_rssi(unsigned long packet_no,
             periph_seen = 1;
             char pbuf[8];
             format_rssi_value(pbuf, 1, cur->slave_rssi[lt]);
-            printf(" | Periph[%d]: %s dBm", lt, pbuf);
+            printf(" | Periph[%d]: %s dBr", lt, pbuf);
         }
         if (!periph_seen)
             printf(" | Periph: (none yet)");
