@@ -488,7 +488,7 @@ void ble_print_packet(const ble_packet_t *pkt)
         break;
     }
 
-    printf("--- BLE Advertising Packet ---\n");
+    printf("[BLE Advertising Packet]\n");
     printf("PDU Type : %s (%s)\n", type_name, type_desc);
 
     switch (pdu_type)
