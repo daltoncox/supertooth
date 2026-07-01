@@ -4,7 +4,7 @@ project(Supertooth VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickLayouts)
 
 qt_standard_project_setup(REQUIRES 6.8)
 
@@ -12,11 +12,17 @@ qt_add_executable(appSupertooth
     main.cpp
 )
 
+qt_add_resources(appSupertooth "app_resources"
+    PREFIX "/"
+    FILES qtquickcontrols2.conf
+)
+
 qt_add_qml_module(appSupertooth
     URI Supertooth
     VERSION 1.0
     QML_FILES
         Main.qml
+        Sidebar.qml
 )
 
 set_target_properties(appSupertooth PROPERTIES
@@ -27,7 +33,7 @@ set_target_properties(appSupertooth PROPERTIES
 )
 
 target_link_libraries(appSupertooth
-    PRIVATE Qt6::Quick
+    PRIVATE Qt6::Quick Qt6::QuickLayouts
 )
 
 include(GNUInstallDirs)
