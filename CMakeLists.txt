@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.10)
 project(supertooth C)
 
 option(BUILD_TESTS "Build the unit and integration test suite" OFF)
+option(BUILD_GUI "Build the Qt graphical interface" OFF)
 
 enable_testing()
 
