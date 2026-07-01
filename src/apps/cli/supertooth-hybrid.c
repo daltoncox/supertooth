@@ -90,9 +90,12 @@ static void print_bredr_packet_summary(unsigned long packet_no,
 
 static void print_usage(const char *argv0)
 {
-    fprintf(stderr, "Usage: %s [-v|--view full|summary] [-d|--debug]\n", argv0);
+    fprintf(stderr,
+            "Usage: %s [-v|--view full|summary] [-d|--device [<type>:<id>]] [--debug]\n",
+            argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
-    fprintf(stderr, "  %-30s Print block-drop diagnostics\n", "-d, --debug");
+    app_print_device_usage_line();
+    fprintf(stderr, "  %-30s Print block-drop diagnostics\n", "--debug");
 }
 
 static void handle_hybrid_bredr_packet(const bredr_event_t *event,
@@ -128,13 +131,18 @@ int main(int argc, char *argv[])
 {
     static const struct option long_opts[] = {
         {"view", required_argument, NULL, 'v'},
-        {"debug", no_argument, NULL, 'd'},
+        {"device", optional_argument, NULL, 'd'},
+        {"debug", no_argument, NULL, APP_OPT_DEBUG},
         {"help", no_argument, NULL, 'h'},
         {0, 0, 0, 0}
     };
 
+    int g_list_devices = 0;
+    const char *g_device_spec = NULL;
+    app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
+    int g_device_selected = 0;
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:dh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:d::h", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -149,6 +157,12 @@ int main(int argc, char *argv[])
             }
             break;
         case 'd':
+            g_list_devices = 1;
+            g_device_spec = optarg;
+            if (!g_device_spec && optind < argc && argv[optind][0] != '-')
+                g_device_spec = argv[optind++];
+            break;
+        case APP_OPT_DEBUG:
             g_debug = 1;
             break;
         case 'h':
@@ -157,6 +171,27 @@ int main(int argc, char *argv[])
         default:
             print_usage(argv[0]);
             return EXIT_FAILURE;
+        }
+    }
+
+    if (g_list_devices)
+    {
+        if (g_device_spec)
+        {
+            if (app_parse_device_spec(g_device_spec, &g_device_spec_parsed) != 0)
+            {
+                fprintf(stderr, "Invalid device spec: %s (expected <type>:<id>)\n",
+                        g_device_spec);
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            if (app_validate_device_spec(argv[0], &g_device_spec_parsed) != 0)
+                return EXIT_FAILURE;
+            g_device_selected = 1;
+        }
+        else
+        {
+            return app_print_available_devices(argv[0]);
         }
     }
 
@@ -169,13 +204,23 @@ int main(int argc, char *argv[])
     printf("View mode   : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
+    if (g_device_selected)
+        printf("Device      : %s:%s\n",
+               radio_device_type_name(g_device_spec_parsed.type),
+               g_device_spec_parsed.id);
+    else
+        printf("Device      : (default)\n");
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
     printf("Block pool  : %u blocks, per-channel queue: %u\n",
            RECEIVER_BREDR_BLOCK_POOL_SIZE, RECEIVER_BREDR_CHANNEL_RING_SIZE);
 
     app_install_sigint_handler(&g_session);
 
-    receiver_hybrid_config_t config = {.debug = g_debug};
+    receiver_hybrid_config_t config = {
+        .device_type = g_device_spec_parsed.type,
+        .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
+        .debug = g_debug,
+    };
     receiver_hybrid_callbacks_t callbacks = {
         .on_bredr_packet = handle_hybrid_bredr_packet,
         .on_ble_packet = handle_hybrid_ble_packet,

@@ -11,13 +11,6 @@
 #include "radio_common.h"
 #include "receiver_session.h"
 
-/* Long-only options (no single-character short form) use val codes that
- * are outside the ASCII range used by the short-option string. */
-enum
-{
-    OPT_DEBUG = 0x100,
-};
-
 #define BREDR_MAX_CHANNEL 79u
 
 /* -------------------------------------------------------------------------
@@ -223,37 +216,6 @@ static int parse_bottom_channel(const char *arg, unsigned int *out_bottom_channe
 
 /* Parse a "<type>:<id>" device spec (e.g. "hackrf:b25062dc22113a0b").
  * On success sets *out_type and *out_id (pointing into @p spec). */
-static int parse_device_spec(const char *spec,
-                             radio_device_type_t *out_type,
-                             const char **out_id)
-{
-    if (!spec || !out_type || !out_id)
-        return -1;
-
-    const char *colon = strchr(spec, ':');
-    if (!colon)
-        return -1;
-
-    size_t type_len = (size_t)(colon - spec);
-    const char *id = colon + 1;
-    if (!id[0])
-        return -1;
-
-    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT; t++)
-    {
-        const char *name = radio_device_type_name((radio_device_type_t)t);
-        if (!name)
-            continue;
-        if (strlen(name) == type_len && strncmp(spec, name, type_len) == 0)
-        {
-            *out_type = (radio_device_type_t)t;
-            *out_id = id;
-            return 0;
-        }
-    }
-    return -1;
-}
-
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
@@ -270,45 +232,8 @@ static void print_usage(const char *argv0)
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
-    fprintf(stderr, "  %-30s List available devices, or open a specific one\n",
-            "-d, --device [<type>:<id>]");
+    app_print_device_usage_line();
     fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "--debug");
-}
-
-/* Enumerate every known radio device type, print one "<type>:<id>" line per
- * discovered device, then return. Used by -d/--device. */
-static int print_available_devices(void)
-{
-    int enumerated = 0;
-
-    printf("Found Available Devices:\n");
-    for (int type = 0; type < (int)RADIO_DEVICE_TYPE_COUNT; type++)
-    {
-        const char *type_name = radio_device_type_name((radio_device_type_t)type);
-        if (!type_name)
-            continue;
-
-        char **identifiers = NULL;
-        size_t count = 0u;
-        int result = radio_list_devices((radio_device_type_t)type,
-                                        &identifiers, &count);
-        if (result != RADIO_SUCCESS || count == 0u)
-        {
-            radio_free_device_list(&identifiers, count);
-            continue;
-        }
-
-        for (size_t i = 0u; i < count; i++)
-            printf("%s:%s\n", type_name, identifiers[i] ? identifiers[i] : "");
-
-        radio_free_device_list(&identifiers, count);
-        enumerated += (int)count;
-    }
-
-    if (enumerated == 0)
-        printf("(no devices found)\n");
-
-    return EXIT_SUCCESS;
 }
 
 static void handle_bredr_packet(const bredr_event_t *event,
@@ -336,15 +261,15 @@ int main(int argc, char *argv[])
         {"channels",       required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
         {"device",         optional_argument, NULL, 'd'},
-        {"debug",          no_argument,       NULL, OPT_DEBUG},
+        {"debug",          no_argument,       NULL, APP_OPT_DEBUG},
         {"help",           no_argument,       NULL, 'h'},
         {NULL,             0,                 NULL,  0 }
     };
 
     int g_list_devices = 0;
     const char *g_device_spec = NULL;
-    radio_device_type_t g_device_type = RADIO_DEVICE_HACKRF;
-    const char *g_device_id = NULL;
+    app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
+    int g_device_selected = 0;
     int opt;
     while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::h", long_opts, NULL)) != -1)
     {
@@ -405,7 +330,7 @@ int main(int argc, char *argv[])
                 if (!g_device_spec && optind < argc && argv[optind][0] != '-')
                     g_device_spec = argv[optind++];
                 break;
-            case OPT_DEBUG:
+            case APP_OPT_DEBUG:
                 g_debug = 1;
                 break;
             case 'h':
@@ -426,29 +351,20 @@ int main(int argc, char *argv[])
     {
         if (g_device_spec)
         {
-            if (parse_device_spec(g_device_spec, &g_device_type, &g_device_id) != 0)
+            if (app_parse_device_spec(g_device_spec, &g_device_spec_parsed) != 0)
             {
                 fprintf(stderr, "Invalid device spec: %s (expected <type>:<id>)\n",
                         g_device_spec);
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
-
-            /* Verify the requested device is actually present before doing
-             * anything else, so the user gets a clean error instead of a
-             * half-printed banner followed by a radio-open failure. */
-            if (radio_device_exists(g_device_type, g_device_id) !=
-                RADIO_SUCCESS)
-            {
-                fprintf(stderr,
-                        "Device not found. Run the following to list detected devices:\n\n"
-                        "supertooth-rx -d\n");
+            if (app_validate_device_spec(argv[0], &g_device_spec_parsed) != 0)
                 return EXIT_FAILURE;
-            }
+            g_device_selected = 1;
         }
         else
         {
-            return print_available_devices();
+            return app_print_available_devices(argv[0]);
         }
     }
 
@@ -492,9 +408,10 @@ int main(int argc, char *argv[])
         printf("RSSI EMA    : window=%u\n", g_rssi_averaging_window);
     printf("Block pool  : %u blocks, per-channel queue: %u\n",
            RECEIVER_BREDR_BLOCK_POOL_SIZE, RECEIVER_BREDR_CHANNEL_RING_SIZE);
-    if (g_device_id)
+    if (g_device_selected)
         printf("Device      : %s:%s\n",
-               radio_device_type_name(g_device_type), g_device_id);
+               radio_device_type_name(g_device_spec_parsed.type),
+               g_device_spec_parsed.id);
     else
         printf("Device      : (default)\n");
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
@@ -506,8 +423,8 @@ int main(int argc, char *argv[])
         .rssi_averaging_window = g_rssi_averaging_window,
         .lap_filter = g_lap_filter,
         .lap_filter_enabled = g_lap_filter_enabled,
-        .device_type = g_device_type,
-        .device_id = g_device_id,
+        .device_type = g_device_spec_parsed.type,
+        .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
     };
     receiver_bredr_callbacks_t callbacks = {
