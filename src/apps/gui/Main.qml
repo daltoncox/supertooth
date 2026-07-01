@@ -26,9 +26,11 @@ ApplicationWindow {
             Layout.fillHeight: true
             currentIndex: sidebar.selectedIndex
 
-            Label { text: "View A" }
-            Label { text: "View B" }
-            Label { text: "View C" }
+            Label { text: "Frame List" }
+            Label { text: "Topology" }
+            Label { text: "Devices" }
+            Label { text: "Channel" }
+            Label { text: "Settings" }
         }
     }
 }

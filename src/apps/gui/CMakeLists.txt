@@ -12,9 +12,12 @@ qt_add_executable(appSupertooth
     main.cpp
 )
 
+file(GLOB IMAGE_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} images/*.svg images/*.png)
+
 qt_add_resources(appSupertooth "app_resources"
     PREFIX "/"
     FILES qtquickcontrols2.conf
+    ${IMAGE_FILES}
 )
 
 qt_add_qml_module(appSupertooth

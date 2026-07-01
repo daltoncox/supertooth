@@ -8,33 +8,50 @@ Rectangle {
     signal itemSelected(int index)
 
     width: 56
-    color: "grey"
+    color: "black"
 
     Column {
         anchors.horizontalCenter: parent.horizontalCenter
         topPadding: 12
-        spacing: 8
+        spacing: 6
 
-        // App Icon
-        Rectangle {
+        // Main App Icon
+        Image {
             anchors.horizontalCenter: parent.horizontalCenter
+            source: "/images/Flying_Supertooth_White_512@2x.png"
             width: 28
             height: 28
-            radius: 8
-            color: "blue"
+            sourceSize.width: 64
+            sourceSize.height: 64
         }
 
-        // Divider
+        // Extra spacing
+        Item { 
+            width: 1 
+            height: 2
+        }
+
+        // Divinder
         Rectangle {
             anchors.horizontalCenter: parent.horizontalCenter
             width: 36
             height: 1
-            color: "black"
         }
 
-        // Views
+        Item { 
+            width: 1 
+            height: 2
+        }
+
+        // View Icon Buttons
         Repeater {
-            model: ["A", "B", "C"]
+            model: ListModel {
+                ListElement { icon: "/images/frame_list.svg" }
+                ListElement { icon: "/images/topolgy.svg" }
+                ListElement { icon: "/images/devices.svg" }
+                ListElement { icon: "/images/channel.svg" }
+                ListElement { icon: "/images/settings.svg" }
+            }
 
             delegate: Item {
                 width: 44
@@ -44,12 +61,15 @@ Rectangle {
                     anchors.fill: parent
                     anchors.margins: 4
                     radius: 8
-                    color: sidebar.selectedIndex === index ? "lightgray" : "transparent"
+                    color: sidebar.selectedIndex === index ? "darkgray" : "transparent"
 
-                    Text {
+                    Image {
                         anchors.centerIn: parent
-                        text: modelData
-                        font.pixelSize: 16
+                        source: icon
+                        width: 20
+                        height: 20
+                        sourceSize.width: 40
+                        sourceSize.height: 40
                     }
                 }
 
