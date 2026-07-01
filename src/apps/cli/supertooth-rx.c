@@ -221,12 +221,45 @@ static int parse_bottom_channel(const char *arg, unsigned int *out_bottom_channe
     return 0;
 }
 
+/* Parse a "<type>:<id>" device spec (e.g. "hackrf:b25062dc22113a0b").
+ * On success sets *out_type and *out_id (pointing into @p spec). */
+static int parse_device_spec(const char *spec,
+                             radio_device_type_t *out_type,
+                             const char **out_id)
+{
+    if (!spec || !out_type || !out_id)
+        return -1;
+
+    const char *colon = strchr(spec, ':');
+    if (!colon)
+        return -1;
+
+    size_t type_len = (size_t)(colon - spec);
+    const char *id = colon + 1;
+    if (!id[0])
+        return -1;
+
+    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT; t++)
+    {
+        const char *name = radio_device_type_name((radio_device_type_t)t);
+        if (!name)
+            continue;
+        if (strlen(name) == type_len && strncmp(spec, name, type_len) == 0)
+        {
+            *out_type = (radio_device_type_t)t;
+            *out_id = id;
+            return 0;
+        }
+    }
+    return -1;
+}
+
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|rssi] [-l|--lap LAP] "
             "[--rssi-averaging N|none] [-c|--channels N] [-b|--bottom-channel CH] "
-            "[-d|--device] [--debug]\n", argv0);
+            "[-d|--device [<type>:<id>]] [--debug]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
     fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
     fprintf(stderr, "  %-30s EMA window for piconet RSSI (default: 16; 0/none disables)\n",
@@ -237,7 +270,8 @@ static void print_usage(const char *argv0)
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
-    fprintf(stderr, "  %-30s List available radio devices and exit\n", "-d, --device");
+    fprintf(stderr, "  %-30s List available devices, or open a specific one\n",
+            "-d, --device [<type>:<id>]");
     fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "--debug");
 }
 
@@ -301,15 +335,18 @@ int main(int argc, char *argv[])
         {"rssi-averaging", required_argument, NULL, 'a'},
         {"channels",       required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
-        {"device",         no_argument,       NULL, 'd'},
+        {"device",         optional_argument, NULL, 'd'},
         {"debug",          no_argument,       NULL, OPT_DEBUG},
         {"help",           no_argument,       NULL, 'h'},
         {NULL,             0,                 NULL,  0 }
     };
 
     int g_list_devices = 0;
+    const char *g_device_spec = NULL;
+    radio_device_type_t g_device_type = RADIO_DEVICE_HACKRF;
+    const char *g_device_id = NULL;
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:l:a:c:b:dh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::h", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -361,6 +398,12 @@ int main(int argc, char *argv[])
                 break;
             case 'd':
                 g_list_devices = 1;
+                g_device_spec = optarg;
+                /* getopt's optional_argument doesn't attach a spaced arg
+                 * to a short option, so consume the next token manually when
+                 * it doesn't look like another option. */
+                if (!g_device_spec && optind < argc && argv[optind][0] != '-')
+                    g_device_spec = argv[optind++];
                 break;
             case OPT_DEBUG:
                 g_debug = 1;
@@ -380,7 +423,34 @@ int main(int argc, char *argv[])
     }
 
     if (g_list_devices)
-        return print_available_devices();
+    {
+        if (g_device_spec)
+        {
+            if (parse_device_spec(g_device_spec, &g_device_type, &g_device_id) != 0)
+            {
+                fprintf(stderr, "Invalid device spec: %s (expected <type>:<id>)\n",
+                        g_device_spec);
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+
+            /* Verify the requested device is actually present before doing
+             * anything else, so the user gets a clean error instead of a
+             * half-printed banner followed by a radio-open failure. */
+            if (radio_device_exists(g_device_type, g_device_id) !=
+                RADIO_SUCCESS)
+            {
+                fprintf(stderr,
+                        "Device not found. Run the following to list detected devices:\n\n"
+                        "supertooth-rx -d\n");
+                return EXIT_FAILURE;
+            }
+        }
+        else
+        {
+            return print_available_devices();
+        }
+    }
 
     if (g_bottom_channel_explicit)
     {
@@ -422,6 +492,11 @@ int main(int argc, char *argv[])
         printf("RSSI EMA    : window=%u\n", g_rssi_averaging_window);
     printf("Block pool  : %u blocks, per-channel queue: %u\n",
            RECEIVER_BREDR_BLOCK_POOL_SIZE, RECEIVER_BREDR_CHANNEL_RING_SIZE);
+    if (g_device_id)
+        printf("Device      : %s:%s\n",
+               radio_device_type_name(g_device_type), g_device_id);
+    else
+        printf("Device      : (default)\n");
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
     printf("Press Ctrl+C to stop.\n\n");
     app_install_sigint_handler(&g_session);
@@ -431,6 +506,8 @@ int main(int argc, char *argv[])
         .rssi_averaging_window = g_rssi_averaging_window,
         .lap_filter = g_lap_filter,
         .lap_filter_enabled = g_lap_filter_enabled,
+        .device_type = g_device_type,
+        .device_id = g_device_id,
         .debug = g_debug,
     };
     receiver_bredr_callbacks_t callbacks = {

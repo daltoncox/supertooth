@@ -72,7 +72,7 @@ int receiver_session_run_ble(receiver_session_t *session,
     }
 
     radio_device_t *device = NULL;
-    int result = radio_open(&device, RADIO_DEVICE_HACKRF, NULL,
+    int result = radio_open(&device, config->device_type, config->device_id,
                             &session->sample_dispatcher, session->debug);
     if (result != RADIO_SUCCESS)
     {

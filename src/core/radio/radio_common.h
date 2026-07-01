@@ -7,6 +7,7 @@
 #include "sample_dispatcher.h"
 
 #define RADIO_SUCCESS 0
+#define RADIO_DEVICE_NOT_FOUND (-2)
 
 typedef struct
 {
@@ -67,5 +68,15 @@ int radio_list_devices(radio_device_type_t device_type,
  * Frees each string and the array itself, and sets the pointer to NULL.
  */
 void radio_free_device_list(char ***identifiers, size_t count);
+
+/**
+ * Check whether a device with the given id is currently present for the
+ * given device type.
+ *
+ * @return RADIO_SUCCESS          if the device is present.
+ *         RADIO_DEVICE_NOT_FOUND if it is not present.
+ *         other negative value   on enumeration failure.
+ */
+int radio_device_exists(radio_device_type_t device_type, const char *device_id);
 
 #endif

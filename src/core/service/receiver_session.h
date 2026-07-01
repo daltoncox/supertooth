@@ -12,6 +12,7 @@
 #include "bredr_display.h"
 #include "bredr_bitstream_decoder.h"
 #include "ble_bitstream_decoder.h"
+#include "radio_common.h"
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
 #include "bredr_piconet.h"
@@ -91,6 +92,8 @@ typedef struct
 {
     uint8_t ble_channel;
     uint64_t lo_freq_hz;
+    radio_device_type_t device_type;
+    const char *device_id;
     int debug;
 } receiver_ble_config_t;
 
@@ -101,6 +104,8 @@ typedef struct
     unsigned int rssi_averaging_window;
     uint32_t lap_filter;
     int lap_filter_enabled;
+    radio_device_type_t device_type;
+    const char *device_id;
     int debug;
 } receiver_bredr_config_t;
 
@@ -115,6 +120,8 @@ typedef struct
 
 typedef struct
 {
+    radio_device_type_t device_type;
+    const char *device_id;
     int debug;
 } receiver_hybrid_config_t;
 

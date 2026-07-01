@@ -3,6 +3,7 @@
 #include "hackrf.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 struct radio_device
 {
@@ -148,4 +149,26 @@ void radio_free_device_list(char ***identifiers, size_t count)
         free(list[i]);
     free(list);
     *identifiers = NULL;
+}
+
+int radio_device_exists(radio_device_type_t device_type, const char *device_id)
+{
+    char **identifiers = NULL;
+    size_t count = 0u;
+    int result = radio_list_devices(device_type, &identifiers, &count);
+    if (result != RADIO_SUCCESS)
+        return result;
+
+    result = RADIO_DEVICE_NOT_FOUND;
+    for (size_t i = 0u; i < count; i++)
+    {
+        if (identifiers[i] && strcmp(identifiers[i], device_id) == 0)
+        {
+            result = RADIO_SUCCESS;
+            break;
+        }
+    }
+
+    radio_free_device_list(&identifiers, count);
+    return result;
 }

@@ -56,6 +56,12 @@ int main(void)
     /* Double-free safety: freeing an already-freed list must be a no-op. */
     radio_free_device_list(&identifiers, count);
 
+    /* radio_device_exists(): a bogus id must never be considered present,
+     * regardless of whether real hardware is connected. */
+    TEST_ASSERT(radio_device_exists(RADIO_DEVICE_HACKRF,
+                                    "this_id_does_not_exist") ==
+                RADIO_DEVICE_NOT_FOUND);
+
     if (g_failures)
     {
         fprintf(stderr, "test_radio_list_devices: %d failure(s)\n", g_failures);
