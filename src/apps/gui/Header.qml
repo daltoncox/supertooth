@@ -2,6 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Supertooth
+
 Rectangle {
     id: header
 
@@ -10,6 +12,17 @@ Rectangle {
     property bool playing: false
 
     signal playPauseToggled()
+
+    RadioDeviceModel {
+        id: radioDeviceModel
+    }
+
+    Component.onCompleted: {
+        radioDeviceModel.refresh(header.inputTypeIndex)
+        deviceIdSelector.currentIndex =
+            radioDeviceModel.rowCount() > 0 ? 0 : -1
+        header.deviceID = deviceIdSelector.currentText
+    }
 
     height: 56
     color: "black"
@@ -36,6 +49,10 @@ Rectangle {
 
             onActivated: function (index) {
                 header.inputTypeIndex = index
+                radioDeviceModel.refresh(index)
+                deviceIdSelector.currentIndex =
+                    radioDeviceModel.rowCount() > 0 ? 0 : -1
+                header.deviceID = deviceIdSelector.currentText
             }
         }
 
@@ -53,7 +70,8 @@ Rectangle {
                     id: deviceIdSelector
                     Layout.preferredHeight: parent.height
 
-                    model: ["abcd", "efgh"]
+                    model: radioDeviceModel
+                    textRole: "display"
 
                     onActivated: function (index) {
                         header.deviceID = deviceIdSelector.currentText

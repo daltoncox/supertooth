@@ -8,7 +8,16 @@
 #include <getopt.h>
 #include "app_common.h"
 #include "bredr_display.h"
+#include "radio_common.h"
 #include "receiver_session.h"
+
+/* Long-only options (no single-character short form) use val codes that
+ * are outside the ASCII range used by the short-option string. */
+enum
+{
+    OPT_DEBUG = 0x100,
+};
+
 #define BREDR_MAX_CHANNEL 79u
 
 /* -------------------------------------------------------------------------
@@ -216,7 +225,8 @@ static void print_usage(const char *argv0)
 {
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|rssi] [-l|--lap LAP] "
-            "[--rssi-averaging N|none] [-c|--channels N] [-b|--bottom-channel CH] [-d|--debug]\n", argv0);
+            "[--rssi-averaging N|none] [-c|--channels N] [-b|--bottom-channel CH] "
+            "[-d|--device] [--debug]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
     fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
     fprintf(stderr, "  %-30s EMA window for piconet RSSI (default: 16; 0/none disables)\n",
@@ -227,7 +237,44 @@ static void print_usage(const char *argv0)
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
-    fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "-d, --debug");
+    fprintf(stderr, "  %-30s List available radio devices and exit\n", "-d, --device");
+    fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "--debug");
+}
+
+/* Enumerate every known radio device type, print one "<type>:<id>" line per
+ * discovered device, then return. Used by -d/--device. */
+static int print_available_devices(void)
+{
+    int enumerated = 0;
+
+    printf("Found Available Devices:\n");
+    for (int type = 0; type < (int)RADIO_DEVICE_TYPE_COUNT; type++)
+    {
+        const char *type_name = radio_device_type_name((radio_device_type_t)type);
+        if (!type_name)
+            continue;
+
+        char **identifiers = NULL;
+        size_t count = 0u;
+        int result = radio_list_devices((radio_device_type_t)type,
+                                        &identifiers, &count);
+        if (result != RADIO_SUCCESS || count == 0u)
+        {
+            radio_free_device_list(&identifiers, count);
+            continue;
+        }
+
+        for (size_t i = 0u; i < count; i++)
+            printf("%s:%s\n", type_name, identifiers[i] ? identifiers[i] : "");
+
+        radio_free_device_list(&identifiers, count);
+        enumerated += (int)count;
+    }
+
+    if (enumerated == 0)
+        printf("(no devices found)\n");
+
+    return EXIT_SUCCESS;
 }
 
 static void handle_bredr_packet(const bredr_event_t *event,
@@ -254,11 +301,13 @@ int main(int argc, char *argv[])
         {"rssi-averaging", required_argument, NULL, 'a'},
         {"channels",       required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
-        {"debug",          no_argument,       NULL, 'd'},
+        {"device",         no_argument,       NULL, 'd'},
+        {"debug",          no_argument,       NULL, OPT_DEBUG},
         {"help",           no_argument,       NULL, 'h'},
         {NULL,             0,                 NULL,  0 }
     };
 
+    int g_list_devices = 0;
     int opt;
     while ((opt = getopt_long(argc, argv, "v:l:a:c:b:dh", long_opts, NULL)) != -1)
     {
@@ -311,6 +360,9 @@ int main(int argc, char *argv[])
                 g_bottom_channel_explicit = 1;
                 break;
             case 'd':
+                g_list_devices = 1;
+                break;
+            case OPT_DEBUG:
                 g_debug = 1;
                 break;
             case 'h':
@@ -326,6 +378,9 @@ int main(int argc, char *argv[])
         print_usage(argv[0]);
         return EXIT_FAILURE;
     }
+
+    if (g_list_devices)
+        return print_available_devices();
 
     if (g_bottom_channel_explicit)
     {

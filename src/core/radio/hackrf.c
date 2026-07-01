@@ -4,7 +4,25 @@
 
 #include <complex.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+/* The device id for a HackRF is the unique trailing portion of the LPC43xx
+ * factory-programmed die ID (read_partid_serialno_t::serial_no[2..3]),
+ * rendered as 16 lowercase hex chars. It is unique per chip and stable
+ * across replugs. The leading words serial_no[0..1] read as zero on
+ * every board we have seen, so they are not part of the id. */
+static int hackrf_read_id(hackrf_device *device, char out[HACKRF_ID_LEN + 1u])
+{
+    read_partid_serialno_t info;
+    int result = hackrf_board_partid_serialno_read(device, &info);
+    if (result != HACKRF_SUCCESS)
+        return result;
+    snprintf(out, HACKRF_ID_LEN + 1u, "%08x%08x",
+             info.serial_no[2], info.serial_no[3]);
+    return HACKRF_SUCCESS;
+}
 
 typedef struct
 {
@@ -60,10 +78,12 @@ static int hackrf_rx_cb(hackrf_transfer *transfer)
 }
 
 int hackrf_radio_open(void **out_device,
+                      const char *device_id,
                       sample_dispatcher_t *dispatcher,
                       int debug_enabled)
 {
     hackrf_radio_t *radio = NULL;
+    hackrf_device_list_t *list = NULL;
     int result;
 
     if (!out_device || !dispatcher)
@@ -81,16 +101,55 @@ int hackrf_radio_open(void **out_device,
     if (result != HACKRF_SUCCESS)
         goto fail;
 
-    result = hackrf_open(&radio->device);
-    if (result != HACKRF_SUCCESS)
+    if (device_id && device_id[0] != '\0')
     {
-        hackrf_exit();
-        goto fail;
+        /* Open a specific device by reading each connected HackRF's id and
+         * keeping the first match. */
+        list = hackrf_device_list();
+        if (!list)
+        {
+            result = HACKRF_ERROR_NOT_FOUND;
+            goto fail_with_exit;
+        }
+
+        result = HACKRF_ERROR_NOT_FOUND;
+        for (int i = 0; i < list->devicecount; i++)
+        {
+            hackrf_device *dev = NULL;
+            if (hackrf_device_list_open(list, i, &dev) != HACKRF_SUCCESS)
+                continue;
+
+            char id[HACKRF_ID_LEN + 1u] = {0};
+            if (hackrf_read_id(dev, id) == HACKRF_SUCCESS &&
+                strcmp(id, device_id) == 0)
+            {
+                radio->device = dev;
+                result = HACKRF_SUCCESS;
+                break;
+            }
+
+            hackrf_close(dev);
+        }
+
+        hackrf_device_list_free(list);
+        list = NULL;
+        if (result != HACKRF_SUCCESS)
+            goto fail_with_exit;
+    }
+    else
+    {
+        result = hackrf_open(&radio->device);
+        if (result != HACKRF_SUCCESS)
+            goto fail_with_exit;
     }
 
     *out_device = radio;
     return HACKRF_SUCCESS;
 
+fail_with_exit:
+    hackrf_exit();
+    if (list)
+        hackrf_device_list_free(list);
 fail:
     free(radio);
     return result;
@@ -153,4 +212,85 @@ void hackrf_radio_close(void *device)
         hackrf_close(radio->device);
     hackrf_exit();
     free(radio);
+}
+
+int hackrf_list_devices(char ***out_identifiers, size_t *out_count)
+{
+    char **identifiers = NULL;
+    int result;
+    int device_count;
+    size_t copied = 0u;
+
+    if (!out_identifiers || !out_count)
+        return -1;
+
+    *out_identifiers = NULL;
+    *out_count = 0u;
+
+    result = hackrf_init();
+    if (result != HACKRF_SUCCESS)
+        return result;
+
+    hackrf_device_list_t *list = hackrf_device_list();
+    if (!list)
+    {
+        result = HACKRF_ERROR_NOT_FOUND;
+        goto cleanup;
+    }
+
+    device_count = list->devicecount;
+    if (device_count <= 0)
+    {
+        hackrf_device_list_free(list);
+        result = HACKRF_SUCCESS;
+        goto cleanup;
+    }
+
+    identifiers = (char **)calloc((size_t)device_count, sizeof(char *));
+    if (!identifiers)
+    {
+        hackrf_device_list_free(list);
+        result = -1;
+        goto cleanup;
+    }
+
+    for (int i = 0; i < device_count; i++)
+    {
+        hackrf_device *dev = NULL;
+        char id[HACKRF_ID_LEN + 1u] = {0};
+
+        result = hackrf_device_list_open(list, i, &dev);
+        if (result != HACKRF_SUCCESS)
+            continue;  /* leave this slot NULL; skip below */
+
+        result = hackrf_read_id(dev, id);
+        hackrf_close(dev);
+
+        if (result != HACKRF_SUCCESS)
+            continue;
+
+        identifiers[copied] = strdup(id);
+        if (!identifiers[copied])
+        {
+            for (size_t j = 0u; j < copied; j++)
+                free(identifiers[j]);
+            free(identifiers);
+            identifiers = NULL;
+            hackrf_device_list_free(list);
+            result = -1;
+            goto cleanup;
+        }
+        copied++;
+        result = HACKRF_SUCCESS;
+    }
+
+    hackrf_device_list_free(list);
+
+    *out_identifiers = identifiers;
+    *out_count = copied;
+    result = (copied > 0u) ? HACKRF_SUCCESS : result;
+
+cleanup:
+    hackrf_exit();
+    return result;
 }

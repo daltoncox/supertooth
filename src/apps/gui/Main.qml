@@ -7,6 +7,7 @@ ApplicationWindow {
     height: 800
     visible: true
     title: qsTr("Supertooth")
+    color: "grey"
 
     RowLayout {
         anchors.fill: parent

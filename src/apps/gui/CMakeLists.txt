@@ -10,6 +10,8 @@ qt_standard_project_setup(REQUIRES 6.8)
 
 qt_add_executable(appSupertooth
     main.cpp
+    radio_device_model.h
+    radio_device_model.cpp
 )
 
 file(GLOB IMAGE_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} images/*.svg images/*.png)
@@ -37,7 +39,7 @@ set_target_properties(appSupertooth PROPERTIES
 )
 
 target_link_libraries(appSupertooth
-    PRIVATE Qt6::Quick Qt6::QuickLayouts
+    PRIVATE Qt6::Quick Qt6::QuickLayouts supertooth_core
 )
 
 include(GNUInstallDirs)
