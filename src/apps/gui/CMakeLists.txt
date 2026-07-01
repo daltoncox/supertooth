@@ -29,6 +29,7 @@ qt_add_qml_module(appSupertooth
         Main.qml
         Sidebar.qml
         Header.qml
+        FrameListView.qml
 )
 
 set_target_properties(appSupertooth PROPERTIES

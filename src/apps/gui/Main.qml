@@ -2,6 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Supertooth
+
 ApplicationWindow {
     width: 1200
     height: 800
@@ -37,11 +39,9 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 currentIndex: sidebar.selectedIndex
 
-                Item {
-                    Label {
-                        anchors.centerIn: parent
-                        text: "Frame List"
-                    }
+                FrameListView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
                 }
                 Item {
                     Label {
