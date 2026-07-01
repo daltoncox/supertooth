@@ -46,39 +46,29 @@ Rectangle {
         // View Icon Buttons
         Repeater {
             model: ListModel {
-                ListElement { icon: "/images/frame_list.svg" }
-                ListElement { icon: "/images/topolgy.svg" }
-                ListElement { icon: "/images/devices.svg" }
-                ListElement { icon: "/images/channel.svg" }
-                ListElement { icon: "/images/settings.svg" }
+                ListElement { iconPath: "/images/frame_list.svg" }
+                ListElement { iconPath: "/images/topolgy.svg" }
+                ListElement { iconPath: "/images/devices.svg" }
+                ListElement { iconPath: "/images/channel.svg" }
+                ListElement { iconPath: "/images/settings.svg" }
             }
 
-            delegate: Item {
+            delegate: Button {
                 width: 44
                 height: 44
 
-                Rectangle {
-                    anchors.fill: parent
-                    anchors.margins: 4
-                    radius: 8
-                    color: sidebar.selectedIndex === index ? "darkgray" : "transparent"
-
-                    Image {
-                        anchors.centerIn: parent
-                        source: icon
-                        width: 20
-                        height: 20
-                        sourceSize.width: 40
-                        sourceSize.height: 40
-                    }
+                Image {
+                    anchors.centerIn: parent
+                    source: iconPath
+                    width: 20
+                    height: 20
+                    sourceSize.width: 40
+                    sourceSize.height: 40
                 }
 
-                MouseArea {
-                    anchors.fill: parent
-                    onClicked: {
-                        sidebar.selectedIndex = index
-                        sidebar.itemSelected(index)
-                    }
+                onClicked: {
+                    sidebar.selectedIndex = index
+                    sidebar.itemSelected(index)
                 }
             }
         }
