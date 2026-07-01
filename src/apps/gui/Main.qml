@@ -3,8 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 ApplicationWindow {
-    width: 640
-    height: 480
+    width: 1200
+    height: 800
     visible: true
     title: qsTr("Supertooth")
 
@@ -20,17 +20,53 @@ ApplicationWindow {
             }
         }
 
-        StackLayout {
-            id: stack
+        ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: sidebar.selectedIndex
+            spacing: 0
 
-            Label { text: "Frame List" }
-            Label { text: "Topology" }
-            Label { text: "Devices" }
-            Label { text: "Channel" }
-            Label { text: "Settings" }
+            Header {
+                id: header
+                Layout.fillWidth: true
+            }
+
+            StackLayout {
+                id: stack
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                currentIndex: sidebar.selectedIndex
+
+                Item {
+                    Label {
+                        anchors.centerIn: parent
+                        text: "Frame List"
+                    }
+                }
+                Item {
+                    Label {
+                        anchors.centerIn: parent
+                        text: "Topology"
+                    }
+                }
+                Item {
+                    Label {
+                        anchors.centerIn: parent
+                        text: "Devices"
+                    }
+                }
+                Item {
+                    Label {
+                        anchors.centerIn: parent
+                        text: "Channel"
+                    }
+                }
+                Item {
+                    Label {
+                        anchors.centerIn: parent
+                        text: "Settings"
+                    }
+                }
+            }
         }
     }
 }

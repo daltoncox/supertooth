@@ -26,6 +26,7 @@ qt_add_qml_module(appSupertooth
     QML_FILES
         Main.qml
         Sidebar.qml
+        Header.qml
 )
 
 set_target_properties(appSupertooth PROPERTIES
