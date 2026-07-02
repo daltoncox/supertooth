@@ -44,6 +44,7 @@ Rectangle {
         ComboBox {
             id: inputTypeSelector
             Layout.preferredHeight: parent.height
+            Layout.preferredWidth: 100
 
             model: ["HackRF", "File"]
 
@@ -69,7 +70,7 @@ Rectangle {
                 ComboBox {
                     id: deviceIdSelector
                     Layout.preferredHeight: parent.height
-		    Layout.preferredWidth: 150
+		            Layout.preferredWidth: 180
 
                     model: radioDeviceModel
                     textRole: "display"
@@ -99,7 +100,7 @@ Rectangle {
             Layout.preferredWidth: parent.height
 
             Image {
-                source: header.playing ? "/images/stop.svg" : "/images/play.svg"
+                source: header.playing ? "/assets/images/stop.svg" : "/assets/images/play.svg"
                 sourceSize.width: 36
                 sourceSize.height: 36
                 anchors.centerIn: parent

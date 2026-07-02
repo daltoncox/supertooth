@@ -20,12 +20,14 @@ qt_add_executable(appSupertooth
     frame_list_model.cpp
 )
 
-file(GLOB IMAGE_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} images/*.svg images/*.png)
+file(GLOB IMAGE_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/images/*.svg assets/images/*.png)
+file(GLOB FONT_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/fonts/*.ttf assets/fonts/*.otf)
 
 qt_add_resources(appSupertooth "app_resources"
     PREFIX "/"
     FILES qtquickcontrols2.conf
     ${IMAGE_FILES}
+    ${FONT_FILES}
 )
 
 qt_add_qml_module(appSupertooth

@@ -18,7 +18,7 @@ Rectangle {
         // Main App Icon
         Image {
             anchors.horizontalCenter: parent.horizontalCenter
-            source: "/images/Flying_Supertooth_White_512@2x.png"
+            source: "/assets/images/Flying_Supertooth_White_512@2x.png"
             width: 28
             height: 28
             sourceSize.width: 64
@@ -46,16 +46,16 @@ Rectangle {
         // View Icon Buttons
         Repeater {
             model: ListModel {
-                ListElement { iconPath: "/images/frame_list.svg" }
-                ListElement { iconPath: "/images/topolgy.svg" }
-                ListElement { iconPath: "/images/devices.svg" }
-                ListElement { iconPath: "/images/channel.svg" }
-                ListElement { iconPath: "/images/settings.svg" }
+                ListElement { iconPath: "/assets/images/frame_list.svg" }
+                ListElement { iconPath: "/assets/images/topolgy.svg" }
+                ListElement { iconPath: "/assets/images/devices.svg" }
+                ListElement { iconPath: "/assets/images/channel.svg" }
             }
 
             delegate: Button {
                 width: 44
                 height: 44
+                flat: sidebar.selectedIndex !== index
 
                 Image {
                     anchors.centerIn: parent

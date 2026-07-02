@@ -102,12 +102,6 @@ ApplicationWindow {
                         text: "Channel"
                     }
                 }
-                Item {
-                    Label {
-                        anchors.centerIn: parent
-                        text: "Settings"
-                    }
-                }
             }
         }
     }

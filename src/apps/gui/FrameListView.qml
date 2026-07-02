@@ -51,8 +51,8 @@ Item {
     ListModel {
         id: columns
         ListElement { title: "No.";          role: "no";    width: 50;  hAlign: 2; color: "#9cdcfe" }
-        ListElement { title: "Time";         role: "time";  width: 80;  hAlign: 1; color: "#cccccc" }
-        ListElement { title: "RSSI";         role: "rssi";  width: 70;  hAlign: 1; color: "#b5cea8" }
+        ListElement { title: "Time";         role: "time";  width: 90;  hAlign: 1; color: "#cccccc" }
+        ListElement { title: "RSSI";         role: "rssi";  width: 60;  hAlign: 1; color: "#b5cea8" }
         ListElement { title: "Protocol";     role: "proto"; width: 70;  hAlign: 1; color: "#dcdcaa" }
         ListElement { title: "Ch";           role: "chIdx"; width: 40;  hAlign: 4; color: "#ce9178" }
         ListElement { title: "Address";      role: "addr";  width: 110; hAlign: 1; color: "#569cd6" }
@@ -359,7 +359,7 @@ Item {
                 TextMetrics {
                     id: hexColMetrics
                     text: "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
-                    font.family: "Consolas"
+                    font.family: "Google Sans Code"
                 }
 
                 ColumnLayout {
@@ -410,7 +410,7 @@ Item {
                                     Layout.preferredWidth: 50
                                     horizontalAlignment: TextEdit.AlignRight
                                     verticalAlignment: TextEdit.AlignVCenter
-                                    font.family: "Consolas"
+                                    font.family: "Google Sans Code"
                                     leftPadding: 8
                                     wrapMode: TextEdit.NoWrap
                                 }
@@ -422,7 +422,7 @@ Item {
                                     Layout.preferredWidth: hexColMetrics.width + 16
                                     horizontalAlignment: TextEdit.AlignLeft
                                     verticalAlignment: TextEdit.AlignVCenter
-                                    font.family: "Consolas"
+                                    font.family: "Google Sans Code"
                                     leftPadding: 16
                                     wrapMode: TextEdit.NoWrap
                                     clip: true
@@ -435,7 +435,7 @@ Item {
                                     Layout.fillWidth: true
                                     horizontalAlignment: TextEdit.AlignLeft
                                     verticalAlignment: TextEdit.AlignVCenter
-                                    font.family: "Consolas"
+                                    font.family: "Google Sans Code"
                                     leftPadding: 16
                                     wrapMode: TextEdit.NoWrap
                                     clip: true

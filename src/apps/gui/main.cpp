@@ -1,3 +1,6 @@
+#include <QDir>
+#include <QFont>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QLoggingCategory>
@@ -11,6 +14,17 @@ int main(int argc, char *argv[])
                        "supertooth.session.warning=true"));
 
     QGuiApplication app(argc, argv);
+
+    const QDir fontsDir(":/assets/fonts");
+    for (const QFileInfo &fi : fontsDir.entryInfoList({"*.ttf", "*.otf"}, QDir::Files)) {
+        const int id = QFontDatabase::addApplicationFont(fi.absoluteFilePath());
+        if (id < 0)
+            qWarning("Failed to load font: %s", qPrintable(fi.absoluteFilePath()));
+    }
+
+    QFont appFont("Google Sans Code");
+    appFont.setStyleHint(QFont::Monospace);
+    app.setFont(appFont);
 
     QQmlApplicationEngine engine;
     QObject::connect(
