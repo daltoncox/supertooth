@@ -62,13 +62,15 @@ ApplicationWindow {
                     console.log("Supertooth: play/pause toggled; running =",
                                 receiverController.running,
                                 "inputType =", header.inputTypeIndex,
-                                "deviceID =", header.deviceID)
+                                "deviceID =", header.deviceID,
+                                "sessionType =", channelView.sessionTypeIndex)
                     if (receiverController.running) {
                         receiverController.stop()
                     } else {
                         frameListModel.clear()
                         receiverController.start(header.inputTypeIndex,
-                                                 header.deviceID)
+                                                 header.deviceID,
+                                                 channelView.sessionTypeIndex)
                     }
                 }
             }
@@ -96,11 +98,11 @@ ApplicationWindow {
                         text: "Devices"
                     }
                 }
-                Item {
-                    Label {
-                        anchors.centerIn: parent
-                        text: "Channel"
-                    }
+                ChannelView {
+                    id: channelView
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    running: receiverController.running
                 }
             }
         }

@@ -38,6 +38,7 @@ qt_add_qml_module(appSupertooth
         qml/Sidebar.qml
         qml/Header.qml
         qml/views/FrameListView.qml
+        qml/views/ChannelView.qml
 )
 
 set_target_properties(appSupertooth PROPERTIES

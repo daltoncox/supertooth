@@ -16,10 +16,11 @@
  * @brief QML-facing controller that owns a receiver session lifecycle and
  *        bridges decoded frames from the C worker thread into Qt signals.
  *
- * start() spawns a std::thread running the blocking backend_session_run_ble().
- * The C trampoline calls handleRow() on the worker thread; emitting
- * frameDecoded() from a non-Qt thread is delivered to Qt slots via a queued
- * connection (the controller lives in the main thread).
+ * start() spawns a std::thread running the blocking backend_session_run_*
+ * function selected by @p sessionType (hybrid / BLE / BR/EDR). The C
+ * trampoline calls handleRow() on the worker thread; emitting frameDecoded()
+ * from a non-Qt thread is delivered to Qt slots via a queued connection (the
+ * controller lives in the main thread).
  */
 class ReceiverController : public QObject
 {
@@ -34,14 +35,14 @@ public:
     bool running() const { return m_running; }
 
     /**
-     * Start a BLE capture session.
-     * @param inputType  BACKEND_INPUT_HACKRF (0) or BACKEND_INPUT_FILE (1).
-     * @param deviceId   HackRF identifier, or empty for default device.
-     * @param bleChannel BLE advertising channel (37/38/39). Defaults to 37.
+     * Start a capture session.
+     * @param inputType   BACKEND_INPUT_HACKRF (0) or BACKEND_INPUT_FILE (1).
+     * @param deviceId    HackRF identifier, or empty for default device.
+     * @param sessionType BACKEND_SESSION_HYBRID (0), _BLE (1) or _BREDR (2).
      * @return true if the session was started (or already running).
      */
     Q_INVOKABLE bool start(int inputType, const QString &deviceId,
-                           int bleChannel = 37);
+                           int sessionType);
     /** Request the running session to stop and join the worker thread. */
     Q_INVOKABLE void stop();
 
@@ -51,9 +52,9 @@ signals:
     void errorOccurred(const QString &message);
 
 private:
-    static void rowTrampoline(const backend_ble_row_t *row, void *user);
+    static void rowTrampoline(const backend_row_t *row, void *user);
     // Runs on the worker thread; builds a QVariantMap and emits frameDecoded().
-    void handleRow(const backend_ble_row_t *row);
+    void handleRow(const backend_row_t *row);
     void onFinish(int result);
     void setRunning(bool running);
 

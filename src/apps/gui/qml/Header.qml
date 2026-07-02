@@ -67,7 +67,7 @@ Rectangle {
             // HackRF Input Options
             RowLayout {
                 Layout.preferredHeight: parent.height
-                spacing: 8
+                spacing: 12
 
                 ComboBox {
                     id: deviceIdSelector
