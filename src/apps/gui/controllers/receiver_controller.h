@@ -10,7 +10,7 @@
 
 #include <qqmlintegration.h>
 
-#include "backend_api.h"
+#include "../backend/backend_api.h"
 
 /**
  * @brief QML-facing controller that owns a receiver session lifecycle and

@@ -10,14 +10,14 @@ qt_standard_project_setup(REQUIRES 6.8)
 
 qt_add_executable(appSupertooth
     main.cpp
-    radio_device_model.h
-    radio_device_model.cpp
-    backend_api.h
-    backend_api.c
-    receiver_controller.h
-    receiver_controller.cpp
-    frame_list_model.h
-    frame_list_model.cpp
+    backend/backend_api.h
+    backend/backend_api.c
+    controllers/receiver_controller.h
+    controllers/receiver_controller.cpp
+    models/frame_list_model.h
+    models/frame_list_model.cpp
+    models/radio_device_model.h
+    models/radio_device_model.cpp
 )
 
 file(GLOB IMAGE_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} assets/images/*.svg assets/images/*.png)
@@ -34,10 +34,10 @@ qt_add_qml_module(appSupertooth
     URI Supertooth
     VERSION 1.0
     QML_FILES
-        Main.qml
-        Sidebar.qml
-        Header.qml
-        FrameListView.qml
+        qml/Main.qml
+        qml/Sidebar.qml
+        qml/Header.qml
+        qml/views/FrameListView.qml
 )
 
 set_target_properties(appSupertooth PROPERTIES
@@ -45,6 +45,12 @@ set_target_properties(appSupertooth PROPERTIES
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
     MACOSX_BUNDLE TRUE
     WIN32_EXECUTABLE TRUE
+)
+
+target_include_directories(appSupertooth PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/models
+    ${CMAKE_CURRENT_SOURCE_DIR}/controllers
+    ${CMAKE_CURRENT_SOURCE_DIR}/backend
 )
 
 target_link_libraries(appSupertooth

@@ -53,7 +53,7 @@ Item {
         ListElement { title: "No.";          role: "no";    width: 50;  hAlign: 2; color: "#9cdcfe" }
         ListElement { title: "Time";         role: "time";  width: 90;  hAlign: 1; color: "#cccccc" }
         ListElement { title: "RSSI";         role: "rssi";  width: 60;  hAlign: 1; color: "#b5cea8" }
-        ListElement { title: "Protocol";     role: "proto"; width: 70;  hAlign: 1; color: "#dcdcaa" }
+        ListElement { title: "Protocol";     role: "proto"; width: 80;  hAlign: 1; color: "#dcdcaa" }
         ListElement { title: "Ch";           role: "chIdx"; width: 40;  hAlign: 4; color: "#ce9178" }
         ListElement { title: "Address";      role: "addr";  width: 110; hAlign: 1; color: "#569cd6" }
         ListElement { title: "Source";       role: "src";   width: 140; hAlign: 1; color: "#cccccc" }
