@@ -69,6 +69,7 @@ Rectangle {
                 ComboBox {
                     id: deviceIdSelector
                     Layout.preferredHeight: parent.height
+		    Layout.preferredWidth: 150
 
                     model: radioDeviceModel
                     textRole: "display"
