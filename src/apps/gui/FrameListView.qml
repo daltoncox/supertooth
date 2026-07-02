@@ -32,9 +32,9 @@ Item {
         id: columns
         ListElement { title: "No.";          role: "no";    width: 50;  hAlign: 2; color: "#9cdcfe" }
         ListElement { title: "Time";         role: "time";  width: 80;  hAlign: 1; color: "#cccccc" }
-        ListElement { title: "Ch";           role: "chIdx"; width: 40;  hAlign: 4; color: "#b5cea8" }
-	ListElement { title: "RSSI";         role: "rssi";  width: 70;  hAlign: 1; color: "#dcdcaa" }
-        ListElement { title: "Protocol";     role: "proto"; width: 70;  hAlign: 1; color: "#ce9178" }
+        ListElement { title: "RSSI";         role: "rssi";  width: 70;  hAlign: 1; color: "#b5cea8" }
+        ListElement { title: "Protocol";     role: "proto"; width: 70;  hAlign: 1; color: "#dcdcaa" }
+        ListElement { title: "Ch";           role: "chIdx"; width: 40;  hAlign: 4; color: "#ce9178" }
 	ListElement { title: "Address";      role: "addr";  width: 110; hAlign: 1; color: "#569cd6" }
 	ListElement { title: "Source";       role: "src";   width: 140; hAlign: 1; color: "#cccccc" }
 	ListElement { title: "Destination";  role: "dst";   width: 140; hAlign: 1; color: "#cccccc" }
@@ -194,7 +194,7 @@ Item {
                         color: frameListView.currentIndex === index ? "#094771" : (index % 2 === 0 ? "#1e1e1e" : "#252525")
                         clip: true
 
-                        property var cells: [no, time, chIdx, rssi, proto, addr, src, dst, type, info]
+                        property var cells: [no, time, rssi, proto, chIdx, addr, src, dst, type, info]
 
                         MouseArea {
                             anchors.fill: parent
