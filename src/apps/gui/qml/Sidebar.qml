@@ -19,10 +19,8 @@ Rectangle {
         Image {
             anchors.horizontalCenter: parent.horizontalCenter
             source: "/assets/images/Flying_Supertooth_White_512@2x.png"
-            width: 28
-            height: 28
-            sourceSize.width: 64
-            sourceSize.height: 64
+            width: 40
+            height: 40
         }
 
         // Extra spacing
@@ -60,10 +58,8 @@ Rectangle {
                 Image {
                     anchors.centerIn: parent
                     source: iconPath
-                    width: 20
-                    height: 20
-                    sourceSize.width: 40
-                    sourceSize.height: 40
+                    width: 30
+                    height: 30
                 }
 
                 onClicked: {
