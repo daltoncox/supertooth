@@ -43,6 +43,7 @@ Rectangle {
 
         ComboBox {
             id: inputTypeSelector
+            enabled: !header.playing
             Layout.preferredHeight: parent.height
             Layout.preferredWidth: 100
 
@@ -59,6 +60,7 @@ Rectangle {
 
         StackLayout {
             id: inputControls
+            enabled: !header.playing
             Layout.preferredHeight: parent.height
             currentIndex: header.inputTypeIndex
 
@@ -80,6 +82,36 @@ Rectangle {
                     }
                 }
 
+                Button {
+                    id: refreshButton
+                    enabled: !header.playing
+                    Layout.preferredHeight: parent.height
+                    Layout.preferredWidth: parent.height
+
+                    Image {
+                        source: "/assets/images/refresh.svg"
+                        anchors.centerIn: parent
+                        width: 30
+                        height: 30
+                        opacity: refreshButton.enabled ? 1.0 : 0.4
+                    }
+
+                    onClicked: {
+                        var previousId = deviceIdSelector.currentText
+                        radioDeviceModel.refresh(header.inputTypeIndex, true)
+                        var idx = radioDeviceModel.indexFromIdentifier(previousId)
+                        if (idx >= 0) {
+                            deviceIdSelector.currentIndex = idx
+                            header.deviceID = previousId
+                        } else if (radioDeviceModel.rowCount() > 0) {
+                            deviceIdSelector.currentIndex = 0
+                            header.deviceID = deviceIdSelector.currentText
+                        } else {
+                            deviceIdSelector.currentIndex = -1
+                            header.deviceID = ""
+                        }
+                    }
+                }
             }
 
             // File Input Options
@@ -101,9 +133,9 @@ Rectangle {
 
             Image {
                 source: header.playing ? "/assets/images/stop.svg" : "/assets/images/play.svg"
-                sourceSize.width: 36
-                sourceSize.height: 36
                 anchors.centerIn: parent
+                width: 30
+                height: 30
             }
 
             onClicked: {

@@ -29,7 +29,7 @@ public:
      * Repopulate the model for the given input-type index. Safe to call
      * repeatedly; a no-op when the input type has not changed.
      */
-    Q_INVOKABLE void refresh(int inputTypeIndex);
+    Q_INVOKABLE void refresh(int inputTypeIndex, bool force = false);
 
     /**
      * Return the row whose identifier matches @p identifier, or -1.

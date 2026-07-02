@@ -23,9 +23,9 @@ RadioDeviceModel::RadioDeviceModel(QObject *parent)
 {
 }
 
-void RadioDeviceModel::refresh(int inputTypeIndex)
+void RadioDeviceModel::refresh(int inputTypeIndex, bool force)
 {
-    if (inputTypeIndex == m_inputTypeIndex)
+    if (!force && inputTypeIndex == m_inputTypeIndex)
         return;
 
     m_inputTypeIndex = inputTypeIndex;
