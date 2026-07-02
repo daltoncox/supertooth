@@ -106,7 +106,6 @@ Rectangle {
             }
 
             onClicked: {
-                header.playing = !header.playing
                 header.playPauseToggled()
             }
         }

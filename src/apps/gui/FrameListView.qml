@@ -5,6 +5,7 @@ import QtQuick.Layouts
 Item {
     id: root
 
+    property var frameModel: null
     property int currentFrameIndex: -1
 
     property real tableWidth: 0
@@ -28,6 +29,25 @@ Item {
         return x
     }
 
+    function loadDetail(idx) {
+        if (!frameModel || idx < 0) {
+            frameInfoView.model = []
+            hexView.model = []
+            return
+        }
+        frameInfoView.model = frameModel.detailFor(idx)
+        hexView.model = frameModel.hexFor(idx)
+    }
+
+    function updateAutoFollow() {
+        // Considered "at the bottom" when within one row height of the tail.
+        var maxContentY = frameListView.contentHeight - frameListView.height
+        if (maxContentY < 0)
+            maxContentY = 0
+        frameListView.autoFollow =
+            (frameListView.contentY >= maxContentY - 22)
+    }
+
     ListModel {
         id: columns
         ListElement { title: "No.";          role: "no";    width: 50;  hAlign: 2; color: "#9cdcfe" }
@@ -35,10 +55,10 @@ Item {
         ListElement { title: "RSSI";         role: "rssi";  width: 70;  hAlign: 1; color: "#b5cea8" }
         ListElement { title: "Protocol";     role: "proto"; width: 70;  hAlign: 1; color: "#dcdcaa" }
         ListElement { title: "Ch";           role: "chIdx"; width: 40;  hAlign: 4; color: "#ce9178" }
-	ListElement { title: "Address";      role: "addr";  width: 110; hAlign: 1; color: "#569cd6" }
-	ListElement { title: "Source";       role: "src";   width: 140; hAlign: 1; color: "#cccccc" }
-	ListElement { title: "Destination";  role: "dst";   width: 140; hAlign: 1; color: "#cccccc" }
-	ListElement { title: "Type";         role: "type";  width: 150; hAlign: 1; color: "#c586c0" }
+        ListElement { title: "Address";      role: "addr";  width: 110; hAlign: 1; color: "#569cd6" }
+        ListElement { title: "Source";       role: "src";   width: 140; hAlign: 1; color: "#cccccc" }
+        ListElement { title: "Destination";  role: "dst";   width: 140; hAlign: 1; color: "#cccccc" }
+        ListElement { title: "Type";         role: "type";  width: 150; hAlign: 1; color: "#c586c0" }
         ListElement { title: "Info";         role: "info";  width: 200; hAlign: 1; color: "#cccccc" }
     }
 
@@ -177,14 +197,28 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
-                    model: ListModel {
-                        ListElement { no: 1; time: "0.000000"; chIdx: 37; rssi: "-42.0"; proto: "LE"; addr: "0x9E8B33"; src: "11:22:33:44:55:66"; dst: "Broadcast"; type: "ADV_IND"; info: "Connectable undirected" }
-                        ListElement { no: 2; time: "0.001204"; chIdx: 38; rssi: "-55.1"; proto: "LE"; addr: "0x9E8B33"; src: "11:22:33:44:55:66"; dst: "Broadcast"; type: "ADV_NONCONN_IND"; info: "" }
-                        ListElement { no: 3; time: "0.002488"; chIdx: 39; rssi: "-61.3"; proto: "LE"; addr: "0x7F3A2C"; src: "AA:BB:CC:DD:00:01"; dst: "11:22:33:44:55:66"; type: "SCAN_REQ"; info: "" }
-                        ListElement { no: 4; time: "0.003712"; chIdx: 39; rssi: "-60.8"; proto: "LE"; addr: "0x7F3A2C"; src: "11:22:33:44:55:66"; dst: "AA:BB:CC:DD:00:01"; type: "SCAN_RSP"; info: "" }
-                        ListElement { no: 5; time: "0.010033"; chIdx: 37; rssi: "-44.0"; proto: "LE"; addr: "0x7F3A2C"; src: "AA:BB:CC:DD:00:01"; dst: "11:22:33:44:55:66"; type: "CONNECT_IND"; info: "" }
-                        ListElement { no: 6; time: "0.012440"; chIdx: 2;  rssi: "-48.2"; proto: "BR/EDR"; addr: "0xAB3D"; src: "Central"; dst: "Peripheral 3"; type: "DM3"; info: "Clock unknown" }
-                        ListElement { no: 7; time: "0.014011"; chIdx: 2;  rssi: "-49.0"; proto: "BR/EDR"; addr: "0xAB3D"; src: "Peripheral 3"; dst: "Central"; type: "DM3"; info: "Clock unknown" }
+                    model: root.frameModel
+
+                    ScrollBar.vertical: ScrollBar {
+                        policy: ScrollBar.AsNeeded
+                    }
+
+                    // Wireshark-style live follow: stick to the newest frame
+                    // unless the user has scrolled away from the live tail.
+                    property bool autoFollow: true
+
+                    // Recompute "at bottom" on any scroll (user or programmatic).
+                    onContentYChanged: root.updateAutoFollow()
+                    onContentHeightChanged: root.updateAutoFollow()
+
+                    onCountChanged: {
+                        if (frameListView.autoFollow && frameListView.count > 0)
+                            Qt.callLater(frameListView.positionViewAtEnd)
+                    }
+
+                    onCurrentIndexChanged: {
+                        root.currentFrameIndex = currentIndex
+                        root.loadDetail(currentIndex)
                     }
 
                     delegate: Rectangle {
@@ -274,16 +308,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
-                        model: ListModel {
-                            ListElement { field: "PDU Type"; value: "ADV_IND" }
-                            ListElement { field: "Channel"; value: "37" }
-                            ListElement { field: "Access Address"; value: "9E8B33" }
-                            ListElement { field: "AdvA"; value: "11:22:33:44:55:66" }
-                            ListElement { field: "TargetA"; value: "—" }
-                            ListElement { field: "AdvData Length"; value: "6" }
-                            ListElement { field: "CRC"; value: "0xA1B2C3 (PASS)" }
-                            ListElement { field: "RSSI"; value: "-42.0 dBm" }
-                        }
+                        model: []
 
                         delegate: Rectangle {
                             width: frameInfoView.width
@@ -294,20 +319,27 @@ Item {
                                 anchors.fill: parent
                                 spacing: 8
 
-                                Label {
-                                    text: field + ":"
+                                TextEdit {
+                                    text: modelData.field + ":"
                                     color: "#9cdcfe"
+                                    readOnly: true
+                                    selectByMouse: true
                                     Layout.preferredWidth: 140
-                                    horizontalAlignment: Text.AlignRight
-                                    verticalAlignment: Text.AlignVCenter
+                                    horizontalAlignment: TextEdit.AlignRight
+                                    verticalAlignment: TextEdit.AlignVCenter
                                     rightPadding: 8
+                                    wrapMode: TextEdit.NoWrap
                                 }
-                                Label {
-                                    text: value
+                                TextEdit {
+                                    text: modelData.value
                                     color: "#cccccc"
+                                    readOnly: true
+                                    selectByMouse: true
                                     Layout.fillWidth: true
-                                    horizontalAlignment: Text.AlignLeft
-                                    verticalAlignment: Text.AlignVCenter
+                                    horizontalAlignment: TextEdit.AlignLeft
+                                    verticalAlignment: TextEdit.AlignVCenter
+                                    wrapMode: TextEdit.NoWrap
+                                    clip: true
                                 }
                             }
                         }
@@ -320,6 +352,15 @@ Item {
                 color: "#1e1e1e"
                 SplitView.preferredWidth: parent.width * 0.6
                 SplitView.minimumWidth: 120
+
+                // Measure the width of a full 16-byte hex row so partial rows
+                // occupy the same column width (TextEdit ignores trailing
+                // whitespace in its width calculation).
+                TextMetrics {
+                    id: hexColMetrics
+                    text: "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+                    font.family: "Consolas"
+                }
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -350,12 +391,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
-                        model: ListModel {
-                            ListElement { offset: "0000"; hex: "AA BB CC DD EE FF 00 11  22 33 44 55 66 77 88 99"; ascii: "............\"  3DUfw.." }
-                            ListElement { offset: "0010"; hex: "01 02 03 04 05 06 07 08  09 0A 0B 0C 0D 0E 0F 10"; ascii: "................" }
-                            ListElement { offset: "0020"; hex: "A1 B2 C3 D4 E5 F6 07 18  29 3A 4B 5C 6D 7E 8F 90"; ascii: ".........):K\\.~." }
-                            ListElement { offset: "0030"; hex: "FF EE DD CC BB AA 99 88  77 66 55 44 33 22 11 00"; ascii: "........wfUD3\".." }
-                        }
+                        model: []
 
                         delegate: Rectangle {
                             width: hexView.width
@@ -366,31 +402,43 @@ Item {
                                 anchors.fill: parent
                                 spacing: 0
 
-                                Label {
-                                    text: offset
+                                TextEdit {
+                                    text: modelData.offset
                                     color: "#858585"
+                                    readOnly: true
+                                    selectByMouse: true
                                     Layout.preferredWidth: 50
-                                    horizontalAlignment: Text.AlignRight
-                                    verticalAlignment: Text.AlignVCenter
+                                    horizontalAlignment: TextEdit.AlignRight
+                                    verticalAlignment: TextEdit.AlignVCenter
                                     font.family: "Consolas"
                                     leftPadding: 8
+                                    wrapMode: TextEdit.NoWrap
                                 }
-                                Label {
-                                    text: hex
+                                TextEdit {
+                                    text: modelData.hex
                                     color: "#d4d4d4"
-                                    horizontalAlignment: Text.AlignLeft
-                                    verticalAlignment: Text.AlignVCenter
+                                    readOnly: true
+                                    selectByMouse: true
+                                    Layout.preferredWidth: hexColMetrics.width + 16
+                                    horizontalAlignment: TextEdit.AlignLeft
+                                    verticalAlignment: TextEdit.AlignVCenter
                                     font.family: "Consolas"
                                     leftPadding: 16
+                                    wrapMode: TextEdit.NoWrap
+                                    clip: true
                                 }
-                                Label {
-                                    text: ascii
+                                TextEdit {
+                                    text: modelData.ascii
                                     color: "#7c7c7c"
+                                    readOnly: true
+                                    selectByMouse: true
                                     Layout.fillWidth: true
-                                    horizontalAlignment: Text.AlignLeft
-                                    verticalAlignment: Text.AlignVCenter
+                                    horizontalAlignment: TextEdit.AlignLeft
+                                    verticalAlignment: TextEdit.AlignVCenter
                                     font.family: "Consolas"
                                     leftPadding: 16
+                                    wrapMode: TextEdit.NoWrap
+                                    clip: true
                                 }
                             }
                         }

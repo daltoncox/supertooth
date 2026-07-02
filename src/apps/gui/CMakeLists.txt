@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(Supertooth VERSION 0.1 LANGUAGES CXX)
+project(Supertooth VERSION 0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -12,6 +12,12 @@ qt_add_executable(appSupertooth
     main.cpp
     radio_device_model.h
     radio_device_model.cpp
+    backend_api.h
+    backend_api.c
+    receiver_controller.h
+    receiver_controller.cpp
+    frame_list_model.h
+    frame_list_model.cpp
 )
 
 file(GLOB IMAGE_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} images/*.svg images/*.png)

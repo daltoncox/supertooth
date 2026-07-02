@@ -10,7 +10,7 @@
 #define RAND_ADDR_RPA 0x02u
 #define RAND_ADDR_NRPA 0x00u
 
-static const char *ble_pdu_type_desc(uint8_t pdu_type)
+const char *ble_pdu_type_desc(uint8_t pdu_type)
 {
     switch (pdu_type & 0x0Fu)
     {
