@@ -19,6 +19,10 @@ ApplicationWindow {
         id: frameListModel
     }
 
+    DeviceListModel {
+        id: deviceListModel
+    }
+
     Connections {
         target: receiverController
         function onFrameDecoded(row) {
@@ -92,11 +96,10 @@ ApplicationWindow {
                         text: "Topology"
                     }
                 }
-                Item {
-                    Label {
-                        anchors.centerIn: parent
-                        text: "Devices"
-                    }
+                DeviceListView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    deviceModel: deviceListModel
                 }
                 ChannelView {
                     id: channelView

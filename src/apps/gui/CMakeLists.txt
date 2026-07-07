@@ -4,7 +4,7 @@ project(Supertooth VERSION 0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickLayouts)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickLayouts Graphs)
 
 qt_standard_project_setup(REQUIRES 6.8)
 
@@ -16,6 +16,8 @@ qt_add_executable(appSupertooth
     controllers/receiver_controller.cpp
     models/frame_list_model.h
     models/frame_list_model.cpp
+    models/device_list_model.h
+    models/device_list_model.cpp
     models/radio_device_model.h
     models/radio_device_model.cpp
 )
@@ -38,6 +40,7 @@ qt_add_qml_module(appSupertooth
         qml/Sidebar.qml
         qml/Header.qml
         qml/views/FrameListView.qml
+        qml/views/DeviceListView.qml
         qml/views/ChannelView.qml
 )
 
@@ -55,7 +58,7 @@ target_include_directories(appSupertooth PRIVATE
 )
 
 target_link_libraries(appSupertooth
-    PRIVATE Qt6::Quick Qt6::QuickLayouts supertooth_core
+    PRIVATE Qt6::Quick Qt6::QuickLayouts Qt6::Graphs supertooth_core
 )
 
 include(GNUInstallDirs)
