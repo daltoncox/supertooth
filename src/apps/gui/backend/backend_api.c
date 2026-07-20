@@ -236,6 +236,26 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
 
             add_detail(row, "AD Structure", "type=0x%02X (%s) len=%u data=%s",
                        ad_type, bt_assigned_ad_type_name(ad_type), ad_l, hex);
+
+            /* AD type 0x08 (Shortened Local Name) or 0x09 (Complete Local
+             * Name) carry the advertiser's local name verbatim as their
+             * payload (typically ASCII / UTF-8, no NUL terminator). Surface
+             * it as a dedicated "Device Name" detail so the GUI can show a
+             * human-readable identifier in the device list. Non-printable
+             * bytes are substituted with '.' to keep the value clean. */
+            if (ad_type == 0x08u || ad_type == 0x09u)
+            {
+                char name[BACKEND_DETAIL_VAL_LEN];
+                size_t nl = 0u;
+                for (unsigned int j = vb; j < ve && nl + 1u < sizeof(name); j++)
+                {
+                    char c = (char)ad[j];
+                    name[nl++] = (c >= 0x20 && c < 0x7f) ? c : '.';
+                }
+                name[nl] = '\0';
+                add_detail(row, "Device Name", "%s", name);
+            }
+
             i += 1u + ad_l;
         }
     }

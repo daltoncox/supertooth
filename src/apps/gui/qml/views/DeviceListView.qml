@@ -113,12 +113,10 @@ Item {
 
     ListModel {
         id: columns
-        ListElement { title: "RSSI";         role: "rssi";       width: 70;  hAlign: 1; color: "#b5cea8" }
-        ListElement { title: "Protocol";     role: "proto";      width: 80;  hAlign: 1; color: "#dcdcaa" }
-        ListElement { title: "Address";      role: "addr";       width: 160; hAlign: 1; color: "#569cd6" }
-        ListElement { title: "Device";       role: "device";     width: 160; hAlign: 1; color: "#cccccc" }
-        ListElement { title: "Last Seen";   role: "lastSeen";    width: 140; hAlign: 1; color: "#cccccc" }
-        ListElement { title: "Packets";     role: "packetsSeen"; width: 70;  hAlign: 4; color: "#ce9178" }
+        ListElement { title: "RSSI";         role: "rssi";        width: 70;  hAlign: 1; color: "#b5cea8" }
+        ListElement { title: "Protocol";     role: "proto";       width: 80;  hAlign: 1; color: "#dcdcaa" }
+        ListElement { title: "Identifier";   role: "identifier"; width: 220; hAlign: 1; color: "#569cd6" }
+        ListElement { title: "Last Seen";     role: "lastSeen";    width: 120; hAlign: 1; color: "#cccccc" }
         ListElement { title: "Packet Rate";  role: "packetRate";  width: 100; hAlign: 1; color: "#9cdcfe" }
     }
 
@@ -284,7 +282,7 @@ Item {
                         color: deviceListView.currentIndex === index ? "#094771" : (index % 2 === 0 ? "#1e1e1e" : "#252525")
                         clip: true
 
-                        property var cells: [rssi, proto, addr, device, lastSeen, packetsSeen, packetRate]
+                        property var cells: [rssi, proto, identifier, lastSeen, packetRate]
 
                         MouseArea {
                             anchors.fill: parent

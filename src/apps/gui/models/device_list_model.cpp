@@ -27,6 +27,7 @@ QHash<int, QByteArray> DeviceListModel::roleNames() const
         {ProtoRole,       "proto"},
         {AddrRole,        "addr"},
         {DeviceRole,      "device"},
+        {IdentifierRole,  "identifier"},
         {LastSeenRole,    "lastSeen"},
         {PacketsSeenRole, "packetsSeen"},
         {PacketRateRole,  "packetRate"},
@@ -43,15 +44,12 @@ QVariant DeviceListModel::data(const QModelIndex &index, int role) const
     case RssiRole:
         return qIsNaN(r.rssiDb)
                    ? QStringLiteral("--")
-                   : QString::number(r.rssiDb, 'f', 1) + QStringLiteral(" dBm");
+                   : QString::number(r.rssiDb, 'f', 1);
     case ProtoRole:       return r.proto;
     case AddrRole:       return r.addr;
     case DeviceRole:     return r.device;
-    case LastSeenRole:
-        return r.lastSeenMs == 0
-                   ? QStringLiteral("--")
-                   : QDateTime::fromMSecsSinceEpoch(r.lastSeenMs)
-                         .toString(QStringLiteral("HH:mm:ss.zzz"));
+    case IdentifierRole: return identifierLabelFor(r);
+    case LastSeenRole:  return formatLastSeen(r.lastSeenMs);
     case PacketsSeenRole: return QVariant::fromValue(r.packetsSeen);
     case PacketRateRole:
         return QString::number(r.lastRate) + QStringLiteral("/s");
@@ -119,6 +117,27 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
     const QString key = makeKey(proto, addr, device);
     int rowIdx = m_indexByKey.value(key, -1);
 
+    // BLE advertising packets can carry a Complete/Shortened Local Name inside
+    // their AD structures. When the backend surfaces one (as a "Device Name"
+    // detail entry), adopt it as the row's display name so the Identifier
+    // column can show a human-readable name instead of the raw AdvA. The most
+    // recent non-empty authoritative name wins; a later frame without a name
+    // keeps the previously discovered one.
+    auto applyDeviceNameFromDetail = [](Row &r, const QVariantList &detail) {
+        for (const QVariant &entry : detail)
+        {
+            const QVariantMap pair = entry.toMap();
+            if (pair.value(QStringLiteral("field")).toString() ==
+                QStringLiteral("Device Name"))
+            {
+                const QString name = pair.value(QStringLiteral("value")).toString();
+                if (!name.isEmpty())
+                    r.displayName = name;
+                return;
+            }
+        }
+    };
+
     if (rowIdx < 0)
     {
         Row r;
@@ -138,6 +157,7 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
             r.avgSeries.append(QPointF(0.0, double(rssiDb)));
         }
         r.lastFrameDetail = frame.value(QStringLiteral("detail")).toList();
+        applyDeviceNameFromDetail(r, r.lastFrameDetail);
 
         rowIdx = m_rows.size();
         beginInsertRows(QModelIndex(), rowIdx, rowIdx);
@@ -165,11 +185,12 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
         evictChartHistory(r, now);
     }
 
-    // Keep the latest frame's overflow detail so the info pane reflects the
-    // most recent packet (PDU type, channel, AC errors, etc.).
+// Keep the latest frame's overflow detail so the info pane reflects the
+    // most recent packet (PDU type, channel, AC errors, UAP, etc.).
     const QVariantList newDetail = frame.value(QStringLiteral("detail")).toList();
     if (!newDetail.isEmpty())
         r.lastFrameDetail = newDetail;
+    applyDeviceNameFromDetail(r, newDetail);
 
     const QModelIndex idx = index(rowIdx, 0);
     emit dataChanged(idx, idx);
@@ -281,17 +302,15 @@ QVariantList DeviceListModel::detailFor(int index) const
     add(QStringLiteral("Protocol"), r.proto);
     add(QStringLiteral("Address"), r.addr);
     add(QStringLiteral("Device"), r.device);
+    if (!r.displayName.isEmpty())
+        add(QStringLiteral("Device Name"), r.displayName);
     add(QStringLiteral("RSSI (1s avg)"),
         qIsNaN(r.rssiDb) ? QStringLiteral("--")
                          : QString::number(r.rssiDb, 'f', 1) + QStringLiteral(" dBm"));
     add(QStringLiteral("Packets seen"), QVariant::fromValue(r.packetsSeen));
     add(QStringLiteral("Packet rate"),
         QString::number(r.lastRate) + QStringLiteral("/s"));
-    add(QStringLiteral("Last seen"),
-        r.lastSeenMs == 0
-            ? QStringLiteral("--")
-            : QDateTime::fromMSecsSinceEpoch(r.lastSeenMs)
-                  .toString(QStringLiteral("HH:mm:ss.zzz")));
+    add(QStringLiteral("Last seen"), formatLastSeen(r.lastSeenMs));
     add(QStringLiteral("Last raw RSSI"),
         qIsNaN(r.lastFrameRssiDb)
             ? QStringLiteral("--")
@@ -306,6 +325,7 @@ QVariantList DeviceListModel::detailFor(int index) const
         QStringLiteral("Protocol"),
         QStringLiteral("Address"),
         QStringLiteral("Device"),
+        QStringLiteral("Device Name"),
     };
     for (const QVariant &entry : r.lastFrameDetail)
     {
@@ -372,6 +392,54 @@ QString DeviceListModel::deviceLabelFor(const QString &proto, const QString &src
     if (!src.isEmpty() && src != QStringLiteral("--"))
         return src;
     return QStringLiteral("Unknown");
+}
+
+QString DeviceListModel::identifierLabelFor(const Row &r)
+{
+    if (r.proto == QStringLiteral("BR/EDR"))
+    {
+        // Piconet rows (clock unknown, pre-break-out) expose only the
+        // partially-recovered address — render that as-is, without a
+        // role suffix.
+        if (r.device == QStringLiteral("piconet"))
+            return r.addr;
+
+        // Broken-out piconet rows are tagged with their role relative to the
+        // piconet: "Central" gets the short suffix "C" while each slave slot
+        // carries its LT_ADDR number. The result reads like "0x12345678-C"
+        // or "0x12345678-3".
+        QString suffix;
+        if (r.device == QStringLiteral("Central"))
+            suffix = QStringLiteral("C");
+        else if (r.device.startsWith(QStringLiteral("LT_ADDR ")))
+            suffix = r.device.mid(QStringLiteral("LT_ADDR ").length());
+        else
+            suffix = r.device;
+
+        if (suffix.isEmpty())
+            return r.addr;
+        return r.addr + QStringLiteral("-") + suffix;
+    }
+
+    // BLE: a learned local name (from an advertising packet's AD structure)
+    // wins over the raw AdvA so the table reads naturally. Fall back to the
+    // advertising/scan address if no name was ever observed.
+    if (!r.displayName.isEmpty())
+        return r.displayName;
+    return r.device.isEmpty() ? QStringLiteral("Unknown") : r.device;
+}
+
+QString DeviceListModel::formatLastSeen(qint64 ms)
+{
+    if (ms == 0)
+        return QStringLiteral("--");
+    // Tenths of a second precision — Qt's date-format codes don't directly
+    // clamp to that, so build the string from a HH:mm:ss component plus the
+    // single most-significant digit of the millisecond residue.
+    const QDateTime dt = QDateTime::fromMSecsSinceEpoch(ms);
+    const QString base = dt.toString(QStringLiteral("HH:mm:ss"));
+    const int tenth = int((ms % 1000) / 100);
+    return base + QStringLiteral(".") + QString::number(tenth);
 }
 
 void DeviceListModel::removeRow(int index)
