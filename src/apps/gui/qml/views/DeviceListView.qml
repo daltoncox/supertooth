@@ -9,6 +9,9 @@ Item {
     property var deviceModel: null
     property int currentDeviceIndex: -1
 
+    // Selectable chart time window (seconds). Defaults to 60s.
+    property real chartRangeSec: 60.0
+
     property real tableWidth: 0
     readonly property int minColWidth: 20
     readonly property int handleHit: 6
@@ -41,14 +44,71 @@ Item {
     function loadChart(idx) {
         if (!deviceModel || idx < 0) {
             rssiSeries.clear()
+            rssiRawSeries.clear()
+            axisX.min = 0.0
+            axisX.max = chartRangeSec
             emptyChartLabel.visible = true
             return
         }
         emptyChartLabel.visible = false
-        var pts = deviceModel.rssiSeriesFor(idx)
+        var avg = deviceModel.rssiSeriesFor(idx)
+        var raw = deviceModel.rssiRawSeriesFor(idx)
         rssiSeries.clear()
+        rssiRawSeries.clear()
         // GraphsView's append(points) takes a list of QPointF.
-        rssiSeries.append(pts)
+        rssiSeries.append(avg)
+        rssiRawSeries.append(raw)
+
+        // Rolling window: anchor the right edge to "now" expressed in the
+        // series' frame-relative seconds, slide the left edge by chartRangeSec.
+        var firstMs = deviceModel.firstFrameMsFor(idx)
+        var nowX = firstMs > 0 ? (Date.now() - firstMs) / 1000.0 : chartRangeSec
+        if (nowX < chartRangeSec) nowX = chartRangeSec
+        axisX.max = nowX
+        axisX.min = nowX - chartRangeSec
+        axisX.tickInterval = chartRangeSec >= 120 ? 30
+                           : chartRangeSec >= 60 ? 10
+                           : chartRangeSec >= 15 ? 5
+                           : chartRangeSec >= 5  ? 1
+                           : 1
+        axisX.labelFormat = chartRangeSec >= 60 ? "%.0f" : "%.1f"
+        axisX.labelDecimals = chartRangeSec >= 60 ? 0 : 1
+
+        // Auto-fit Y axis to the points currently inside the visible X
+        // window, padded by 10% above max and 10% below min.
+        var xMin = axisX.min
+        var xMax = axisX.max
+        var yMin = Infinity
+        var yMax = -Infinity
+        function scanForBounds(pts) {
+            for (var i = 0; i < pts.length; i++) {
+                var p = pts[i]
+                if (p.x < xMin || p.x > xMax) continue
+                if (p.y < yMin) yMin = p.y
+                if (p.y > yMax) yMax = p.y
+            }
+        }
+        scanForBounds(avg)
+        scanForBounds(raw)
+        if (yMin === Infinity || yMax === -Infinity) {
+            // No visible samples — keep previous Y range.
+        } else {
+            var span = yMax - yMin
+            if (span < 1.0) span = 1.0   // avoid a zero/flat range
+            axisY.min = Math.floor((yMin - 0.1 * span) * 10) / 10
+            axisY.max = Math.ceil((yMax + 0.1 * span) * 10) / 10
+        }
+    }
+
+    // Periodically re-read the chart series so newly-captured frames are
+    // painted and the rolling window keeps sliding forward even when no
+    // frames arrive (so the trace visibly advances in time).
+    Timer {
+        id: chartRefreshTimer
+        interval: 500
+        repeat: true
+        running: root.currentDeviceIndex >= 0
+        onTriggered: root.loadChart(root.currentDeviceIndex)
     }
 
     ListModel {
@@ -210,6 +270,13 @@ Item {
                         root.loadChart(currentIndex)
                     }
 
+                    Label {
+                        anchors.centerIn: parent
+                        visible: !deviceModel || deviceModel.count === 0
+                        text: "No devices — start a capture to populate"
+                        color: "#858585"
+                    }
+
                     delegate: Rectangle {
                         id: rowDelegate
                         width: deviceListView.width
@@ -275,16 +342,53 @@ Item {
                     spacing: 0
 
                     Rectangle {
+                        id: chartHeader
                         Layout.fillWidth: true
                         Layout.preferredHeight: 24
                         color: "#2d2d2d"
+
                         Label {
-                            anchors.fill: parent
-                            text: "RSSI over time (1s window)"
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            leftPadding: 8
+                            text: "RSSI over time"
                             color: "#cccccc"
                             verticalAlignment: Text.AlignVCenter
-                            leftPadding: 8
                             font.bold: true
+                        }
+
+                        Label {
+                            id: chartRangeLabel
+                            anchors.right: chartRangeCombo.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            rightPadding: 6
+                            text: "Window:"
+                            color: "#858585"
+                            verticalAlignment: Text.AlignVCenter
+                        }
+
+                        ComboBox {
+                            id: chartRangeCombo
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            rightPadding: 8
+                            width: 90
+                            height: 18
+                            model: ListModel {
+                                id: rangeModel
+                                ListElement { label: "5 s";   secs: 5 }
+                                ListElement { label: "15 s";  secs: 15 }
+                                ListElement { label: "30 s";  secs: 30 }
+                                ListElement { label: "1 min"; secs: 60 }
+                                ListElement { label: "2 min"; secs: 120 }
+                                ListElement { label: "5 min"; secs: 300 }
+                            }
+                            // Default to "1 min".
+                            currentIndex: 3
+                            onActivated: function (i) {
+                                root.chartRangeSec = rangeModel.get(i).secs
+                                root.loadChart(root.currentDeviceIndex)
+                            }
                         }
                     }
 
@@ -323,6 +427,13 @@ Item {
                             id: rssiSeries
                             color: "#4EC9B0"
                             width: 1.5
+                        }
+
+                        LineSeries {
+                            id: rssiRawSeries
+                            color: "#9e9e9e"
+                            opacity: 0.35
+                            width: 1.0
                         }
 
                         Label {

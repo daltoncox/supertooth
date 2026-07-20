@@ -62,7 +62,13 @@ void FrameListModel::appendRow(const QVariantMap &row)
     else
         m_nextNo = std::max(m_nextNo, r.no + 1);
     r.time = row.value(QStringLiteral("time")).toString();
-    r.rssi = row.value(QStringLiteral("rssi")).toString();
+    {
+        const float rssi = row.value(QStringLiteral("rssiDb")).toFloat();
+        if (qIsNaN(rssi))
+            r.rssi = QStringLiteral("--");
+        else
+            r.rssi = QString::number(rssi, 'f', 1);
+    }
     r.proto = row.value(QStringLiteral("proto")).toString();
     r.chIdx = (unsigned int)row.value(QStringLiteral("chIdx")).toUInt();
     r.addr = row.value(QStringLiteral("addr")).toString();

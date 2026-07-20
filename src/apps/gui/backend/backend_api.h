@@ -39,7 +39,6 @@ extern "C" {
 #define BACKEND_TYPE_TEXT_LEN   32
 #define BACKEND_INFO_TEXT_LEN   160
 #define BACKEND_TIME_TEXT_LEN   32
-#define BACKEND_RSSI_TEXT_LEN   16
 #define BACKEND_PROTO_TEXT_LEN  8
 #define BACKEND_DETAIL_KEY_LEN  40
 #define BACKEND_DETAIL_VAL_LEN  192
@@ -56,7 +55,7 @@ typedef struct
 {
     unsigned long no;
     char time[BACKEND_TIME_TEXT_LEN];
-    char rssi[BACKEND_RSSI_TEXT_LEN];
+    float rssi_db;            /* Per-frame RSSI in dBr (NaN if invalid). */
     char proto[BACKEND_PROTO_TEXT_LEN];
     unsigned int ch_idx;
     char addr[BACKEND_ADDR_TEXT_LEN];

@@ -1,83 +1,16 @@
 #include "device_list_model.h"
 
+#include <QDateTime>
+#include <QPointF>
+#include <QSet>
 #include <QVariantMap>
-#include <QtMath>
 
 DeviceListModel::DeviceListModel(QObject *parent)
     : QAbstractListModel(parent)
 {
-    // Seed a handful of fake rows so the framing can be exercised
-    // without a live capture. Mix: one un-broken-out BR/EDR piconet,
-    // two broken-out BR/EDR devices (same access address, clock known),
-    // and three BLE devices with distinct access addresses.
-    m_rows.reserve(6);
-
-    m_rows.append(makeSeedRow(
-        QStringLiteral("-48 dBm"), QStringLiteral("BR/EDR"),
-        QStringLiteral("0xA1B2C3"), QStringLiteral("piconet"),
-        QStringLiteral("12:04:17.221"), 1284, QStringLiteral("210/s"),
-        -48.0, 3.5,
-        { { QStringLiteral("UAP"),         QStringLiteral("0x9F") },
-          { QStringLiteral("Clock known"), QStringLiteral("false") },
-          { QStringLiteral("Channels"),    QStringLiteral("1..79") } }));
-
-    m_rows.append(makeSeedRow(
-        QStringLiteral("-42 dBm"), QStringLiteral("BR/EDR"),
-        QStringLiteral("0xA1B2C3"), QStringLiteral("Master"),
-        QStringLiteral("12:04:18.103"), 642, QStringLiteral("180/s"),
-        -42.0, 2.0,
-        { { QStringLiteral("UAP"),         QStringLiteral("0x9F") },
-          { QStringLiteral("Clock known"), QStringLiteral("true") },
-          { QStringLiteral("Clock"),       QStringLiteral("0x23C1") },
-          { QStringLiteral("Role"),        QStringLiteral("Master") },
-          { QStringLiteral("Channels"),    QStringLiteral("1..79") } }));
-
-    m_rows.append(makeSeedRow(
-        QStringLiteral("-61 dBm"), QStringLiteral("BR/EDR"),
-        QStringLiteral("0xA1B2C3"), QStringLiteral("Slave A8"),
-        QStringLiteral("12:04:18.090"), 518, QStringLiteral("158/s"),
-        -61.0, 4.0,
-        { { QStringLiteral("UAP"),         QStringLiteral("0x9F") },
-          { QStringLiteral("Clock known"), QStringLiteral("true") },
-          { QStringLiteral("Clock"),       QStringLiteral("0x2A4D") },
-          { QStringLiteral("Role"),         QStringLiteral("Slave") },
-          { QStringLiteral("LT_ADDR"),      QStringLiteral("3") },
-          { QStringLiteral("Channels"),    QStringLiteral("1..79") } }));
-
-    m_rows.append(makeSeedRow(
-        QStringLiteral("-77 dBm"), QStringLiteral("BLE"),
-        QStringLiteral("0xAA:BB:CC:11:22:33"),
-        QStringLiteral("SensorTag-TI"),
-        QStringLiteral("12:04:18.401"), 312, QStringLiteral("94/s"),
-        -77.0, 6.0,
-        { { QStringLiteral("Address type"), QStringLiteral("Public") },
-          { QStringLiteral("Adv channels"),  QStringLiteral("37, 38, 39") },
-          { QStringLiteral("Connectable"),    QStringLiteral("true") },
-          { QStringLiteral("Last PDU type"),  QStringLiteral("ADV_IND") } }));
-
-    m_rows.append(makeSeedRow(
-        QStringLiteral("-68 dBm"), QStringLiteral("BLE"),
-        QStringLiteral("0x8A4F2C0D5E"),
-        QStringLiteral("Apple-TV-remote"),
-        QStringLiteral("12:04:18.452"), 207, QStringLiteral("64/s"),
-        -68.0, 5.0,
-        { { QStringLiteral("Address type"), QStringLiteral("Random") },
-          { QStringLiteral("Adv channels"),  QStringLiteral("37, 39") },
-          { QStringLiteral("Connectable"),    QStringLiteral("true") },
-          { QStringLiteral("Last PDU type"),  QStringLiteral("ADV_NONCONN_IND") } }));
-
-    m_rows.append(makeSeedRow(
-        QStringLiteral("-83 dBm"), QStringLiteral("BLE"),
-        QStringLiteral("0x29D17B6F22"),
-        QStringLiteral("Unknown-BLE"),
-        QStringLiteral("12:04:18.510"), 19, QStringLiteral("6/s"),
-        -83.0, 8.0,
-        { { QStringLiteral("Address type"), QStringLiteral("Random") },
-          { QStringLiteral("Adv channels"),  QStringLiteral("38") },
-          { QStringLiteral("Connectable"),    QStringLiteral("false") },
-          { QStringLiteral("Last PDU type"),  QStringLiteral("ADV_SCAN_IND") } }));
-
-    emit countChanged();
+    m_tick.setInterval(1000);
+    connect(&m_tick, &QTimer::timeout, this, &DeviceListModel::tickRows);
+    m_tick.start();
 }
 
 int DeviceListModel::rowCount(const QModelIndex &parent) const
@@ -90,13 +23,13 @@ int DeviceListModel::rowCount(const QModelIndex &parent) const
 QHash<int, QByteArray> DeviceListModel::roleNames() const
 {
     return {
-        {RssiRole,       "rssi"},
-        {ProtoRole,      "proto"},
-        {AddrRole,       "addr"},
-        {DeviceRole,     "device"},
-        {LastSeenRole,   "lastSeen"},
-        {PacketsSeenRole,"packetsSeen"},
-        {PacketRateRole, "packetRate"},
+        {RssiRole,        "rssi"},
+        {ProtoRole,       "proto"},
+        {AddrRole,        "addr"},
+        {DeviceRole,      "device"},
+        {LastSeenRole,    "lastSeen"},
+        {PacketsSeenRole, "packetsSeen"},
+        {PacketRateRole,  "packetRate"},
     };
 }
 
@@ -107,34 +40,214 @@ QVariant DeviceListModel::data(const QModelIndex &index, int role) const
     const Row &r = m_rows.at(index.row());
     switch (role)
     {
-    case RssiRole:        return r.rssi;
+    case RssiRole:
+        return qIsNaN(r.rssiDb)
+                   ? QStringLiteral("--")
+                   : QString::number(r.rssiDb, 'f', 1) + QStringLiteral(" dBm");
     case ProtoRole:       return r.proto;
-    case AddrRole:        return r.addr;
-    case DeviceRole:      return r.device;
-    case LastSeenRole:    return r.lastSeen;
+    case AddrRole:       return r.addr;
+    case DeviceRole:     return r.device;
+    case LastSeenRole:
+        return r.lastSeenMs == 0
+                   ? QStringLiteral("--")
+                   : QDateTime::fromMSecsSinceEpoch(r.lastSeenMs)
+                         .toString(QStringLiteral("HH:mm:ss.zzz"));
     case PacketsSeenRole: return QVariant::fromValue(r.packetsSeen);
-    case PacketRateRole:  return r.packetRate;
+    case PacketRateRole:
+        return QString::number(r.lastRate) + QStringLiteral("/s");
     }
     return {};
 }
 
-void DeviceListModel::appendRow(const QVariantMap &row)
+void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
 {
-    Row r;
-    r.rssi        = row.value(QStringLiteral("rssi")).toString();
-    r.proto       = row.value(QStringLiteral("proto")).toString();
-    r.addr        = row.value(QStringLiteral("addr")).toString();
-    r.device      = row.value(QStringLiteral("device")).toString();
-    r.lastSeen    = row.value(QStringLiteral("lastSeen")).toString();
-    r.packetsSeen = row.value(QStringLiteral("packetsSeen")).toULongLong();
-    r.packetRate  = row.value(QStringLiteral("packetRate")).toString();
-    r.detail      = row.value(QStringLiteral("detail")).toList();
-    r.rssiSeries  = row.value(QStringLiteral("rssiSeries")).toList();
+    const QString proto = frame.value(QStringLiteral("proto")).toString();
+    QString addr  = frame.value(QStringLiteral("addr")).toString();
+    const QString src   = frame.value(QStringLiteral("src")).toString();
+    const QString dst   = frame.value(QStringLiteral("dst")).toString();
+    const float rssiDb  = frame.value(QStringLiteral("rssiDb")).toFloat();
+    const qint64 now    = QDateTime::currentMSecsSinceEpoch();
 
-    beginInsertRows(QModelIndex(), m_rows.size(), m_rows.size());
-    m_rows.append(std::move(r));
-    endInsertRows();
-    emit countChanged();
+    QString device = deviceLabelFor(proto, src, dst);
+
+    // BR/EDR piconet handling: a single piconet (identified by LAP, the low
+    // 24 bits of the address) may emit frames whose `addr` flips between
+    // "0x??<LAP>" and "0x<UAP><LAP>" as UAP is recovered, and whose `src`
+    // flips between "--" and "Central"/"LT_ADDR N" as the on-air header
+    // becomes decodeable (clock found). To keep the device list stable
+    // through these transitions and avoid a flickering duplicate piconet
+    // row every time decode state toggles:
+    //   - pre-break-out piconet frames are bucketed by LAP and stored under
+    //     the normalized addr "0x??<LAP>" so UAP discovery never forks the
+    //     row;
+    //   - once a frame with a decodeable header arrives, the piconet is
+    //     marked "broken out", any pre-break-out piconet row for that LAP
+    //     is removed, and per-device rows replace it;
+    //   - subsequent frames we can't decode (src="--") are dropped from the
+    //     device view rather than recreating a stale piconet row.
+    if (proto == QStringLiteral("BR/EDR"))
+    {
+        const QString lap = (addr.length() >= 6) ? addr.right(6) : addr;
+        const QString picoKey = QStringLiteral("BR/EDR") + QChar(0x1F) + lap;
+        const bool brokenOut = m_brokenOutPiconets.contains(picoKey);
+
+        if (device == QStringLiteral("piconet"))
+        {
+            if (brokenOut)
+                return;
+            addr = QStringLiteral("0x??") + lap;
+        }
+        else
+        {
+            if (!brokenOut)
+            {
+                m_brokenOutPiconets.insert(picoKey);
+                for (int i = m_rows.size() - 1; i >= 0; --i)
+                {
+                    const Row &r = m_rows.at(i);
+                    if (r.proto == QStringLiteral("BR/EDR") &&
+                        r.device == QStringLiteral("piconet") &&
+                        (r.addr.length() >= 6 ? r.addr.right(6) : r.addr) == lap)
+                    {
+                        removeRow(i);
+                    }
+                }
+            }
+        }
+    }
+
+    const QString key = makeKey(proto, addr, device);
+    int rowIdx = m_indexByKey.value(key, -1);
+
+    if (rowIdx < 0)
+    {
+        Row r;
+        r.proto = proto;
+        r.addr = addr;
+        r.device = device;
+        r.firstFrameMs = now;
+        r.lastSeenMs = now;
+        r.packetsSeen = 1;
+        r.packetsThisSecond = 1;
+        if (!qIsNaN(rssiDb))
+        {
+            r.samples.append({now, double(rssiDb)});
+            r.lastFrameRssiDb = double(rssiDb);
+            r.rssiDb = double(rssiDb);
+            r.rawSeries.append(QPointF(0.0, double(rssiDb)));
+            r.avgSeries.append(QPointF(0.0, double(rssiDb)));
+        }
+        r.lastFrameDetail = frame.value(QStringLiteral("detail")).toList();
+
+        rowIdx = m_rows.size();
+        beginInsertRows(QModelIndex(), rowIdx, rowIdx);
+        m_rows.append(std::move(r));
+        endInsertRows();
+        m_indexByKey.insert(key, rowIdx);
+        emit countChanged();
+        return;
+    }
+
+    Row &r = m_rows[rowIdx];
+    r.packetsSeen++;
+    r.packetsThisSecond++;
+    r.lastSeenMs = now;
+
+    if (!qIsNaN(rssiDb))
+    {
+        r.lastFrameRssiDb = double(rssiDb);
+        r.samples.append({now, double(rssiDb)});
+
+        const double x = double(now - r.firstFrameMs) / 1000.0;
+        r.rawSeries.append(QPointF(x, double(rssiDb)));
+
+        recomputeAverage(r, now);
+        evictChartHistory(r, now);
+    }
+
+    // Keep the latest frame's overflow detail so the info pane reflects the
+    // most recent packet (PDU type, channel, AC errors, etc.).
+    const QVariantList newDetail = frame.value(QStringLiteral("detail")).toList();
+    if (!newDetail.isEmpty())
+        r.lastFrameDetail = newDetail;
+
+    const QModelIndex idx = index(rowIdx, 0);
+    emit dataChanged(idx, idx);
+}
+
+void DeviceListModel::recomputeAverage(Row &r, qint64 now)
+{
+    evictWindow(r, now);
+
+    if (r.samples.isEmpty())
+        return; // hold last rssiDb
+
+    double sum = 0.0;
+    int n = 0;
+    for (const auto &s : r.samples)
+    {
+        if (!qIsNaN(s.second))
+        {
+            sum += s.second;
+            n++;
+        }
+    }
+    if (n > 0)
+    {
+        r.rssiDb = sum / double(n);
+
+        const double x = double(now - r.firstFrameMs) / 1000.0;
+        r.avgSeries.append(QPointF(x, r.rssiDb));
+    }
+}
+
+void DeviceListModel::evictWindow(Row &r, qint64 now)
+{
+    // Evict only the 1-second averaging window. Chart-history series are
+    // retained separately (see evictChartHistory) so a 5-minute trace stays
+    // visible on the graph.
+    const qint64 cutoff = now - kWindowMs;
+    while (!r.samples.isEmpty() && r.samples.first().first < cutoff)
+        r.samples.removeFirst();
+}
+
+void DeviceListModel::evictChartHistory(Row &r, qint64 now)
+{
+    // Drop chart-history points older than the maximum selectable window
+    // so memory stays bounded during long captures. Also cap the total
+    // point count per series as a backstop against very high packet rates.
+    const double cutX = double(now - r.firstFrameMs - kChartHistoryMs) / 1000.0;
+    auto evict = [cutX](QVector<QPointF> &v)
+    {
+        while (v.size() > 2 && v.first().x() < cutX && v.at(1).x() <= cutX)
+            v.removeFirst();
+        if (v.size() > kMaxSeriesPoints)
+            v.remove(0, v.size() - kMaxSeriesPoints);
+    };
+    evict(r.avgSeries);
+    evict(r.rawSeries);
+}
+
+void DeviceListModel::tickRows()
+{
+    if (m_rows.isEmpty())
+        return;
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const int last = m_rows.size() - 1;
+
+    for (int i = 0; i <= last; ++i)
+    {
+        Row &r = m_rows[i];
+        r.lastRate = r.packetsThisSecond;
+        r.packetsThisSecond = 0;
+        recomputeAverage(r, now);
+        evictChartHistory(r, now);
+    }
+
+    const QModelIndex topLeft = index(0, 0);
+    const QModelIndex bottomRight = index(last, 0);
+    emit dataChanged(topLeft, bottomRight);
 }
 
 void DeviceListModel::clear()
@@ -143,6 +256,8 @@ void DeviceListModel::clear()
         return;
     beginResetModel();
     m_rows.clear();
+    m_indexByKey.clear();
+    m_brokenOutPiconets.clear();
     endResetModel();
     emit countChanged();
 }
@@ -151,71 +266,135 @@ QVariantList DeviceListModel::detailFor(int index) const
 {
     if (index < 0 || index >= m_rows.size())
         return {};
-    return m_rows.at(index).detail;
+
+    const Row &r = m_rows.at(index);
+    QVariantList out;
+
+    auto add = [&out](const QString &field, const QVariant &value)
+    {
+        QVariantMap m;
+        m.insert(QStringLiteral("field"), field);
+        m.insert(QStringLiteral("value"), value);
+        out.append(m);
+    };
+
+    add(QStringLiteral("Protocol"), r.proto);
+    add(QStringLiteral("Address"), r.addr);
+    add(QStringLiteral("Device"), r.device);
+    add(QStringLiteral("RSSI (1s avg)"),
+        qIsNaN(r.rssiDb) ? QStringLiteral("--")
+                         : QString::number(r.rssiDb, 'f', 1) + QStringLiteral(" dBm"));
+    add(QStringLiteral("Packets seen"), QVariant::fromValue(r.packetsSeen));
+    add(QStringLiteral("Packet rate"),
+        QString::number(r.lastRate) + QStringLiteral("/s"));
+    add(QStringLiteral("Last seen"),
+        r.lastSeenMs == 0
+            ? QStringLiteral("--")
+            : QDateTime::fromMSecsSinceEpoch(r.lastSeenMs)
+                  .toString(QStringLiteral("HH:mm:ss.zzz")));
+    add(QStringLiteral("Last raw RSSI"),
+        qIsNaN(r.lastFrameRssiDb)
+            ? QStringLiteral("--")
+            : QString::number(r.lastFrameRssiDb, 'f', 1) + QStringLiteral(" dBm"));
+
+    // Merge in any per-frame detail from the most recent frame (PDU type,
+    // channel, AC errors, UAP, etc.). Each entry is a {field, value} map.
+    // Skip ones we already surface live above so the pane doesn't repeat.
+    static const QSet<QString> s_liveReplaced{
+        QStringLiteral("RSSI"),
+        QStringLiteral("Channel"),
+        QStringLiteral("Protocol"),
+        QStringLiteral("Address"),
+        QStringLiteral("Device"),
+    };
+    for (const QVariant &entry : r.lastFrameDetail)
+    {
+        const QVariantMap pair = entry.toMap();
+        const QString field = pair.value(QStringLiteral("field")).toString();
+        if (field.isEmpty() || s_liveReplaced.contains(field))
+            continue;
+        add(field, pair.value(QStringLiteral("value")));
+    }
+
+    return out;
 }
 
 QVariantList DeviceListModel::rssiSeriesFor(int index) const
 {
     if (index < 0 || index >= m_rows.size())
         return {};
-    return m_rows.at(index).rssiSeries;
+    const Row &r = m_rows.at(index);
+    QVariantList out;
+    out.reserve(r.avgSeries.size());
+    for (const QPointF &p : r.avgSeries)
+        out.append(QVariant::fromValue(p));
+    return out;
 }
 
-DeviceListModel::Row DeviceListModel::makeSeedRow(
-    const QString &rssi,
-    const QString &proto,
-    const QString &addr,
-    const QString &device,
-    const QString &lastSeen,
-    unsigned long packets,
-    const QString &rate,
-    double baseRssi,
-    double rssiJitter,
-    const QList<QPair<QString, QString>> &extraDetail)
+QVariantList DeviceListModel::rssiRawSeriesFor(int index) const
 {
-    Row r;
-    r.rssi        = rssi;
-    r.proto       = proto;
-    r.addr        = addr;
-    r.device      = device;
-    r.lastSeen    = lastSeen;
-    r.packetsSeen = packets;
-    r.packetRate  = rate;
+    if (index < 0 || index >= m_rows.size())
+        return {};
+    const Row &r = m_rows.at(index);
+    QVariantList out;
+    out.reserve(r.rawSeries.size());
+    for (const QPointF &p : r.rawSeries)
+        out.append(QVariant::fromValue(p));
+    return out;
+}
 
-    // 30-point synthetic 1-second window sampled at ~33 ms.
-    // x in seconds from 0.000..0.967; y a noisy walk around baseRssi.
-    QVariantList series;
-    series.reserve(30);
-    double y = baseRssi;
-    for (int i = 0; i < 30; ++i)
+qint64 DeviceListModel::firstFrameMsFor(int index) const
+{
+    if (index < 0 || index >= m_rows.size())
+        return 0;
+    return m_rows.at(index).firstFrameMs;
+}
+
+QString DeviceListModel::makeKey(const QString &proto, const QString &addr,
+                                 const QString &device)
+{
+    static const QChar sep = QChar(0x1F); // unit-separator; never appears in these strings
+    return proto + sep + addr + sep + device;
+}
+
+QString DeviceListModel::deviceLabelFor(const QString &proto, const QString &src,
+                                        const QString &dst)
+{
+    if (proto == QStringLiteral("BR/EDR"))
     {
-        // Deterministic-ish pseudo-randomness so the trace differs per row.
-        double seed = baseRssi * 0.13 + double(i) * 0.41 + rssiJitter;
-        double n = qSin(seed) + qCos(seed * 1.7);
-        y = baseRssi + n * rssiJitter;
-        series.append(QPointF(double(i) / 30.0, y));
+        // The C facade sets src="Central" on master slots, src="LT_ADDR N"
+        // on slave slots, or src="--" while the piconet is unbroken-out.
+        if (src.isEmpty() || src == QStringLiteral("--"))
+            return QStringLiteral("piconet");
+        return src;
     }
-    r.rssiSeries = series;
+    // BLE: prefer AdvA/ScannerA/source addr; if not present, "Unknown".
+    if (!src.isEmpty() && src != QStringLiteral("--"))
+        return src;
+    return QStringLiteral("Unknown");
+}
 
-    // Build the info-pane key/value list. Always include the columns plus
-    // whatever extra detail was supplied.
-    QVariantList detail;
-    auto kv = [&detail](const QString &k, const QVariant &v) {
-        QVariantMap m;
-        m.insert(QStringLiteral("field"), k);
-        m.insert(QStringLiteral("value"), v);
-        detail.append(m);
-    };
-    kv(QStringLiteral("Address"),       addr);
-    kv(QStringLiteral("Protocol"),      proto);
-    kv(QStringLiteral("Device"),        device);
-    kv(QStringLiteral("RSSI (1s avg)"), rssi);
-    kv(QStringLiteral("Packets seen"), QVariant::fromValue(packets));
-    kv(QStringLiteral("Packet rate"),  rate);
-    kv(QStringLiteral("Last seen"),     lastSeen);
-    for (const auto &pair : extraDetail)
-        kv(pair.first, pair.second);
+void DeviceListModel::removeRow(int index)
+{
+    if (index < 0 || index >= m_rows.size())
+        return;
 
-    r.detail = detail;
-    return r;
+    const QString removedKey = makeKey(m_rows.at(index).proto,
+                                       m_rows.at(index).addr,
+                                       m_rows.at(index).device);
+    m_indexByKey.remove(removedKey);
+
+    beginRemoveRows(QModelIndex(), index, index);
+    m_rows.removeAt(index);
+    endRemoveRows();
+
+    // Indexes after `index` shifted down by 1; the hash map needs to be re-keyed.
+    m_indexByKey.clear();
+    for (int i = 0; i < m_rows.size(); ++i)
+    {
+        const Row &r = m_rows.at(i);
+        m_indexByKey.insert(makeKey(r.proto, r.addr, r.device), i);
+    }
+
+    emit countChanged();
 }

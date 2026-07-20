@@ -275,7 +275,7 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
                        ? (double)m->radio_start_sample_index / (double)m->radio_sample_rate_hz
                        : 0.0;
         snprintf(row.time, sizeof(row.time), "%.6f", t);
-        snprintf(row.rssi, sizeof(row.rssi), "%.1f", m->rssi_dbr);
+        row.rssi_db = m->rssi_dbr;
         snprintf(row.proto, sizeof(row.proto), "LE");
         row.ch_idx = m->channel_index;
         snprintf(row.addr, sizeof(row.addr), "0x%08" PRIX32, event->frame.access_address);
@@ -301,7 +301,7 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
                    ? (double)m->radio_start_sample_index / (double)m->radio_sample_rate_hz
                    : 0.0;
     snprintf(row.time, sizeof(row.time), "%.6f", t);
-    snprintf(row.rssi, sizeof(row.rssi), "%.1f", m->rssi_dbr);
+    row.rssi_db = m->rssi_dbr;
     snprintf(row.proto, sizeof(row.proto), "LE");
     row.ch_idx = m->channel_index;
     snprintf(row.addr, sizeof(row.addr), "0x%08" PRIX32, event->frame.access_address);
@@ -400,7 +400,7 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
                    ? (double)m->radio_start_sample_index / (double)m->radio_sample_rate_hz
                    : 0.0;
     snprintf(row.time, sizeof(row.time), "%.6f", t);
-    snprintf(row.rssi, sizeof(row.rssi), "%.1f", m->rssi_dbr);
+    row.rssi_db = m->rssi_dbr;
     snprintf(row.proto, sizeof(row.proto), "BR/EDR");
     row.ch_idx = m->channel_index;
 

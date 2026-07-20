@@ -27,6 +27,7 @@ ApplicationWindow {
         target: receiverController
         function onFrameDecoded(row) {
             frameListModel.appendRow(row)
+            deviceListModel.onFrameDecoded(row)
         }
         function onErrorOccurred(message) {
             console.error("Supertooth:", message)
@@ -72,6 +73,7 @@ ApplicationWindow {
                         receiverController.stop()
                     } else {
                         frameListModel.clear()
+                        deviceListModel.clear()
                         receiverController.start(header.inputTypeIndex,
                                                  header.deviceID,
                                                  channelView.sessionTypeIndex)

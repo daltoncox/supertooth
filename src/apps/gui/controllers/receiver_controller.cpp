@@ -167,7 +167,7 @@ void ReceiverController::handleRow(const backend_row_t *row)
     QVariantMap map;
     map.insert(QStringLiteral("no"),    QVariant::fromValue(row->no));
     map.insert(QStringLiteral("time"),  QString::fromUtf8(row->time));
-    map.insert(QStringLiteral("rssi"),  QString::fromUtf8(row->rssi));
+    map.insert(QStringLiteral("rssiDb"), QVariant::fromValue(row->rssi_db));
     map.insert(QStringLiteral("proto"), QString::fromUtf8(row->proto));
     map.insert(QStringLiteral("chIdx"), QVariant::fromValue(row->ch_idx));
     map.insert(QStringLiteral("addr"),  QString::fromUtf8(row->addr));
