@@ -95,6 +95,7 @@ typedef struct
     radio_device_type_t device_type;
     const char *device_id;
     int debug;
+    int enforce_crc;   /* 1 = drop frames whose BLE CRC fails (default on) */
 } receiver_ble_config_t;
 
 typedef struct
@@ -123,6 +124,7 @@ typedef struct
     radio_device_type_t device_type;
     const char *device_id;
     int debug;
+    int enforce_crc;   /* 1 = drop BLE frames whose CRC fails (default on) */
 } receiver_hybrid_config_t;
 
 typedef struct

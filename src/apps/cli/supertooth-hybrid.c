@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 #include <unistd.h>
 #include <getopt.h>
 #include <inttypes.h>
@@ -13,6 +14,7 @@
 
 static unsigned long g_packet_count = 0;
 static int g_debug = 0;
+static int g_enforce_crc = 1;   /* drop BLE frames whose CRC fails; default on */
 static receiver_session_t *g_session = NULL;
 static const app_output_mode_option_t s_output_modes[] = {
     {APP_OUTPUT_MODE_FULL, "full"},
@@ -91,11 +93,14 @@ static void print_bredr_packet_summary(unsigned long packet_no,
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [-v|--view full|summary] [-d|--device [<type>:<id>]] [--debug]\n",
+            "Usage: %s [-v|--view full|summary] [-d|--device [<type>:<id>]] "
+            "[--debug] [--enforce-crc on|off]\n",
             argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
     app_print_device_usage_line();
     fprintf(stderr, "  %-30s Print block-drop diagnostics\n", "--debug");
+    fprintf(stderr, "  %-30s Drop BLE frames whose CRC fails (default: on)\n",
+            "--enforce-crc on|off");
 }
 
 static void handle_hybrid_bredr_packet(const bredr_event_t *event,
@@ -114,9 +119,21 @@ static void handle_hybrid_bredr_packet(const bredr_event_t *event,
 }
 
 static void handle_hybrid_ble_packet(const ble_event_t *event,
-                                     void *user)
+                                      void *user)
 {
     (void)user;
+
+    /* When CRC enforcement is on, drop BLE frames whose CRC fails (or that
+     * fail to decode) before emitting anything. BR/EDR frames are unaffected
+     * and still flow through handle_hybrid_bredr_packet. */
+    if (g_enforce_crc)
+    {
+        ble_packet_t pkt;
+        if (ble_decode_frame(&event->frame, event->meta.channel_index, &pkt) != 0 ||
+            !ble_verify_crc(&pkt))
+            return;
+    }
+
     app_output_lock();
     unsigned long packet_no = ++g_packet_count;
     if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
@@ -133,6 +150,7 @@ int main(int argc, char *argv[])
         {"view", required_argument, NULL, 'v'},
         {"device", optional_argument, NULL, 'd'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
+        {"enforce-crc", required_argument, NULL, APP_OPT_ENFORCE_CRC},
         {"help", no_argument, NULL, 'h'},
         {0, 0, 0, 0}
     };
@@ -165,6 +183,21 @@ int main(int argc, char *argv[])
         case APP_OPT_DEBUG:
             g_debug = 1;
             break;
+        case APP_OPT_ENFORCE_CRC:
+        {
+            const char *v = optarg ? optarg : "on";
+            if (strcmp(v, "on") == 0 || strcmp(v, "1") == 0)
+                g_enforce_crc = 1;
+            else if (strcmp(v, "off") == 0 || strcmp(v, "0") == 0)
+                g_enforce_crc = 0;
+            else
+            {
+                fprintf(stderr, "Invalid --enforce-crc value: %s (expected on or off)\n", v);
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            break;
+        }
         case 'h':
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -211,6 +244,7 @@ int main(int argc, char *argv[])
     else
         printf("Device      : (default)\n");
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
+    printf("Enforce CRC : %s\n", g_enforce_crc ? "on" : "off");
     printf("Block pool  : %u blocks, per-channel queue: %u\n",
            RECEIVER_BREDR_BLOCK_POOL_SIZE, RECEIVER_BREDR_CHANNEL_RING_SIZE);
 
@@ -220,6 +254,7 @@ int main(int argc, char *argv[])
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
+        .enforce_crc = g_enforce_crc,
     };
     receiver_hybrid_callbacks_t callbacks = {
         .on_bredr_packet = handle_hybrid_bredr_packet,
@@ -239,6 +274,7 @@ int main(int argc, char *argv[])
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
     printf("  Debug mode     : %s\n", g_debug ? "enabled" : "disabled");
+    printf("  Enforce CRC    : %s\n", g_enforce_crc ? "on" : "off");
     printf("  Total packets  : %lu\n", stats.total_packets);
     if (g_debug)
     {

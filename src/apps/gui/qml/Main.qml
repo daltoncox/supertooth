@@ -63,22 +63,24 @@ ApplicationWindow {
             Header {
                 id: header
                 Layout.fillWidth: true
-                onPlayPauseToggled: {
-                    console.log("Supertooth: play/pause toggled; running =",
-                                receiverController.running,
-                                "inputType =", header.inputTypeIndex,
-                                "deviceID =", header.deviceID,
-                                "sessionType =", channelView.sessionTypeIndex)
-                    if (receiverController.running) {
-                        receiverController.stop()
-                    } else {
-                        frameListModel.clear()
-                        deviceListModel.clear()
-                        receiverController.start(header.inputTypeIndex,
-                                                 header.deviceID,
-                                                 channelView.sessionTypeIndex)
-                    }
+onPlayPauseToggled: {
+                console.log("Supertooth: play/pause toggled; running =",
+                            receiverController.running,
+                            "inputType =", header.inputTypeIndex,
+                            "deviceID =", header.deviceID,
+                            "sessionType =", channelView.sessionTypeIndex,
+                            "enforceCrc =", channelView.enforceCrc)
+                if (receiverController.running) {
+                    receiverController.stop()
+                } else {
+                    frameListModel.clear()
+                    deviceListModel.clear()
+                    receiverController.start(header.inputTypeIndex,
+                                             header.deviceID,
+                                             channelView.sessionTypeIndex,
+                                             channelView.enforceCrc)
                 }
+            }
             }
 
             StackLayout {

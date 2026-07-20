@@ -27,6 +27,7 @@ struct backend_session
     backend_row_fn  on_row;
     void               *user;
     unsigned long       packet_count;
+    int                 enforce_crc;   /* drop BLE frames whose CRC fails */
 };
 
 /* ---------------------------------------------------------------------------
@@ -286,7 +287,13 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
     ble_packet_t pkt;
     if (ble_decode_frame(&event->frame, event->meta.channel_index, &pkt) != 0)
     {
-        /* Decode failed: still emit a minimal row so the capture is visible. */
+        /* When CRC enforcement is on, drop decode failures silently — the
+         * receiver effectively goes back to searching and emits nothing.
+         * Otherwise surface a minimal "DECODE_FAIL" row so the capture is
+         * still visible in the UI. */
+        if (bs->enforce_crc)
+            return;
+
         backend_row_t row;
         memset(&row, 0, sizeof(row));
         row.no = ++bs->packet_count;
@@ -311,6 +318,10 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
         bs->on_row(&row, bs->user);
         return;
     }
+
+    /* CRC enforcement: drop frames that decoded but failed CRC verification. */
+    if (bs->enforce_crc && !ble_verify_crc(&pkt))
+        return;
 
     backend_row_t row;
     memset(&row, 0, sizeof(row));
@@ -595,6 +606,7 @@ int backend_session_run_ble(backend_session_t *session,
                             uint8_t ble_channel,
                             int input_type,
                             const char *device_id,
+                            int enforce_crc,
                             backend_row_fn on_row,
                             void *user)
 {
@@ -604,6 +616,7 @@ int backend_session_run_ble(backend_session_t *session,
     session->on_row = on_row;
     session->user = user;
     session->packet_count = 0ul;
+    session->enforce_crc = enforce_crc ? 1 : 0;
 
     uint64_t freq_hz = 0;
     switch (ble_channel)
@@ -631,6 +644,7 @@ int backend_session_run_ble(backend_session_t *session,
     cfg.device_type = dev_type;
     cfg.device_id = device_id;
     cfg.debug = 0;
+    cfg.enforce_crc = session->enforce_crc;
 
     receiver_ble_callbacks_t cb;
     memset(&cb, 0, sizeof(cb));
@@ -681,6 +695,7 @@ int backend_session_run_bredr(backend_session_t *session,
 int backend_session_run_hybrid(backend_session_t *session,
                                int input_type,
                                const char *device_id,
+                               int enforce_crc,
                                backend_row_fn on_row,
                                void *user)
 {
@@ -690,6 +705,7 @@ int backend_session_run_hybrid(backend_session_t *session,
     session->on_row = on_row;
     session->user = user;
     session->packet_count = 0ul;
+    session->enforce_crc = enforce_crc ? 1 : 0;
 
     radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
     (void)input_type; /* Only HackRF is supported by the backend today. */
@@ -699,6 +715,7 @@ int backend_session_run_hybrid(backend_session_t *session,
     cfg.device_type = dev_type;
     cfg.device_id = device_id;
     cfg.debug = 0;
+    cfg.enforce_crc = session->enforce_crc;
 
     /* Both protocols route through the same on_row sink; the proto field in
      * each row distinguishes "LE" from "BR/EDR". */

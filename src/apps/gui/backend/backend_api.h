@@ -96,6 +96,7 @@ int backend_session_run_ble(backend_session_t *session,
                             uint8_t ble_channel,
                             int input_type,
                             const char *device_id,
+                            int enforce_crc,
                             backend_row_fn on_row,
                             void *user);
 
@@ -130,6 +131,7 @@ int backend_session_run_bredr(backend_session_t *session,
 int backend_session_run_hybrid(backend_session_t *session,
                                int input_type,
                                const char *device_id,
+                               int enforce_crc,
                                backend_row_fn on_row,
                                void *user);
 

@@ -39,10 +39,12 @@ public:
      * @param inputType   BACKEND_INPUT_HACKRF (0) or BACKEND_INPUT_FILE (1).
      * @param deviceId    HackRF identifier, or empty for default device.
      * @param sessionType BACKEND_SESSION_HYBRID (0), _BLE (1) or _BREDR (2).
+     * @param enforceCrc  true to drop BLE frames whose CRC fails (applies to
+     *                   BLE and hybrid sessions; ignored for BR/EDR-only).
      * @return true if the session was started (or already running).
      */
     Q_INVOKABLE bool start(int inputType, const QString &deviceId,
-                           int sessionType);
+                           int sessionType, bool enforceCrc);
     /** Request the running session to stop and join the worker thread. */
     Q_INVOKABLE void stop();
 

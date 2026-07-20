@@ -42,12 +42,13 @@ void ReceiverController::setRunning(bool running)
     emit runningChanged();
 }
 
-bool ReceiverController::start(int inputType, const QString &deviceId, int sessionType)
+bool ReceiverController::start(int inputType, const QString &deviceId, int sessionType, bool enforceCrc)
 {
     qCInfo(lcSession).nospace().noquote()
         << "start() requested: inputType=" << inputType
         << " deviceId=\"" << deviceId << "\""
         << " sessionType=" << sessionType
+        << " enforceCrc=" << enforceCrc
         << " running=" << m_running;
 
     if (m_running)
@@ -88,7 +89,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId, int sessi
         << ")";
 
     m_thread = std::make_unique<std::thread>(
-        [session, sessionType, inputType, idStr, self]() {
+        [session, sessionType, inputType, idStr, enforceCrc, self]() {
             QByteArray idBytes = idStr.toUtf8();
             const char *idPtr = idBytes.isEmpty() ? nullptr
                                                   : idBytes.constData();
@@ -98,6 +99,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId, int sessi
                 qCInfo(lcSession) << "worker: entering backend_session_run_ble";
                 result = backend_session_run_ble(session, BACKEND_BLE_CH37,
                                                  inputType, idPtr,
+                                                 enforceCrc ? 1 : 0,
                                                  &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_ble returned"
                                   << result;
@@ -114,6 +116,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId, int sessi
             {
                 qCInfo(lcSession) << "worker: entering backend_session_run_hybrid";
                 result = backend_session_run_hybrid(session, inputType, idPtr,
+                                                    enforceCrc ? 1 : 0,
                                                     &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_hybrid returned"
                                   << result;

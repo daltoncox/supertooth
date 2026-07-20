@@ -25,6 +25,7 @@ typedef struct
 enum
 {
     APP_OPT_DEBUG = 0x100,
+    APP_OPT_ENFORCE_CRC,
 };
 
 /* Parsed "<type>:<id>" device spec, e.g. "hackrf:b25062dc22113a0b".
