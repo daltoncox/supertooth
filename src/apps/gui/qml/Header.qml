@@ -47,7 +47,7 @@ Rectangle {
             Layout.preferredHeight: parent.height
             Layout.preferredWidth: 100
 
-            model: ["HackRF", "File"]
+            model: ["HackRF"]
 
             onActivated: function (index) {
                 header.inputTypeIndex = index
@@ -111,18 +111,6 @@ Rectangle {
                             header.deviceID = ""
                         }
                     }
-                }
-            }
-
-            // File Input Options
-            RowLayout {
-                Layout.preferredHeight: parent.height
-                spacing: 8
-
-                TextField {
-                    Layout.preferredHeight: parent.height
-
-                    placeholderText: "/path/to/file"
                 }
             }
         }
