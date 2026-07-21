@@ -38,12 +38,21 @@ static float receiver_bredr_rssi_from_history(bredr_channel_processor_t *ctx,
 void receiver_bredr_update_layout(receiver_session_t *session)
 {
     unsigned int channel_count = session->bredr_config.channel_count;
-    session->bredr_sample_rate = (uint32_t)(channel_count * (unsigned int)RECEIVER_BREDR_CHANNEL_BW);
-    if (channel_count == 2u)
+    /* The capture span is the channel window width: N MHz on the BR/EDR
+     * grid, N+1 MHz on the LE grid (where the outer channels are centered
+     * on the Nyquist edges and are deliberately not processed). */
+    unsigned int span_mhz = channel_count +
+        (session->bredr_config.le_grid == RECEIVER_BREDR_GRID_LE ? 1u : 0u);
+    session->bredr_sample_rate = (uint32_t)(span_mhz * (unsigned int)RECEIVER_BREDR_CHANNEL_BW);
+    if (span_mhz == 2u)
         session->bredr_sample_rate = 4000000u;
     session->bredr_decim_factor = session->bredr_sample_rate / 2000000u;
     session->bredr_raw_samps_per_bit = session->bredr_decim_factor * RECEIVER_BREDR_SYMBOL_STEP;
 
+    /* LO = lowest channel center - lowest NCO offset
+     *      = 2402 + bottom + (N-1)/2 MHz.
+     * For even N (BR/EDR grid) this lands on a half-MHz; for odd N (LE
+     * grid) on a whole MHz — the window center in both cases. */
     double lowest_ctx_freq_offset =
         -(channel_count / 2.0 - 0.5) * RECEIVER_BREDR_CHANNEL_BW;
     double lowest_channel_freq_hz =

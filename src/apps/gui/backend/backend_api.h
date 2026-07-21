@@ -25,7 +25,7 @@ extern "C" {
 #define BACKEND_INPUT_HACKRF 0
 #define BACKEND_INPUT_FILE   1
 
-/* Session-type indices mirror ChannelView.qml sessionTypeSelector. */
+/* Session-type indices mirror CaptureView.qml sessionTypeSelector. */
 #define BACKEND_SESSION_HYBRID 0
 #define BACKEND_SESSION_BLE    1
 #define BACKEND_SESSION_BREDR  2
@@ -34,6 +34,10 @@ extern "C" {
 #define BACKEND_BLE_CH37 37u
 #define BACKEND_BLE_CH38 38u
 #define BACKEND_BLE_CH39 39u
+
+/* Channel-layout grids (mirror RECEIVER_BREDR_GRID_* in the core). */
+#define BACKEND_GRID_BREDR 0
+#define BACKEND_GRID_LE    1
 
 #define BACKEND_ADDR_TEXT_LEN   32
 #define BACKEND_TYPE_TEXT_LEN   32
@@ -83,17 +87,22 @@ backend_session_t *backend_session_create(void);
 void backend_session_destroy(backend_session_t *session);
 
 /**
- * Start a blocking BLE receive session on the advertising channel @p ble_channel.
- * Blocks until backend_session_request_stop() is called (call from a worker
- * thread). For each decoded frame, @p on_row is invoked on the session worker
- * thread with a populated row.
+ * Start a blocking BLE receive session on the given LE channel window:
+ * le_channel_count consecutive LE RF channels (1..10) starting at
+ * bottom_le_rf (0..39). The radio tunes a whole-MHz LO at the window
+ * center; only advertising RF channels (0/12/39 -> LE 37/38/39) are
+ * decoded, data channels stay idle. Values are clamped defensively.
+ * Blocks until backend_session_request_stop() is called (call from a
+ * worker thread). For each decoded frame, @p on_row is invoked on the
+ * session worker thread with a populated row.
  *
  * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_FILE.
  * @param device_id   HackRF identifier (NULL = default). Ignored for FILE.
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_ble(backend_session_t *session,
-                            uint8_t ble_channel,
+                            unsigned int bottom_le_rf,
+                            unsigned int le_channel_count,
                             int input_type,
                             const char *device_id,
                             int enforce_crc,
@@ -101,18 +110,20 @@ int backend_session_run_ble(backend_session_t *session,
                             void *user);
 
 /**
- * Start a blocking BR/EDR (Classic Bluetooth) receive session. Uses the same
- * hardcoded channel configuration as the hybrid pipeline (channel_count =
- * RECEIVER_BREDR_MAX_CHANNELS, bottom_channel = 0, default RSSI window, no
- * LAP filter). Blocks until backend_session_request_stop() is called (call
- * from a worker thread). For each decoded frame, @p on_row is invoked on the
- * session worker thread with a populated row.
+ * Start a blocking BR/EDR (Classic Bluetooth) receive session on the given
+ * channel window: channel_count consecutive BR/EDR channels (even, 2..20)
+ * starting at bottom_channel (0..78, bottom+count-1 <= 78). Values are
+ * clamped defensively. Blocks until backend_session_request_stop() is
+ * called (call from a worker thread). For each decoded frame, @p on_row is
+ * invoked on the session worker thread with a populated row.
  *
  * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_FILE.
  * @param device_id   HackRF identifier (NULL = default). Ignored for FILE.
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_bredr(backend_session_t *session,
+                              unsigned int channel_count,
+                              unsigned int bottom_channel,
                               int input_type,
                               const char *device_id,
                               backend_row_fn on_row,
@@ -120,7 +131,15 @@ int backend_session_run_bredr(backend_session_t *session,
 
 /**
  * Start a blocking hybrid (BR/EDR + BLE) receive session from a single
- * 20 Msps stream. Blocks until backend_session_request_stop() is called
+ * stream covering the configured channel window. The grid selects the LO
+ * alignment: BACKEND_GRID_BREDR = window is channel_count MHz starting at
+ * bottom_channel (LO at a half-MHz); BACKEND_GRID_LE = window is
+ * channel_count+1 MHz starting at bottom_channel (LO at a whole MHz;
+ * channel_count is odd and bottom_channel even, since the two BR/EDR
+ * channels centered on the Nyquist edges are not processed). ble_channel
+ * is the advertising channel (37/38/39) whose center lies inside the
+ * window, or 0 to leave the BLE worker idle. Values are clamped/validated
+ * defensively. Blocks until backend_session_request_stop() is called
  * (call from a worker thread). Both BR/EDR and BLE decoded frames are
  * delivered through @p on_row.
  *
@@ -129,6 +148,10 @@ int backend_session_run_bredr(backend_session_t *session,
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_hybrid(backend_session_t *session,
+                               unsigned int channel_count,
+                               unsigned int bottom_channel,
+                               int le_grid,
+                               uint8_t ble_channel,
                                int input_type,
                                const char *device_id,
                                int enforce_crc,

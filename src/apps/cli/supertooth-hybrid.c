@@ -12,9 +12,14 @@
 #include "ble_bitstream_decoder.h"
 #include "receiver_session.h"
 
+#define BREDR_MAX_CHANNEL 79u
+
 static unsigned long g_packet_count = 0;
 static int g_debug = 0;
 static int g_enforce_crc = 1;   /* drop BLE frames whose CRC fails; default on */
+static unsigned int g_num_bredr_channels = RECEIVER_BREDR_MAX_CHANNELS;
+static unsigned int g_bottom_bredr_channel = 0u;
+static int g_bottom_channel_explicit = 0;
 static receiver_session_t *g_session = NULL;
 static const app_output_mode_option_t s_output_modes[] = {
     {APP_OUTPUT_MODE_FULL, "full"},
@@ -90,13 +95,69 @@ static void print_bredr_packet_summary(unsigned long packet_no,
     bredr_print_packet_summary_line(packet_no, &event->frame, pnet, &event->meta);
 }
 
+static int parse_channel_count(const char *arg, unsigned int *out_channels)
+{
+    if (!arg || !out_channels)
+        return -1;
+
+    char *end = NULL;
+    unsigned long value = strtoul(arg, &end, 0);
+    if (end == arg || *end != '\0' ||
+        value < 2ul || value > (unsigned long)RECEIVER_BREDR_MAX_CHANNELS ||
+        (value & 1ul) != 0ul)
+        return -1;
+
+    *out_channels = (unsigned int)value;
+    return 0;
+}
+
+static int parse_bottom_channel(const char *arg, unsigned int *out_bottom_channel)
+{
+    if (!arg || !out_bottom_channel)
+        return -1;
+
+    char *end = NULL;
+    unsigned long value = strtoul(arg, &end, 0);
+    if (end == arg || *end != '\0' || value > (unsigned long)BREDR_MAX_CHANNEL)
+        return -1;
+
+    *out_bottom_channel = (unsigned int)value;
+    return 0;
+}
+
+/* The single BLE advertising channel whose center lies inside the capture
+ * window (at most one fits a <=20 MHz window), or 0 when none does — in
+ * which case the hybrid BLE worker stays idle. */
+static uint8_t ble_adv_channel_for_window(unsigned int bottom, unsigned int count)
+{
+    static const struct { uint8_t channel; uint32_t freq_hz; } adv[] = {
+        { BLE_CH37_INDEX, BLE_CH37_FREQ_HZ },
+        { BLE_CH38_INDEX, BLE_CH38_FREQ_HZ },
+        { BLE_CH39_INDEX, BLE_CH39_FREQ_HZ },
+    };
+    double left_hz = (2401.5 + bottom) * 1e6;
+    double right_hz = left_hz + count * 1e6;
+    for (unsigned int i = 0; i < sizeof(adv) / sizeof(adv[0]); i++)
+    {
+        if ((double)adv[i].freq_hz >= left_hz && (double)adv[i].freq_hz <= right_hz)
+            return adv[i].channel;
+    }
+    return 0u;
+}
+
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [-v|--view full|summary] [-d|--device [<type>:<id>]] "
-            "[--debug] [--enforce-crc on|off]\n",
+            "Usage: %s [-v|--view full|summary] [-c|--channels N] [-b|--bottom-channel CH] "
+            "[-d|--device [<type>:<id>]] [--debug] [--enforce-crc on|off]\n",
             argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
+    fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
+            "-c, --channels N",
+            RECEIVER_BREDR_MAX_CHANNELS, RECEIVER_BREDR_MAX_CHANNELS);
+    fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
+            "-b, --bottom-channel CH",
+            BREDR_MAX_CHANNEL);
     app_print_device_usage_line();
     fprintf(stderr, "  %-30s Print block-drop diagnostics\n", "--debug");
     fprintf(stderr, "  %-30s Drop BLE frames whose CRC fails (default: on)\n",
@@ -148,6 +209,8 @@ int main(int argc, char *argv[])
 {
     static const struct option long_opts[] = {
         {"view", required_argument, NULL, 'v'},
+        {"channels", required_argument, NULL, 'c'},
+        {"bottom-channel", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
         {"enforce-crc", required_argument, NULL, APP_OPT_ENFORCE_CRC},
@@ -160,7 +223,7 @@ int main(int argc, char *argv[])
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:d::h", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:c:b:d::h", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -173,6 +236,25 @@ int main(int argc, char *argv[])
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
+            break;
+        case 'c':
+            if (parse_channel_count(optarg, &g_num_bredr_channels) != 0)
+            {
+                fprintf(stderr, "Invalid --channels value: %s (expected even 2-%u)\n",
+                        optarg, RECEIVER_BREDR_MAX_CHANNELS);
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            break;
+        case 'b':
+            if (parse_bottom_channel(optarg, &g_bottom_bredr_channel) != 0)
+            {
+                fprintf(stderr, "Invalid --bottom-channel value: %s (expected 0-%u)\n",
+                        optarg, BREDR_MAX_CHANNEL);
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            g_bottom_channel_explicit = 1;
             break;
         case 'd':
             g_list_devices = 1;
@@ -228,12 +310,36 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("Supertooth Hybrid: BR/EDR ch0-%u + BLE ch%u\n",
-           RECEIVER_BREDR_MAX_CHANNELS - 1u, BLE_CH37_INDEX);
-    printf("LO: %.1f MHz, %u BR/EDR channels + 1 BLE channel, %u MHz bandwidth\n",
-           (double)RECEIVER_HYBRID_LO_FREQ_HZ / 1e6,
-           RECEIVER_BREDR_MAX_CHANNELS,
-           RECEIVER_HYBRID_SAMPLE_RATE / 1000000u);
+    if (g_bottom_channel_explicit)
+    {
+        unsigned int max_bottom_channel = BREDR_MAX_CHANNEL - (g_num_bredr_channels - 1u);
+        if (g_bottom_bredr_channel > max_bottom_channel)
+        {
+            fprintf(stderr,
+                    "Invalid --bottom-channel %u for --channels %u: out of BR/EDR band (0-%u).\n"
+                    "For %u channels, the highest bottom channel would be %u.\n",
+                    g_bottom_bredr_channel, g_num_bredr_channels, BREDR_MAX_CHANNEL,
+                    g_num_bredr_channels, max_bottom_channel);
+            return EXIT_FAILURE;
+        }
+    }
+
+    uint8_t ble_channel =
+        ble_adv_channel_for_window(g_bottom_bredr_channel, g_num_bredr_channels);
+    unsigned int sample_rate =
+        (g_num_bredr_channels == 2u) ? 4000000u : g_num_bredr_channels * 1000000u;
+    double lo_mhz = 2402.0 + g_bottom_bredr_channel + (g_num_bredr_channels - 1u) / 2.0;
+
+    printf("Supertooth Hybrid: BR/EDR ch%u-%u", g_bottom_bredr_channel,
+           g_bottom_bredr_channel + g_num_bredr_channels - 1u);
+    if (ble_channel)
+        printf(" + BLE ch%u\n", ble_channel);
+    else
+        printf(" (no BLE advertising channel in window — BLE idle)\n");
+    printf("LO: %.1f MHz, %u BR/EDR channels%s, %u MHz bandwidth\n",
+           lo_mhz, g_num_bredr_channels,
+           ble_channel ? " + 1 BLE channel" : "",
+           sample_rate / 1000000u);
     printf("View mode   : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
@@ -251,6 +357,10 @@ int main(int argc, char *argv[])
     app_install_sigint_handler(&g_session);
 
     receiver_hybrid_config_t config = {
+        .channel_count = g_num_bredr_channels,
+        .bottom_channel = g_bottom_bredr_channel,
+        .le_grid = RECEIVER_BREDR_GRID_BREDR,
+        .ble_channel = ble_channel,
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,

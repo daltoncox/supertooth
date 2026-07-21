@@ -45,7 +45,6 @@ Rectangle {
         Repeater {
             model: ListModel {
                 ListElement { iconPath: "/assets/images/frame_list.svg" }
-                ListElement { iconPath: "/assets/images/topolgy.svg" }
                 ListElement { iconPath: "/assets/images/devices.svg" }
                 ListElement { iconPath: "/assets/images/channel.svg" }
             }

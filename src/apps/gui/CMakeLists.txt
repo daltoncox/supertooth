@@ -41,7 +41,8 @@ qt_add_qml_module(appSupertooth
         qml/Header.qml
         qml/views/FrameListView.qml
         qml/views/DeviceListView.qml
-        qml/views/ChannelView.qml
+        qml/views/CaptureView.qml
+        qml/views/ChannelSpectrum.qml
 )
 
 set_target_properties(appSupertooth PROPERTIES

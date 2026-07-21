@@ -603,7 +603,8 @@ void backend_session_destroy(backend_session_t *session)
 }
 
 int backend_session_run_ble(backend_session_t *session,
-                            uint8_t ble_channel,
+                            unsigned int bottom_le_rf,
+                            unsigned int le_channel_count,
                             int input_type,
                             const char *device_id,
                             int enforce_crc,
@@ -618,29 +619,24 @@ int backend_session_run_ble(backend_session_t *session,
     session->packet_count = 0ul;
     session->enforce_crc = enforce_crc ? 1 : 0;
 
-    uint64_t freq_hz = 0;
-    switch (ble_channel)
-    {
-    case BACKEND_BLE_CH38:
-        freq_hz = (uint64_t)BLE_CH38_FREQ_HZ;
-        break;
-    case BACKEND_BLE_CH39:
-        freq_hz = (uint64_t)BLE_CH39_FREQ_HZ;
-        break;
-    case BACKEND_BLE_CH37:
-    default:
-        ble_channel = BACKEND_BLE_CH37;
-        freq_hz = (uint64_t)BLE_CH37_FREQ_HZ;
-        break;
-    }
-
     radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
     (void)input_type; /* Only HackRF is supported by the backend today. */
 
+    /* Defensive clamping of the LE window: 40 RF channels (0..39), up to
+     * RECEIVER_BLE_MAX_CHANNELS processors. */
+    if (le_channel_count < 1u)
+        le_channel_count = 1u;
+    if (le_channel_count > RECEIVER_BLE_MAX_CHANNELS)
+        le_channel_count = RECEIVER_BLE_MAX_CHANNELS;
+    if (bottom_le_rf >= BLE_RF_CHANNEL_COUNT)
+        bottom_le_rf = BLE_RF_CHANNEL_COUNT - 1u;
+    if (bottom_le_rf + le_channel_count > BLE_RF_CHANNEL_COUNT)
+        le_channel_count = BLE_RF_CHANNEL_COUNT - bottom_le_rf;
+
     receiver_ble_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
-    cfg.ble_channel = ble_channel;
-    cfg.lo_freq_hz = freq_hz;
+    cfg.bottom_le_channel = bottom_le_rf;
+    cfg.le_channel_count = le_channel_count;
     cfg.device_type = dev_type;
     cfg.device_id = device_id;
     cfg.debug = 0;
@@ -655,6 +651,8 @@ int backend_session_run_ble(backend_session_t *session,
 }
 
 int backend_session_run_bredr(backend_session_t *session,
+                              unsigned int channel_count,
+                              unsigned int bottom_channel,
                               int input_type,
                               const char *device_id,
                               backend_row_fn on_row,
@@ -670,11 +668,22 @@ int backend_session_run_bredr(backend_session_t *session,
     radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
     (void)input_type; /* Only HackRF is supported by the backend today. */
 
-    /* Reuse the hybrid pipeline's hardcoded BR/EDR channel configuration. */
+    /* Defensive clamping, mirroring supertooth-rx validation. The on-air
+     * band is channels 0..78. */
+    channel_count &= ~1u;
+    if (channel_count < 2u)
+        channel_count = 2u;
+    if (channel_count > RECEIVER_BREDR_MAX_CHANNELS)
+        channel_count = RECEIVER_BREDR_MAX_CHANNELS;
+    unsigned int max_bottom = 78u - (channel_count - 1u);
+    if (bottom_channel > max_bottom)
+        bottom_channel = max_bottom;
+
     receiver_bredr_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
-    cfg.channel_count = RECEIVER_BREDR_MAX_CHANNELS;
-    cfg.bottom_channel = 0u;
+    cfg.channel_count = channel_count;
+    cfg.bottom_channel = bottom_channel;
+    cfg.le_grid = RECEIVER_BREDR_GRID_BREDR;
     cfg.rssi_averaging_window = RECEIVER_BREDR_DEFAULT_RSSI_AVERAGING_WINDOW;
     cfg.lap_filter = 0u;
     cfg.lap_filter_enabled = 0;
@@ -693,6 +702,10 @@ int backend_session_run_bredr(backend_session_t *session,
 }
 
 int backend_session_run_hybrid(backend_session_t *session,
+                               unsigned int channel_count,
+                               unsigned int bottom_channel,
+                               int le_grid,
+                               uint8_t ble_channel,
                                int input_type,
                                const char *device_id,
                                int enforce_crc,
@@ -710,8 +723,41 @@ int backend_session_run_hybrid(backend_session_t *session,
     radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
     (void)input_type; /* Only HackRF is supported by the backend today. */
 
+    /* Defensive validation of the channel window. On the BR/EDR grid the
+     * window is channel_count MHz (even count); on the LE grid it is
+     * channel_count+1 MHz (odd count, even bottom). */
+    if (le_grid == BACKEND_GRID_LE)
+    {
+        bottom_channel &= ~1u;
+        if (channel_count < 1u)
+            channel_count = 1u;
+        if (channel_count > RECEIVER_BREDR_MAX_CHANNELS - 1u)
+            channel_count = RECEIVER_BREDR_MAX_CHANNELS - 1u;
+        if ((channel_count & 1u) == 0u)
+            channel_count -= 1u;
+        if (channel_count < 1u)
+            return -1;
+    }
+    else
+    {
+        le_grid = BACKEND_GRID_BREDR;
+        channel_count &= ~1u;
+        if (channel_count < 2u)
+            channel_count = 2u;
+        if (channel_count > RECEIVER_BREDR_MAX_CHANNELS)
+            channel_count = RECEIVER_BREDR_MAX_CHANNELS;
+    }
+    unsigned int max_bottom = 78u - (channel_count - 1u);
+    if (bottom_channel > max_bottom)
+        bottom_channel = max_bottom;
+
     receiver_hybrid_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
+    cfg.channel_count = channel_count;
+    cfg.bottom_channel = bottom_channel;
+    cfg.le_grid = (le_grid == BACKEND_GRID_LE) ? RECEIVER_BREDR_GRID_LE
+                                               : RECEIVER_BREDR_GRID_BREDR;
+    cfg.ble_channel = (ble_channel >= 37u && ble_channel <= 39u) ? ble_channel : 0u;
     cfg.device_type = dev_type;
     cfg.device_id = device_id;
     cfg.debug = 0;

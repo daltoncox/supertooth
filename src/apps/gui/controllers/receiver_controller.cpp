@@ -42,13 +42,20 @@ void ReceiverController::setRunning(bool running)
     emit runningChanged();
 }
 
-bool ReceiverController::start(int inputType, const QString &deviceId, int sessionType, bool enforceCrc)
+bool ReceiverController::start(int inputType, const QString &deviceId,
+                               int sessionType, bool enforceCrc,
+                               int channelCount, int bottomChannel,
+                               int leGrid, int bleChannel)
 {
     qCInfo(lcSession).nospace().noquote()
         << "start() requested: inputType=" << inputType
         << " deviceId=\"" << deviceId << "\""
         << " sessionType=" << sessionType
         << " enforceCrc=" << enforceCrc
+        << " channelCount=" << channelCount
+        << " bottomChannel=" << bottomChannel
+        << " leGrid=" << leGrid
+        << " bleChannel=" << bleChannel
         << " running=" << m_running;
 
     if (m_running)
@@ -86,18 +93,26 @@ bool ReceiverController::start(int inputType, const QString &deviceId, int sessi
     qCInfo(lcSession).nospace()
         << "spawning receiver worker thread (mode=" << modeName
         << ", device=" << (idStr.isEmpty() ? QString("<default>") : idStr)
-        << ")";
+        << ", channels=" << channelCount
+        << ", bottom=" << bottomChannel
+        << ", grid=" << (leGrid == BACKEND_GRID_LE ? "LE" : "BR/EDR")
+        << ", bleCh=" << bleChannel << ")";
 
     m_thread = std::make_unique<std::thread>(
-        [session, sessionType, inputType, idStr, enforceCrc, self]() {
+        [session, sessionType, inputType, idStr, enforceCrc,
+         channelCount, bottomChannel, leGrid, bleChannel, self]() {
             QByteArray idBytes = idStr.toUtf8();
             const char *idPtr = idBytes.isEmpty() ? nullptr
                                                   : idBytes.constData();
             int result;
             if (sessionType == BACKEND_SESSION_BLE)
             {
+                /* LE-window session: channelCount/bottomChannel arrive in
+                 * LE RF units (count 1..10, bottom 0..39). */
                 qCInfo(lcSession) << "worker: entering backend_session_run_ble";
-                result = backend_session_run_ble(session, BACKEND_BLE_CH37,
+                result = backend_session_run_ble(session,
+                                                 (unsigned int)bottomChannel,
+                                                 (unsigned int)channelCount,
                                                  inputType, idPtr,
                                                  enforceCrc ? 1 : 0,
                                                  &rowTrampoline, self);
@@ -107,7 +122,10 @@ bool ReceiverController::start(int inputType, const QString &deviceId, int sessi
             else if (sessionType == BACKEND_SESSION_BREDR)
             {
                 qCInfo(lcSession) << "worker: entering backend_session_run_bredr";
-                result = backend_session_run_bredr(session, inputType, idPtr,
+                result = backend_session_run_bredr(session,
+                                                   (unsigned int)channelCount,
+                                                   (unsigned int)bottomChannel,
+                                                   inputType, idPtr,
                                                    &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_bredr returned"
                                   << result;
@@ -115,7 +133,12 @@ bool ReceiverController::start(int inputType, const QString &deviceId, int sessi
             else
             {
                 qCInfo(lcSession) << "worker: entering backend_session_run_hybrid";
-                result = backend_session_run_hybrid(session, inputType, idPtr,
+                result = backend_session_run_hybrid(session,
+                                                    (unsigned int)channelCount,
+                                                    (unsigned int)bottomChannel,
+                                                    leGrid,
+                                                    (uint8_t)bleChannel,
+                                                    inputType, idPtr,
                                                     enforceCrc ? 1 : 0,
                                                     &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_hybrid returned"

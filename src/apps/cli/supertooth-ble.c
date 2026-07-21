@@ -12,9 +12,9 @@
 
 static unsigned long g_packet_count = 0;
 static int g_debug = 0;
-static int g_enforce_crc = 1;   /* drop frames whose BLE CRC fails; default on */
+static int g_enforce_crc = 1;   /* drop BLE frames whose CRC fails; default on */
 static uint8_t g_ble_channel = BLE_CH37_INDEX;
-static uint64_t g_ble_freq_hz = (uint64_t)BLE_CH37_FREQ_HZ;
+static unsigned int g_ble_rf = BLE_RF_ADV0_INDEX;   /* LE RF channel of g_ble_channel */
 static receiver_session_t *g_session = NULL;
 
 static const app_output_mode_option_t s_output_modes[] = {
@@ -24,9 +24,9 @@ static const app_output_mode_option_t s_output_modes[] = {
 
 static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
 
-static int parse_ble_channel(const char *arg, uint8_t *out_channel, uint64_t *out_freq_hz)
+static int parse_ble_channel(const char *arg, uint8_t *out_channel, unsigned int *out_rf)
 {
-    if (!arg || !out_channel || !out_freq_hz)
+    if (!arg || !out_channel || !out_rf)
         return -1;
 
     char *endptr = NULL;
@@ -38,15 +38,15 @@ static int parse_ble_channel(const char *arg, uint8_t *out_channel, uint64_t *ou
     {
     case BLE_CH37_INDEX:
         *out_channel = BLE_CH37_INDEX;
-        *out_freq_hz = (uint64_t)BLE_CH37_FREQ_HZ;
+        *out_rf = BLE_RF_ADV0_INDEX;
         return 0;
     case BLE_CH38_INDEX:
         *out_channel = BLE_CH38_INDEX;
-        *out_freq_hz = (uint64_t)BLE_CH38_FREQ_HZ;
+        *out_rf = BLE_RF_ADV1_INDEX;
         return 0;
     case BLE_CH39_INDEX:
         *out_channel = BLE_CH39_INDEX;
-        *out_freq_hz = (uint64_t)BLE_CH39_FREQ_HZ;
+        *out_rf = BLE_RF_ADV2_INDEX;
         return 0;
     default:
         return -1;
@@ -170,7 +170,7 @@ int main(int argc, char *argv[])
             }
             break;
         case 'b':
-            if (parse_ble_channel(optarg, &g_ble_channel, &g_ble_freq_hz) != 0)
+            if (parse_ble_channel(optarg, &g_ble_channel, &g_ble_rf) != 0)
             {
                 fprintf(stderr, "Invalid BLE channel: %s (expected 37, 38, or 39)\n", optarg);
                 print_usage(argv[0]);
@@ -233,7 +233,10 @@ int main(int argc, char *argv[])
 
     printf("BLE Advertising Packet Detector\n");
     printf("================================\n");
-    printf("Channel     : %u (%.3f MHz)\n", g_ble_channel, (double)g_ble_freq_hz / 1e6);
+    printf("Channel     : %u (%.3f MHz)\n", g_ble_channel,
+           (double)ble_rf_channel_freq_hz(g_ble_rf) / 1e6);
+    printf("LO          : %.1f MHz, 4 Msps (channelized)\n",
+           (double)ble_rf_channel_freq_hz(g_ble_rf) / 1e6);
     printf("View mode   : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
@@ -247,9 +250,12 @@ int main(int argc, char *argv[])
     printf("Enforce CRC : %s\n", g_enforce_crc ? "on" : "off");
     app_install_sigint_handler(&g_session);
 
+    /* Single-channel window on the selected advertising channel. The
+     * session tunes a whole-MHz LO at the channel center (4 Msps for the
+     * 2 MHz span) and channelizes down to 2 Msps. */
     receiver_ble_config_t config = {
-        .ble_channel = g_ble_channel,
-        .lo_freq_hz = g_ble_freq_hz,
+        .bottom_le_channel = g_ble_rf,
+        .le_channel_count = 1u,
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
@@ -267,7 +273,7 @@ int main(int argc, char *argv[])
     }
 
     printf("Monitoring BLE Channel %u (%.3f GHz) for advertising packets...\n",
-           g_ble_channel, (double)g_ble_freq_hz / 1e9);
+           g_ble_channel, (double)ble_rf_channel_freq_hz(g_ble_rf) / 1e9);
     printf("Press Ctrl+C to exit\n\n");
         int result = receiver_session_run_ble(g_session, &config, &callbacks);
     receiver_session_destroy(g_session);
@@ -283,7 +289,7 @@ int main(int argc, char *argv[])
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
     printf("  Debug mode     : %s\n", g_debug ? "enabled" : "disabled");
-    printf("  BLE channel    : %u (%.3f MHz)\n", g_ble_channel, (double)g_ble_freq_hz / 1e6);
+    printf("  BLE channel    : %u (%.3f MHz)\n", g_ble_channel, (double)ble_rf_channel_freq_hz(g_ble_rf) / 1e6);
     printf("  Enforce CRC    : %s\n", g_enforce_crc ? "on" : "off");
     printf("  Total packets  : %lu\n", g_packet_count);
 

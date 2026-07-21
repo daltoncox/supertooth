@@ -48,6 +48,40 @@ extern "C" {
 #define BLE_CH38_FREQ_HZ 2426000000u
 #define BLE_CH39_FREQ_HZ 2480000000u
 
+/* LE RF channel geometry: 40 RF channels at 2 MHz spacing, RF k centered
+ * on 2402 + 2k MHz. Advertising channels 37/38/39 occupy RF 0/12/39; data
+ * channels 0..36 fill the rest. */
+#define BLE_RF_CHANNEL_COUNT 40u
+#define BLE_RF_CHANNEL_0_FREQ_HZ 2402000000u
+#define BLE_RF_CHANNEL_BW_HZ 2000000u
+#define BLE_RF_ADV0_INDEX 0u    /* LE 37 */
+#define BLE_RF_ADV1_INDEX 12u   /* LE 38 */
+#define BLE_RF_ADV2_INDEX 39u   /* LE 39 */
+
+/** Center frequency of LE RF channel @p rf (0..39) in Hz. */
+static inline uint32_t ble_rf_channel_freq_hz(unsigned int rf)
+{
+    return BLE_RF_CHANNEL_0_FREQ_HZ + (uint32_t)rf * BLE_RF_CHANNEL_BW_HZ;
+}
+
+/** Nonzero when LE RF channel @p rf is an advertising channel (37/38/39). */
+static inline int ble_rf_is_advertising(unsigned int rf)
+{
+    return rf == BLE_RF_ADV0_INDEX || rf == BLE_RF_ADV1_INDEX ||
+           rf == BLE_RF_ADV2_INDEX;
+}
+
+/** LE channel number for RF channel @p rf (RF 0->37, 1..11->0..10,
+ * 12->38, 13..38->11..36, 39->39). */
+static inline uint8_t ble_channel_number_for_rf(unsigned int rf)
+{
+    if (rf == BLE_RF_ADV0_INDEX) return BLE_CH37_INDEX;
+    if (rf == BLE_RF_ADV1_INDEX) return BLE_CH38_INDEX;
+    if (rf >= BLE_RF_ADV2_INDEX) return BLE_CH39_INDEX;
+    if (rf < BLE_RF_ADV1_INDEX) return (uint8_t)(rf - 1u);
+    return (uint8_t)(rf - 2u);
+}
+
 /* ---------------------------------------------------------------------------
  * ble_frame_t — a captured BLE advertising frame
  * ---------------------------------------------------------------------------*/

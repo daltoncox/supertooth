@@ -64,12 +64,23 @@ ApplicationWindow {
                 id: header
                 Layout.fillWidth: true
 onPlayPauseToggled: {
+                // Channel params are passed in the session's native grid:
+                // LE RF units for BLE sessions, BR/EDR units otherwise.
+                var isBle = captureView.sessionTypeIndex === 1
+                var count = isBle ? captureView.backendLeChannelCount
+                                  : captureView.backendChannelCount
+                var bottom = isBle ? captureView.bottomLeIndex
+                                    : captureView.backendBottomChannel
                 console.log("Supertooth: play/pause toggled; running =",
                             receiverController.running,
                             "inputType =", header.inputTypeIndex,
                             "deviceID =", header.deviceID,
-                            "sessionType =", channelView.sessionTypeIndex,
-                            "enforceCrc =", channelView.enforceCrc)
+                            "sessionType =", captureView.sessionTypeIndex,
+                            "enforceCrc =", captureView.enforceCrc,
+                            "channels =", count,
+                            "bottom =", bottom,
+                            "leGrid =", captureView.backendLeGrid,
+                            "bleAdv =", captureView.backendBleAdvChannel)
                 if (receiverController.running) {
                     receiverController.stop()
                 } else {
@@ -77,8 +88,12 @@ onPlayPauseToggled: {
                     deviceListModel.clear()
                     receiverController.start(header.inputTypeIndex,
                                              header.deviceID,
-                                             channelView.sessionTypeIndex,
-                                             channelView.enforceCrc)
+                                             captureView.sessionTypeIndex,
+                                             captureView.enforceCrc,
+                                             count,
+                                             bottom,
+                                             captureView.backendLeGrid,
+                                             captureView.backendBleAdvChannel)
                 }
             }
             }
@@ -94,19 +109,13 @@ onPlayPauseToggled: {
                     Layout.fillHeight: true
                     frameModel: frameListModel
                 }
-                Item {
-                    Label {
-                        anchors.centerIn: parent
-                        text: "Topology"
-                    }
-                }
                 DeviceListView {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     deviceModel: deviceListModel
                 }
-                ChannelView {
-                    id: channelView
+                CaptureView {
+                    id: captureView
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     running: receiverController.running
