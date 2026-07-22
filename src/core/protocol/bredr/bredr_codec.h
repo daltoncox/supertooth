@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "bredr_bitstream_decoder.h"
+#include "phy.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -119,6 +120,8 @@ typedef struct
 
 typedef struct
 {
+    /** Physical-layer modulation/coding, propagated from the captured frame. */
+    receiver_phy_t phy;
     bredr_decode_status_t status;
     bredr_decode_limit_t limit;
     bredr_payload_family_t family;

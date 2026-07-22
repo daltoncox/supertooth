@@ -112,6 +112,7 @@ add_library(supertooth_core STATIC
     dsp/rssi_measurements.c
     dsp/rssi_measurements.h
     models/receive_event_models.h
+    models/phy.h
     protocol/ble/ble_display.c protocol/ble/ble_display.h
     protocol/ble/ble_codec.c protocol/ble/ble_codec.h
     protocol/ble/ble_bitstream_decoder.c protocol/ble/ble_bitstream_decoder.h

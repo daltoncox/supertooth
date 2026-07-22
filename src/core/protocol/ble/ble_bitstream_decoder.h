@@ -29,6 +29,8 @@
 
 #include <stdint.h>
 
+#include "phy.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -88,6 +90,8 @@ static inline uint8_t ble_channel_number_for_rf(unsigned int rf)
 
 typedef struct
 {
+    /** Physical-layer modulation/coding of the captured packet. */
+    receiver_phy_t phy;
     uint8_t preamble;
     uint32_t access_address;
     uint8_t raw_pdu[BLE_PDU_MAX_BYTES + BLE_CRC_BYTES];

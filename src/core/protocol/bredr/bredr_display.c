@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "bredr_codec.h"
+#include "phy.h"
 
 static const char *bredr_tracking_state_desc(int tracking_state)
 {
@@ -246,6 +247,7 @@ void bredr_print_packet_details(const bredr_frame_t *frame,
 
     printf("\n[%s Packet Info]\n",
            frame->has_header ? "BR/EDR Data" : "BR/EDR Inquiry");
+    printf("PHY          : %s\n", receiver_phy_name(frame->phy));
     printf("LAP          : 0x%06" PRIX32 "\n", frame->lap & 0xFFFFFFu);
     if (frame->has_header)
         printf("HEADER       : 0x%014" PRIX64 "\n",
@@ -335,9 +337,10 @@ void bredr_print_packet_summary_line(unsigned long packet_no,
         else
             snprintf(clk_buf, sizeof(clk_buf), "??");
 
-        printf("pkt=%-6lu lap=%06" PRIX32 " uap=%s ch=%02u ac=%u clk=%s track=%d rssi=%.1f\n",
+        printf("pkt=%-6lu lap=%06" PRIX32 " phy=%-12s uap=%s ch=%02u ac=%u clk=%s track=%d rssi=%.1f\n",
                packet_no,
                frame->lap & 0xFFFFFFu,
+               receiver_phy_name(frame->phy),
                uap_buf,
                meta->channel_index,
                frame->ac_errors,
@@ -347,9 +350,10 @@ void bredr_print_packet_summary_line(unsigned long packet_no,
     }
     else
     {
-        printf("pkt=%-6lu lap=%06" PRIX32 " uap=?? ch=%02u ac=%u clk=?? track=%d rssi=%.1f\n",
+        printf("pkt=%-6lu lap=%06" PRIX32 " phy=%-12s uap=?? ch=%02u ac=%u clk=?? track=%d rssi=%.1f\n",
                packet_no,
                frame->lap & 0xFFFFFFu,
+               receiver_phy_name(frame->phy),
                meta->channel_index,
                frame->ac_errors,
                pnet ? pnet->tracking_state : -1,

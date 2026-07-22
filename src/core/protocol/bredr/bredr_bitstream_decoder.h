@@ -72,6 +72,8 @@
 #include <stdint.h>
 #include <complex.h>
 
+#include "phy.h"
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -142,6 +144,9 @@ extern "C"
  */
 typedef struct
 {
+    /** Physical-layer modulation/coding of the captured packet. */
+    receiver_phy_t phy;
+
     /** Absolute bit index of the access-code start in the channel bitstream. */
     uint64_t start_bit_index;
 

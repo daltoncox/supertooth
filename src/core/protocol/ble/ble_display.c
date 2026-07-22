@@ -1,6 +1,7 @@
 #include "ble_display.h"
 
 #include "bt_assigned_numbers.h"
+#include "phy.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -183,6 +184,7 @@ void ble_print_packet(const ble_packet_t *pkt)
         return;
 
     printf("[BLE Advertising Packet]\n");
+    printf("PHY      : %s\n", receiver_phy_name(pkt->phy));
     printf("PDU Type : %u [%s] (%s)\n",
            (unsigned int)(pkt->pdu_type & 0x0Fu),
            ble_pdu_type_name(pkt->pdu_type),
@@ -268,8 +270,9 @@ void ble_print_packet_summary_line(unsigned long packet_no,
     else
         snprintf(addr_buf, sizeof(addr_buf), "--");
 
-    printf("pkt=%-6lu type=BLE pdu=%-14s ch=%02u addr=%s len=%-3u crc=%s rssi=%.1f\n",
+    printf("pkt=%-6lu type=BLE phy=%-12s pdu=%-14s ch=%02u addr=%s len=%-3u crc=%s rssi=%.1f\n",
            packet_no,
+           receiver_phy_name(pkt->phy),
            pdu_name,
            meta->channel_index,
            addr_buf,
