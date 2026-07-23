@@ -18,6 +18,8 @@ qt_add_executable(appSupertooth
     models/frame_list_model.cpp
     models/device_list_model.h
     models/device_list_model.cpp
+    models/device_list_sort_proxy_model.h
+    models/device_list_sort_proxy_model.cpp
     models/radio_device_model.h
     models/radio_device_model.cpp
 )

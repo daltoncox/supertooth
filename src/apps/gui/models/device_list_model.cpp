@@ -31,6 +31,7 @@ QHash<int, QByteArray> DeviceListModel::roleNames() const
         {LastSeenRole,    "lastSeen"},
         {PacketsSeenRole, "packetsSeen"},
         {PacketRateRole,  "packetRate"},
+        {DeviceIdRole,    "deviceId"},
     };
 }
 
@@ -42,17 +43,24 @@ QVariant DeviceListModel::data(const QModelIndex &index, int role) const
     switch (role)
     {
     case RssiRole:
-        return qIsNaN(r.rssiDb)
-                   ? QStringLiteral("--")
-                   : QString::number(r.rssiDb, 'f', 1);
+        // Numeric so a proxy can sort by signal; -999.0 = "no signal yet"
+        // sentinel (always sorts to bottom). To be honest the legacy
+        // "--" is reproduced on the renderer side.
+        return QVariant::fromValue(qIsNaN(r.rssiDb) ? kRssiSentinel : r.rssiDb);
     case ProtoRole:       return r.proto;
     case AddrRole:       return r.addr;
     case DeviceRole:     return r.device;
     case IdentifierRole: return identifierLabelFor(r);
-    case LastSeenRole:  return formatLastSeen(r.lastSeenMs);
+    case LastSeenRole:
+        // QDateTime so a proxy can sort chronologically. An invalid
+        // QDateTime means "never seen"; the renderer formats "--".
+        return r.lastSeenMs == 0
+                   ? QVariant()
+                   : QVariant::fromValue(
+                        QDateTime::fromMSecsSinceEpoch(r.lastSeenMs));
     case PacketsSeenRole: return QVariant::fromValue(r.packetsSeen);
-    case PacketRateRole:
-        return QString::number(r.lastRate) + QStringLiteral("/s");
+    case PacketRateRole:  return QVariant::fromValue(r.lastRate);
+    case DeviceIdRole:    return r.id;
     }
     return {};
 }
@@ -141,6 +149,7 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
     if (rowIdx < 0)
     {
         Row r;
+        r.id = m_nextId++;
         r.proto = proto;
         r.addr = addr;
         r.device = device;
@@ -279,6 +288,7 @@ void DeviceListModel::clear()
     m_rows.clear();
     m_indexByKey.clear();
     m_brokenOutPiconets.clear();
+    m_nextId = 1;
     endResetModel();
     emit countChanged();
 }

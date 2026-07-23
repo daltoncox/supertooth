@@ -32,8 +32,17 @@
  * window; when the window empties out (no frames in the last second) the
  * last computed average is held until new frames arrive.
  *
- * RSSI is carried as a float all the way through from rx_metadata_t to
- * this model; it is only formatted to a string at data() read time.
+ * roles exposed via data() return comparable primitive values so that a
+ * QSortFilterProxyModel can sort them numerically/lexically rather than on
+ * formatted display strings:
+ *   - RssiRole     double; -999.0 sentinel means "no signal yet"
+ *   - LastSeenRole QDateTime; invalid QDateTime means "never seen"
+ *   - PacketRateRole int   (packets/second)
+ * String formatting of these values for the table live is the rendering
+ * layer's job (DeviceListView.qml).
+ *
+ * see formatLastSeen below for the historical format iteration the QML
+ * formatter reproduces.
  */
 class DeviceListModel : public QAbstractListModel
 {
@@ -51,6 +60,7 @@ public:
         LastSeenRole,
         PacketsSeenRole,
         PacketRateRole,
+        DeviceIdRole,
     };
     Q_ENUM(Roles)
 
@@ -62,6 +72,12 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     int count() const { return m_rows.size(); }
+
+    /// Sentinel exposed via RssiRole for "no RSSI yet". Public so the sort
+    /// proxy can pin it to the bottom without duplicating the literal (the
+    /// two must never drift). Far below any real HackRF reading in either
+    /// sort direction.
+    static constexpr double kRssiSentinel = -999.0;
 
     /// Feed a decoded frame (proto/addr/src/dst/rssiDb/detail) into the
     /// aggregator. Finds-or-creates the relevant device row and folds the
@@ -91,6 +107,7 @@ signals:
 private:
     struct Row
     {
+        int id = 0;                     // stable per-session identity (for selection tracking)
         QString proto;
         QString addr;
         QString device;                 // resolved: BLE src / "Central" / "LT_ADDR N" / "piconet" / "Unknown"
@@ -132,6 +149,7 @@ private:
     QHash<QString, int> m_indexByKey;
     QSet<QString> m_brokenOutPiconets;   // LAP-keyed; "BR/EDR\x1F<lap>"
     QTimer m_tick;
+    int m_nextId = 1;                    // monotonic device ID counter (0 = invalid)
 };
 
 #endif // DEVICE_LIST_MODEL_H

@@ -7,7 +7,12 @@ Item {
     id: root
 
     property var deviceModel: null
-    property int currentDeviceIndex: -1
+
+    // Selection is tracked by stable device ID, not row index, so that a
+    // re-sort (header click or the 1 Hz tick re-ordering volatile RSSI/rate)
+    // keeps the same device highlighted instead of latching onto whichever
+    // device lands at the old row number. deviceId 0 means "no selection".
+    property int selectedDeviceId: 0
 
     // Selectable chart time window (seconds). Defaults to 60s.
     property real chartRangeSec: 60.0
@@ -15,6 +20,52 @@ Item {
     property real tableWidth: 0
     readonly property int minColWidth: 20
     readonly property int handleHit: 6
+
+    // Sort state lives entirely in the proxy model (DeviceListSortProxyModel
+    // exposes sortRoleName/sortOrder as Q_PROPERTYs and owns the actual row
+    // ordering). The view is a pure reflector: it reads those properties to
+    // render the header indicator and forwards clicks via sortBy(). Keeping a
+    // single source of truth avoids the two-way-sync drift between QML and C++.
+
+    // Sort policy for a header click: toggling direction when re-clicking the
+    // active column, otherwise adopting the column's default order. Execution
+    // (re-ordering rows) is delegated to the proxy via sortBy(). Kept in the
+    // view rather than the proxy because column ordering/default-order is a
+    // view concern (see the `columns` ListModel below), not a model one.
+    function headerClicked(i) {
+        if (!deviceModel || i < 0 || !columns.get(i).sortable) return
+        var role = columns.get(i).role
+        var ord
+        if (role === deviceModel.sortRoleName) {
+            ord = (deviceModel.sortOrder === Qt.AscendingOrder)
+                  ? Qt.DescendingOrder : Qt.AscendingOrder
+        } else {
+            ord = columns.get(i).defaultOrder === 1
+                  ? Qt.DescendingOrder : Qt.AscendingOrder
+        }
+        deviceModel.sortBy(role, ord)
+    }
+
+    // Render-layer formatting: deviceModel now exposes comparable values
+    // (double rssi, QDateTime lastSeen, int packetRate) so the proxy can
+    // sort them numerically; the visible string is built here.
+    function formatCell(role, value) {
+        if (value === undefined || value === null) return ""
+        if (role === "rssi") {
+            var db = Number(value)
+            return db <= -999 ? "--" : db.toFixed(1)
+        }
+        if (role === "lastSeen") {
+            if (!value) return "--"
+            var d = value instanceof Date ? value : new Date(value)
+            if (!d || !d.getTime || d.getTime() === 0) return "--"
+            function pad(n) { return (n < 10 ? "0" : "") + n }
+            return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":"
+                 + pad(d.getSeconds()) + "." + Math.floor(d.getMilliseconds() / 100)
+        }
+        if (role === "packetRate") return Number(value) + "/s"
+        return String(value)
+    }
 
     function colWidth(i) {
         if (i === columns.count - 1) {
@@ -100,6 +151,26 @@ Item {
         }
     }
 
+    // Re-resolve the selected device's ID to its current proxy row after any
+    // model change that could have moved it (sort, insert, remove, reset).
+    // Updates the highlight + chart-timer target; does NOT reload the detail
+    // pane (the device hasn't changed, only its row position has).
+    function reselectDevice() {
+        if (!deviceModel || selectedDeviceId === 0) return
+        var row = deviceModel.rowForDeviceId(selectedDeviceId)
+        if (row < 0) {
+            // Device was removed or the model was cleared.
+            selectedDeviceId = 0
+            deviceListView.currentIndex = -1
+            deviceInfoView.model = []
+            rssiSeries.clear()
+            rssiRawSeries.clear()
+            emptyChartLabel.visible = true
+            return
+        }
+        deviceListView.currentIndex = row
+    }
+
     // Periodically re-read the chart series so newly-captured frames are
     // painted and the rolling window keeps sliding forward even when no
     // frames arrive (so the trace visibly advances in time).
@@ -107,17 +178,18 @@ Item {
         id: chartRefreshTimer
         interval: 500
         repeat: true
-        running: root.currentDeviceIndex >= 0
-        onTriggered: root.loadChart(root.currentDeviceIndex)
+        running: root.selectedDeviceId > 0
+        onTriggered: root.loadChart(deviceListView.currentIndex)
     }
 
-    ListModel {
+ListModel {
         id: columns
-        ListElement { title: "RSSI";         role: "rssi";        width: 70;  hAlign: 1; color: "#b5cea8" }
-        ListElement { title: "Protocol";     role: "proto";       width: 80;  hAlign: 1; color: "#dcdcaa" }
-        ListElement { title: "Identifier";   role: "identifier"; width: 220; hAlign: 1; color: "#569cd6" }
-        ListElement { title: "Last Seen";     role: "lastSeen";    width: 120; hAlign: 1; color: "#cccccc" }
-        ListElement { title: "Packet Rate";  role: "packetRate";  width: 100; hAlign: 1; color: "#9cdcfe" }
+        // defaultOrder: 0 = Qt.AscendingOrder, 1 = Qt.DescendingOrder.
+        ListElement { title: "RSSI";         role: "rssi";        width: 70;  hAlign: 1; color: "#b5cea8"; sortable: true;  defaultOrder: 1 }
+        ListElement { title: "Protocol";     role: "proto";       width: 80;  hAlign: 1; color: "#dcdcaa"; sortable: true;  defaultOrder: 0 }
+        ListElement { title: "Identifier";   role: "identifier";  width: 220; hAlign: 1; color: "#569cd6"; sortable: true;  defaultOrder: 0 }
+        ListElement { title: "Last Seen";     role: "lastSeen";    width: 120; hAlign: 1; color: "#cccccc"; sortable: true;  defaultOrder: 0 }
+        ListElement { title: "Packet Rate";  role: "packetRate";  width: 100; hAlign: 1; color: "#9cdcfe"; sortable: true;  defaultOrder: 1 }
     }
 
     SplitView {
@@ -199,10 +271,20 @@ Item {
                             width: colWidth(index)
                             height: headerRow.height
                             color: "transparent"
+
+                            // Active when this column is the proxy's current
+                            // sort target. Read straight off the proxy so the
+                            // indicator can never disagree with the row order.
+                            property bool isActiveSort: !!deviceModel
+                                        && model.role === deviceModel.sortRoleName
+
                             Label {
                                 anchors.fill: parent
                                 text: model.title
-                                color: "#cccccc"
+                                       + (parent.isActiveSort
+                                            ? (deviceModel.sortOrder === Qt.AscendingOrder ? " \u25B2" : " \u25BC")
+                                            : "")
+                                color: parent.isActiveSort ? "#ffffff" : "#cccccc"
                                 horizontalAlignment: model.hAlign
                                 verticalAlignment: Text.AlignVCenter
                                 font.bold: true
@@ -234,14 +316,41 @@ Item {
                             return false
                         }
 
+                        // Resolve an x within the header to the column index
+                        // it lands on (or -1 if outside any column).
+                        function columnAt(mx) {
+                            var x = 0
+                            for (var i = 0; i < columns.count; i++) {
+                                x += colWidth(i)
+                                if (mx < x) return i
+                            }
+                            return columns.count > 0 ? columns.count - 1 : -1
+                        }
+
+                        // Distinguish a sort-click from a column-resize click.
+                        // resizeIndex === -1 after beginResize means the press
+                        // landed in column body (not a resize boundary); and
+                        // movedSincePress being false rules out a drag.
+                        property bool movedSincePress: false
+
                         onPressed: function (mouse) {
+                            movedSincePress = false
                             headerRow.beginResize(mouse.x)
                         }
                         onPositionChanged: function (mouse) {
+                            movedSincePress = true
                             if (headerRow.resizeIndex >= 0)
                                 headerRow.applyResize(mouse.x)
                         }
-                        onReleased: headerRow.resizeIndex = -1
+                        onReleased: function (mouse) {
+                            // Only a clean click (no resize started, no drag)
+                            // re-targets the sort; the policy lives in
+                            // root.headerClicked() so this handler stays purely
+                            // about hit-testing plus click-vs-drag detection.
+                            if (headerRow.resizeIndex < 0 && !movedSincePress)
+                                root.headerClicked(columnAt(mouse.x))
+                            headerRow.resizeIndex = -1
+                        }
                     }
                 }
 
@@ -262,10 +371,18 @@ Item {
                         policy: ScrollBar.AsNeeded
                     }
 
-                    onCurrentIndexChanged: {
-                        root.currentDeviceIndex = currentIndex
-                        root.loadDetail(currentIndex)
-                        root.loadChart(currentIndex)
+                    // Re-resolve the selected device to its new proxy row
+                    // whenever the model re-orders (sort, 1 Hz tick re-sort)
+                    // or gains/loses rows. The detail pane is NOT reloaded
+                    // here — the device identity hasn't changed, only its row
+                    // position; the chart refresh timer picks up the new row
+                    // on its next tick.
+                    Connections {
+                        target: root.deviceModel
+                        function onLayoutChanged() { root.reselectDevice() }
+                        function onRowsInserted() { root.reselectDevice() }
+                        function onRowsRemoved() { root.reselectDevice() }
+                        function onModelReset() { root.reselectDevice() }
                     }
 
                     Label {
@@ -287,8 +404,10 @@ Item {
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
+                                root.selectedDeviceId = deviceId
                                 deviceListView.currentIndex = index
-                                root.currentDeviceIndex = index
+                                root.loadDetail(index)
+                                root.loadChart(index)
                             }
                         }
 
@@ -301,7 +420,8 @@ Item {
                                 color: "transparent"
                                 Label {
                                     anchors.fill: parent
-                                    text: rowDelegate.cells[index]
+                                    text: formatCell(columns.get(index).role,
+                                                     rowDelegate.cells[index])
                                     color: columns.get(index).color
                                     horizontalAlignment: columns.get(index).hAlign
                                     verticalAlignment: Text.AlignVCenter
@@ -385,7 +505,7 @@ Item {
                             currentIndex: 3
                             onActivated: function (i) {
                                 root.chartRangeSec = rangeModel.get(i).secs
-                                root.loadChart(root.currentDeviceIndex)
+                                root.loadChart(deviceListView.currentIndex)
                             }
                         }
                     }
