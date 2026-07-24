@@ -4,6 +4,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QLoggingCategory>
+#include <QIcon>
 
 int main(int argc, char *argv[])
 {
@@ -14,6 +15,8 @@ int main(int argc, char *argv[])
                        "supertooth.session.warning=true"));
 
     QGuiApplication app(argc, argv);
+
+app.setWindowIcon(QIcon(":/assets/icons/Supertooth_Spaced_512_2x.png"));
 
     const QDir fontsDir(":/assets/fonts");
     for (const QFileInfo &fi : fontsDir.entryInfoList({"*.ttf", "*.otf"}, QDir::Files)) {
