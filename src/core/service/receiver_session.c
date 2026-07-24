@@ -81,6 +81,7 @@ receiver_session_t *receiver_session_create(void)
     pthread_mutex_init(&session->decoded_packet_mutex, NULL);
     pthread_mutex_init(&session->stop_mutex, NULL);
     pthread_cond_init(&session->stop_cv, NULL);
+    ble_piconet_store_init(&session->ble_store);
 
     session->ble_ctx = (ble_channel_processor_t *)calloc(RECEIVER_BLE_MAX_CHANNELS,
                                                          sizeof(*session->ble_ctx));
@@ -106,6 +107,7 @@ void receiver_session_destroy(receiver_session_t *session)
     if (session)
     {
         bredr_piconet_store_free(&session->bredr_store);
+        ble_piconet_store_free(&session->ble_store);
         pthread_cond_destroy(&session->stop_cv);
         pthread_mutex_destroy(&session->stop_mutex);
         pthread_mutex_destroy(&session->decoded_packet_mutex);

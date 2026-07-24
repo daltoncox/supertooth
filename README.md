@@ -120,7 +120,7 @@ src/
     dsp/           Shared DSP utilities (RSSI measurement helpers)
     models/        Shared packet and receive metadata types
     radio/         HackRF integration, sample dispatcher, block pool
-    service/       Session API, channel processors, hybrid orchestration
+    service/       Session API and channel processors
     protocol/
       ble/         BLE bitstream decoder, codec, display utilities
       bredr/       BR/EDR bitstream decoder, codec, piconet tracking, UAP recovery

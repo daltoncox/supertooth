@@ -9,11 +9,10 @@ void receiver_ble_update_layout(receiver_session_t *session);
 
 /** Set up session->ble_ctx channels for the given pipeline:
  *  - RECEIVER_BLE_PIPELINE_SESSION: le_channel_count channels from
- *    ble_config.bottom_le_channel. Advertising RF channels get full DSP
- *    (NCO + decimation + demod + decoder); data channels stay idle (reader
- *    only, no work).
- *  - RECEIVER_BLE_PIPELINE_HYBRID: a single channel from
- *    hybrid_config.ble_channel, mixed from the bredr wideband layout.
+ *    ble_config.bottom_le_channel. Every channel gets full DSP (NCO +
+ *    decimation + demod + unified advertising/data decoder).
+ *  - RECEIVER_BLE_PIPELINE_HYBRID: every LE channel fully inside the bredr
+ *    capture window, mixed from the bredr wideband layout.
  */
 int receiver_ble_channel_processor_setup(receiver_session_t *session,
                                          receiver_ble_pipeline_t pipeline);

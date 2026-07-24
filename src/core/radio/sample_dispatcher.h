@@ -7,7 +7,9 @@
 
 #define SAMPLE_BLOCK_SAMPLE_CAPACITY 262144u
 #define SAMPLE_READER_QUEUE_CAPACITY 8u
-#define SAMPLE_DISPATCHER_READER_CAPACITY 21u
+/* Worst-case fan-out: 20 BR/EDR channel workers + 10 BLE channel workers
+ * in a hybrid session. */
+#define SAMPLE_DISPATCHER_READER_CAPACITY 30u
 #define SAMPLE_DISPATCHER_BLOCK_CAPACITY 64u
 
 typedef struct sample_block

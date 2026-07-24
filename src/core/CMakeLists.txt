@@ -142,6 +142,7 @@ add_library(supertooth_core STATIC
     protocol/ble/ble_display.c protocol/ble/ble_display.h
     protocol/ble/ble_codec.c protocol/ble/ble_codec.h
     protocol/ble/ble_bitstream_decoder.c protocol/ble/ble_bitstream_decoder.h
+    protocol/ble/ble_piconet.c protocol/ble/ble_piconet.h
     protocol/ble/bt_assigned_numbers.c protocol/ble/bt_assigned_numbers.h
     protocol/bredr/bredr_display.c protocol/bredr/bredr_display.h
     protocol/bredr/bredr_codec.c protocol/bredr/bredr_codec.h

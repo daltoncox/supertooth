@@ -6,8 +6,11 @@
  *    BR/EDR grid (even N, half-MHz LO) and the LE grid (odd N, whole-MHz
  *    LO, span widened by 1 MHz).
  *  - receiver_ble_channel_processor_setup (SESSION pipeline): LE window
- *    layout, per-channel advertising/data active flags, NCO/decimation
- *    wiring, and config validation.
+ *    layout, per-channel active flags (every channel in the window is
+ *    decoded, advertising and data alike), NCO/decimation wiring, and
+ *    config validation.
+ *  - receiver_ble_channel_processor_setup (HYBRID pipeline): BLE fan-out
+ *    over every LE channel fully inside the bredr capture window.
  */
 #include <math.h>
 #include <stdio.h>
@@ -15,6 +18,7 @@
 
 #include "receiver_session.h"
 #include "ble_channel_processor.h"
+#include "bredr_channel_processor.h"
 
 static int g_failures = 0;
 
@@ -110,7 +114,7 @@ static void test_ble_session_layout(void)
     CHECK_U64("rf24 not adv", ble_rf_is_advertising(24), 0);
 
     /* Full window: bottom=0, count=10 -> LO 2411, 20 Msps, decim 10;
-     * only RF0 (LE37) active. */
+     * every channel active (RF0 = LE37 advertising, rest data). */
     {
         receiver_session_t *s = make_ble_session(0, 10);
         CHECK_U64("setup k=0 n=10 ok",
@@ -122,14 +126,14 @@ static void test_ble_session_layout(void)
         CHECK_U64("k0n10 ctx0 active", s->ble_ctx[0].active, 1u);
         CHECK_U64("k0n10 ctx0 channel", s->ble_ctx[0].channel_index, 37u);
         CHECK_U64("k0n10 ctx0 decim", s->ble_ctx[0].input_decimation, 10u);
-        CHECK_U64("k0n10 ctx1 idle", s->ble_ctx[1].active, 0u);
-        CHECK_U64("k0n10 active count", count_active(s), 1u);
+        CHECK_U64("k0n10 ctx1 (data) active", s->ble_ctx[1].active, 1u);
+        CHECK_U64("k0n10 active count", count_active(s), 10u);
         receiver_ble_channel_processor_destroy(s);
         CHECK_U64("destroy resets ctx count", s->ble_ctx_count, 0u);
         receiver_session_destroy(s);
     }
 
-    /* Window RF10..13: ch38 (RF12) active at +1 MHz offset, LO 2425. */
+    /* Window RF10..13: ch38 (RF12) at +1 MHz offset, LO 2425; all active. */
     {
         receiver_session_t *s = make_ble_session(10, 4);
         CHECK_U64("setup k=10 n=4 ok",
@@ -138,7 +142,7 @@ static void test_ble_session_layout(void)
         CHECK_U64("k10n4 rate", s->ble_sample_rate, 8000000u);
         CHECK_U64("k10n4 ctx2 ch38 active", s->ble_ctx[2].active, 1u);
         CHECK_U64("k10n4 ctx2 channel", s->ble_ctx[2].channel_index, 38u);
-        CHECK_U64("k10n4 active count", count_active(s), 1u);
+        CHECK_U64("k10n4 active count", count_active(s), 4u);
         receiver_ble_channel_processor_destroy(s);
         receiver_session_destroy(s);
     }
@@ -162,12 +166,13 @@ static void test_ble_session_layout(void)
         receiver_session_destroy(s);
     }
 
-    /* Fully idle window (RF2..3, both data): valid but nothing active. */
+    /* Data-only window (RF2..3): every channel is decoded now. */
     {
         receiver_session_t *s = make_ble_session(2, 2);
-        CHECK_U64("setup idle window ok",
+        CHECK_U64("setup data-only window ok",
                   receiver_ble_channel_processor_setup(s, RECEIVER_BLE_PIPELINE_SESSION), 0);
-        CHECK_U64("idle window active count", count_active(s), 0u);
+        CHECK_U64("data-only window active count", count_active(s), 2u);
+        CHECK_U64("data-only ctx0 channel", s->ble_ctx[0].channel_index, 1u);
         receiver_ble_channel_processor_destroy(s);
         receiver_session_destroy(s);
     }
@@ -193,10 +198,77 @@ static void test_ble_session_layout(void)
     }
 }
 
+static receiver_session_t *make_hybrid_session(unsigned int bottom,
+                                               unsigned int count,
+                                               unsigned int le_grid)
+{
+    receiver_session_t *s = receiver_session_create();
+    receiver_bredr_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.channel_count = count;
+    cfg.bottom_channel = bottom;
+    cfg.le_grid = le_grid;
+    cfg.rssi_averaging_window = RECEIVER_BREDR_DEFAULT_RSSI_AVERAGING_WINDOW;
+
+    receiver_bredr_callbacks_t cb;
+    memset(&cb, 0, sizeof(cb));
+    receiver_bredr_session_init(s, &cfg, &cb);
+    if (receiver_bredr_channel_processor_setup(s) != 0)
+        printf("WARN: bredr processor setup failed in test harness\n");
+    s->hybrid_ble_enabled = 1u;
+    return s;
+}
+
+static void test_ble_hybrid_fanout(void)
+{
+    /* 20 MHz BR/EDR window from ch0: LE RF 0..9 fit (ch37 + data 0-8). */
+    {
+        receiver_session_t *s = make_hybrid_session(0, 20, RECEIVER_BREDR_GRID_BREDR);
+        CHECK_U64("hybrid b0 n20 setup ok",
+                  receiver_ble_channel_processor_setup(s, RECEIVER_BLE_PIPELINE_HYBRID), 0);
+        CHECK_U64("hybrid b0n20 ble ctx count", s->ble_ctx_count, 10u);
+        CHECK_U64("hybrid b0n20 ctx0 ch", s->ble_ctx[0].channel_index, 37u);
+        CHECK_U64("hybrid b0n20 ctx1 ch", s->ble_ctx[1].channel_index, 0u);
+        CHECK_U64("hybrid b0n20 ctx9 ch", s->ble_ctx[9].channel_index, 8u);
+        CHECK_U64("hybrid b0n20 ctx0 active", s->ble_ctx[0].active, 1u);
+        CHECK_U64("hybrid b0n20 ctx9 active", s->ble_ctx[9].active, 1u);
+        receiver_ble_channel_processor_destroy(s);
+        receiver_bredr_channel_processor_destroy(s);
+        receiver_session_destroy(s);
+    }
+
+    /* 8 MHz window from ch2: LE RF 1..4 fit (data ch 0-3, no advertising). */
+    {
+        receiver_session_t *s = make_hybrid_session(2, 8, RECEIVER_BREDR_GRID_BREDR);
+        CHECK_U64("hybrid b2 n8 setup ok",
+                  receiver_ble_channel_processor_setup(s, RECEIVER_BLE_PIPELINE_HYBRID), 0);
+        CHECK_U64("hybrid b2n8 ble ctx count", s->ble_ctx_count, 4u);
+        CHECK_U64("hybrid b2n8 ctx0 ch", s->ble_ctx[0].channel_index, 0u);
+        CHECK_U64("hybrid b2n8 ctx3 ch", s->ble_ctx[3].channel_index, 3u);
+        receiver_ble_channel_processor_destroy(s);
+        receiver_bredr_channel_processor_destroy(s);
+        receiver_session_destroy(s);
+    }
+
+    /* LE grid (window widened by 1 MHz, whole-MHz LO): same LE set as the
+     * BR/EDR grid for the equivalent span. */
+    {
+        receiver_session_t *s = make_hybrid_session(0, 19, RECEIVER_BREDR_GRID_LE);
+        CHECK_U64("hybrid LE-grid b0 n19 setup ok",
+                  receiver_ble_channel_processor_setup(s, RECEIVER_BLE_PIPELINE_HYBRID), 0);
+        CHECK_U64("hybrid LE b0n19 ble ctx count", s->ble_ctx_count, 10u);
+        CHECK_U64("hybrid LE b0n19 ctx0 ch", s->ble_ctx[0].channel_index, 37u);
+        receiver_ble_channel_processor_destroy(s);
+        receiver_bredr_channel_processor_destroy(s);
+        receiver_session_destroy(s);
+    }
+}
+
 int main(void)
 {
     test_bredr_grid_layout();
     test_ble_session_layout();
+    test_ble_hybrid_fanout();
 
     if (g_failures)
     {

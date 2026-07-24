@@ -73,7 +73,8 @@ static int receiver_ble_setup_channel_dsp(ble_channel_processor_t *ble,
     if (!ble->demod)
         return -1;
 
-    ble_bitstream_decoder_init(&ble->proc, (uint8_t)ble->channel_index);
+    ble_bitstream_decoder_init(&ble->proc, (uint8_t)ble->channel_index,
+                               &ble->session->ble_store);
     ble->prev_status = BLE_SEARCHING;
     ble->pkt_start_sample = -1;
     if (sample_reader_init(&ble->reader, &ble->session->sample_dispatcher) != 0)
@@ -83,34 +84,41 @@ static int receiver_ble_setup_channel_dsp(ble_channel_processor_t *ble,
     return 0;
 }
 
-static int receiver_ble_setup_hybrid_channel(receiver_session_t *session)
+/* Fan BLE processors out over every LE RF channel fully inside the bredr
+ * capture span (advertising and data alike; the unified decoder handles
+ * both). Channel centers, offsets, and decimation all derive from the bredr
+ * layout (LO + sample rate), so the set follows the movable capture window. */
+static int receiver_ble_setup_hybrid_channels(receiver_session_t *session)
 {
-    ble_channel_processor_t *ble = &session->ble_ctx[0];
-    memset(ble, 0, sizeof(*ble));
-    ble->session = session;
-    ble->pipeline = RECEIVER_BLE_PIPELINE_HYBRID;
-    session->ble_ctx_count = 1u;
-
-    /* Derive everything from the bredr layout (LO + sample rate) and the
-     * configured advertising channel instead of fixed constants, so the
-     * worker follows the movable capture window. */
-    uint8_t ble_channel = session->hybrid_config.ble_channel;
-    uint32_t adv_freq_hz = BLE_CH37_FREQ_HZ;
-    if (ble_channel == BLE_CH38_INDEX)
-        adv_freq_hz = BLE_CH38_FREQ_HZ;
-    else if (ble_channel == BLE_CH39_INDEX)
-        adv_freq_hz = BLE_CH39_FREQ_HZ;
-
-    unsigned int decimation = session->bredr_decim_factor;
-    if (decimation == 0u)
+    if (session->bredr_decim_factor == 0u)
         return -1;
 
-    double offset_hz = (double)adv_freq_hz - (double)session->bredr_lo_freq_hz;
-    ble->center_frequency_hz = adv_freq_hz;
-    ble->channel_index = (uint16_t)ble_channel;
-    return receiver_ble_setup_channel_dsp(ble, offset_hz,
-                                          session->bredr_sample_rate,
-                                          decimation);
+    session->ble_ctx_count = 0u;
+    for (unsigned int rf = 0; rf < BLE_RF_CHANNEL_COUNT; rf++)
+    {
+        if (!ble_rf_in_capture_span(rf, session->bredr_lo_freq_hz,
+                                    session->bredr_sample_rate))
+            continue;
+        if (session->ble_ctx_count >= RECEIVER_BLE_MAX_CHANNELS)
+            break;
+
+        ble_channel_processor_t *ble = &session->ble_ctx[session->ble_ctx_count];
+        memset(ble, 0, sizeof(*ble));
+        ble->session = session;
+        ble->pipeline = RECEIVER_BLE_PIPELINE_HYBRID;
+        ble->channel_index = ble_channel_number_for_rf(rf);
+        ble->center_frequency_hz = ble_rf_channel_freq_hz(rf);
+
+        double offset_hz =
+            (double)ble->center_frequency_hz - (double)session->bredr_lo_freq_hz;
+        if (receiver_ble_setup_channel_dsp(ble, offset_hz,
+                                           session->bredr_sample_rate,
+                                           session->bredr_decim_factor) != 0)
+            return -1;
+        session->ble_ctx_count++;
+    }
+
+    return 0;
 }
 
 static int receiver_ble_setup_session_channels(receiver_session_t *session)
@@ -135,18 +143,9 @@ static int receiver_ble_setup_session_channels(receiver_session_t *session)
         ble->channel_index = ble_channel_number_for_rf(rf);
         ble->center_frequency_hz = ble_rf_channel_freq_hz(rf);
 
-        if (!ble_rf_is_advertising(rf))
-        {
-            /* Data channel: no DSP work for now. It still gets a reader so
-             * its worker can drain and release blocks. */
-            ble->active = 0u;
-            if (sample_reader_init(&ble->reader, &session->sample_dispatcher) != 0)
-                return -1;
-            ble->reader_initialized = 1u;
-            session->ble_ctx_count++;
-            continue;
-        }
-
+        /* Every channel in the window gets full DSP: the unified framer
+         * decodes advertising PDUs on advertising channels and CRC-gated
+         * data PDUs on data channels. */
         double offset_hz =
             (double)ble->center_frequency_hz - (double)session->ble_lo_freq_hz;
         if (receiver_ble_setup_channel_dsp(ble, offset_hz,
@@ -166,7 +165,7 @@ int receiver_ble_channel_processor_setup(receiver_session_t *session,
         return -1;
 
     if (pipeline == RECEIVER_BLE_PIPELINE_HYBRID)
-        return receiver_ble_setup_hybrid_channel(session);
+        return receiver_ble_setup_hybrid_channels(session);
 
     return receiver_ble_setup_session_channels(session);
 }
@@ -205,7 +204,7 @@ void receiver_ble_channel_processor_destroy(receiver_session_t *session)
 void receiver_ble_channel_processor_process(ble_channel_processor_t *ble,
                                             sample_block_t *blk)
 {
-    /* Data channels do no work: their worker just drains and releases. */
+    /* Inactive processors (none in current setups) just drain and release. */
     if (!ble->active)
         return;
 

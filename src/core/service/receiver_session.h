@@ -12,6 +12,7 @@
 #include "bredr_display.h"
 #include "bredr_bitstream_decoder.h"
 #include "ble_bitstream_decoder.h"
+#include "ble_piconet.h"
 #include "radio_common.h"
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
@@ -98,8 +99,8 @@ typedef struct
     uint32_t input_sample_rate_hz;  /* wideband rate feeding this channel */
     uint32_t center_frequency_hz;
     uint16_t channel_index;
-    /* 1 = decode this channel (advertising); 0 = idle (data channels do no
-     * work until LE data-channel support lands). */
+    /* 1 = decode this channel (all channels in the window are decoded;
+     * the unified framer handles advertising and data PDUs). */
     unsigned int active;
     unsigned int sample_scale;
     ble_status_t prev_status;
@@ -113,8 +114,8 @@ typedef struct
 {
     /* Capture window in LE RF channels: le_channel_count consecutive RF
      * channels (1..RECEIVER_BLE_MAX_CHANNELS) starting at bottom_le_channel
-     * (0..39). The radio tunes to the window center (a whole-MHz LO); only
-     * advertising RF channels (0/12/39) are decoded, the rest stay idle. */
+     * (0..39). The radio tunes to the window center (a whole-MHz LO); every
+     * channel in the window is decoded (advertising and data alike). */
     unsigned int bottom_le_channel;
     unsigned int le_channel_count;
     radio_device_type_t device_type;
@@ -152,15 +153,14 @@ typedef struct
 {
     /* BR/EDR side: channel_count processors covering a window of
      * channel_count (BR/EDR grid) or channel_count+1 (LE grid) MHz starting
-     * at bottom_channel. BLE side: the single advertising channel (37/38/39)
-     * whose center lies inside the window, or 0 to leave the BLE worker
-     * idle (no advertising channel is fully inside the window). At most one
-     * advertising channel fits any <=20 MHz window, so one worker suffices.
-     */
+     * at bottom_channel. BLE side: when ble_enabled is nonzero, every LE
+     * channel whose center is fully inside the capture window gets a
+     * processor (advertising and data alike, via the unified decoder);
+     * 0 disables BLE processing. */
     unsigned int channel_count;
     unsigned int bottom_channel;
     unsigned int le_grid;      /* RECEIVER_BREDR_GRID_* */
-    uint8_t ble_channel;       /* 37/38/39, or 0 = BLE idle */
+    int ble_enabled;
     radio_device_type_t device_type;
     const char *device_id;
     int debug;
@@ -217,6 +217,7 @@ struct receiver_session
 
     receiver_ble_config_t ble_config;
     receiver_ble_callbacks_t ble_callbacks;
+    ble_piconet_store_t ble_store;
     ble_channel_processor_t *ble_ctx;
     unsigned int ble_ctx_count;
     pthread_t *ble_worker_threads;

@@ -59,37 +59,37 @@ static void fmt_addr_plain(char *out, size_t out_sz, const ble_address_t *addr)
     ble_format_addr(out, addr->addr); /* writes exactly 17 chars + NUL */
 }
 
-static void set_src_dst(backend_row_t *row, const ble_packet_t *pkt)
+static void set_src_dst(backend_row_t *row, const ble_adv_pdu_t *adv)
 {
-    const uint8_t t = (uint8_t)(pkt->pdu_type & 0x0Fu);
+    const uint8_t t = (uint8_t)(adv->pdu_type & 0x0Fu);
     switch (t)
     {
     case BLE_PDU_ADV_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.adv_ind.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_ind.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "Broadcast");
         break;
     case BLE_PDU_ADV_DIRECT_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.adv_direct_ind.adv_addr);
-        fmt_addr_plain(row->dst, sizeof(row->dst), &pkt->payload.adv_direct_ind.target_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_direct_ind.adv_addr);
+        fmt_addr_plain(row->dst, sizeof(row->dst), &adv->payload.adv_direct_ind.target_addr);
         break;
     case BLE_PDU_ADV_NONCONN_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.adv_nonconn_ind.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_nonconn_ind.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "Broadcast");
         break;
     case BLE_PDU_SCAN_REQ:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.scan_req.scanner_addr);
-        fmt_addr_plain(row->dst, sizeof(row->dst), &pkt->payload.scan_req.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.scan_req.scanner_addr);
+        fmt_addr_plain(row->dst, sizeof(row->dst), &adv->payload.scan_req.adv_addr);
         break;
     case BLE_PDU_SCAN_RSP:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.scan_rsp.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.scan_rsp.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "--");
         break;
     case BLE_PDU_CONNECT_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.connect_ind.init_addr);
-        fmt_addr_plain(row->dst, sizeof(row->dst), &pkt->payload.connect_ind.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.connect_ind.init_addr);
+        fmt_addr_plain(row->dst, sizeof(row->dst), &adv->payload.connect_ind.adv_addr);
         break;
     case BLE_PDU_ADV_SCAN_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.adv_scan_ind.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_scan_ind.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "Broadcast");
         break;
     default:
@@ -99,26 +99,26 @@ static void set_src_dst(backend_row_t *row, const ble_packet_t *pkt)
     }
 }
 
-static const uint8_t *adv_data_for(const ble_packet_t *pkt, const uint8_t **out, unsigned int *len)
+static const uint8_t *adv_data_for(const ble_adv_pdu_t *adv, const uint8_t **out, unsigned int *len)
 {
-    const uint8_t t = (uint8_t)(pkt->pdu_type & 0x0Fu);
+    const uint8_t t = (uint8_t)(adv->pdu_type & 0x0Fu);
     switch (t)
     {
     case BLE_PDU_ADV_IND:
-        *out = pkt->payload.adv_ind.adv_data;
-        *len = pkt->payload.adv_ind.adv_data_len;
+        *out = adv->payload.adv_ind.adv_data;
+        *len = adv->payload.adv_ind.adv_data_len;
         return *out;
     case BLE_PDU_ADV_NONCONN_IND:
-        *out = pkt->payload.adv_nonconn_ind.adv_data;
-        *len = pkt->payload.adv_nonconn_ind.adv_data_len;
+        *out = adv->payload.adv_nonconn_ind.adv_data;
+        *len = adv->payload.adv_nonconn_ind.adv_data_len;
         return *out;
     case BLE_PDU_SCAN_RSP:
-        *out = pkt->payload.scan_rsp.adv_data;
-        *len = pkt->payload.scan_rsp.adv_data_len;
+        *out = adv->payload.scan_rsp.adv_data;
+        *len = adv->payload.scan_rsp.adv_data_len;
         return *out;
     case BLE_PDU_ADV_SCAN_IND:
-        *out = pkt->payload.adv_scan_ind.adv_data;
-        *len = pkt->payload.adv_scan_ind.adv_data_len;
+        *out = adv->payload.adv_scan_ind.adv_data;
+        *len = adv->payload.adv_scan_ind.adv_data_len;
         return *out;
     default:
         *out = NULL;
@@ -143,11 +143,12 @@ static void add_detail(backend_row_t *row, const char *key, const char *fmt, ...
 static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
                          const rx_metadata_t *meta, const ble_frame_t *frame)
 {
-    const uint8_t t = (uint8_t)(pkt->pdu_type & 0x0Fu);
+    const ble_adv_pdu_t *adv = &pkt->pdu.adv;
+    const uint8_t t = (uint8_t)(adv->pdu_type & 0x0Fu);
     char buf[64];
 
     add_detail(row, "PDU Type", "%s (%s)",
-               ble_pdu_type_name(pkt->pdu_type), ble_pdu_type_desc(pkt->pdu_type));
+               ble_pdu_type_name(adv->pdu_type), ble_pdu_type_desc(adv->pdu_type));
     snprintf(buf, sizeof(buf), "%u", meta->channel_index);
     add_detail(row, "Channel", "%s", buf);
     snprintf(buf, sizeof(buf), "0x%08" PRIX32, frame->access_address);
@@ -157,49 +158,49 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
     switch (t)
     {
     case BLE_PDU_ADV_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "TargetA", "--");
-        add_detail(row, "AdvData Length", "%u", pkt->payload.adv_ind.adv_data_len);
+        add_detail(row, "AdvData Length", "%u", adv->payload.adv_ind.adv_data_len);
         break;
     case BLE_PDU_ADV_DIRECT_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_direct_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_direct_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_direct_ind.target_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_direct_ind.target_addr);
         add_detail(row, "TargetA", "%s", buf);
         add_detail(row, "AdvData Length", "0");
         break;
     case BLE_PDU_ADV_NONCONN_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_nonconn_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_nonconn_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "TargetA", "--");
-        add_detail(row, "AdvData Length", "%u", pkt->payload.adv_nonconn_ind.adv_data_len);
+        add_detail(row, "AdvData Length", "%u", adv->payload.adv_nonconn_ind.adv_data_len);
         break;
     case BLE_PDU_SCAN_REQ:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.scan_req.scanner_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.scan_req.scanner_addr);
         add_detail(row, "ScanA", "%s", buf);
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.scan_req.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.scan_req.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "AdvData Length", "0");
         break;
     case BLE_PDU_SCAN_RSP:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.scan_rsp.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.scan_rsp.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "ScanA", "--");
-        add_detail(row, "AdvData Length", "%u", pkt->payload.scan_rsp.adv_data_len);
+        add_detail(row, "AdvData Length", "%u", adv->payload.scan_rsp.adv_data_len);
         break;
     case BLE_PDU_CONNECT_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.connect_ind.init_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.connect_ind.init_addr);
         add_detail(row, "InitA", "%s", buf);
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.connect_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.connect_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
-        add_detail(row, "LLData Length", "%u", pkt->payload.connect_ind.ll_data_len);
+        add_detail(row, "LLData Length", "%u", adv->payload.connect_ind.ll_data_len);
         break;
     case BLE_PDU_ADV_SCAN_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_scan_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_scan_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "TargetA", "--");
-        add_detail(row, "AdvData Length", "%u", pkt->payload.adv_scan_ind.adv_data_len);
+        add_detail(row, "AdvData Length", "%u", adv->payload.adv_scan_ind.adv_data_len);
         break;
     default:
         add_detail(row, "Payload", "(reserved/unknown)");
@@ -213,7 +214,7 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
     /* AdvData TLV breakdown. */
     const uint8_t *ad = NULL;
     unsigned int ad_len = 0u;
-    adv_data_for(pkt, &ad, &ad_len);
+    adv_data_for(adv, &ad, &ad_len);
     if (ad && ad_len)
     {
         unsigned int i = 0u;
@@ -323,6 +324,11 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
     if (bs->enforce_crc && !ble_verify_crc(&pkt))
         return;
 
+    /* Data-channel PDUs are not rendered yet: the GUI only tunes
+     * advertising channels today, so this cannot happen in practice. */
+    if (!pkt.is_adv_pdu)
+        return;
+
     backend_row_t row;
     memset(&row, 0, sizeof(row));
     row.no = ++bs->packet_count;
@@ -336,12 +342,12 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
     snprintf(row.proto, sizeof(row.proto), "LE");
     row.ch_idx = m->channel_index;
     snprintf(row.addr, sizeof(row.addr), "0x%08" PRIX32, event->frame.access_address);
-    snprintf(row.type, sizeof(row.type), "%s", ble_pdu_type_name(pkt.pdu_type));
+    snprintf(row.type, sizeof(row.type), "%s", ble_pdu_type_name(pkt.pdu.adv.pdu_type));
     snprintf(row.info, sizeof(row.info), "%s, CRC %s",
-             ble_pdu_type_desc(pkt.pdu_type),
+             ble_pdu_type_desc(pkt.pdu.adv.pdu_type),
              ble_verify_crc(&pkt) ? "PASS" : "FAIL");
 
-    set_src_dst(&row, &pkt);
+    set_src_dst(&row, &pkt.pdu.adv);
     build_detail(&row, &pkt, m, &event->frame);
     build_raw(&row, &event->frame);
 
@@ -757,7 +763,9 @@ int backend_session_run_hybrid(backend_session_t *session,
     cfg.bottom_channel = bottom_channel;
     cfg.le_grid = (le_grid == BACKEND_GRID_LE) ? RECEIVER_BREDR_GRID_LE
                                                : RECEIVER_BREDR_GRID_BREDR;
-    cfg.ble_channel = (ble_channel >= 37u && ble_channel <= 39u) ? ble_channel : 0u;
+    /* The session fans BLE processors out over every LE channel inside the
+     * window; the picked advertising channel now acts as a BLE on/off. */
+    cfg.ble_enabled = (ble_channel >= 37u && ble_channel <= 39u);
     cfg.device_type = dev_type;
     cfg.device_id = device_id;
     cfg.debug = 0;

@@ -14,8 +14,8 @@
 static unsigned long g_packet_count = 0;
 static int g_debug = 0;
 static int g_enforce_crc = 1;   /* drop BLE frames whose CRC fails; default on */
-static uint8_t g_ble_channel = BLE_CH37_INDEX;
-static unsigned int g_ble_rf = BLE_RF_ADV0_INDEX;   /* LE RF channel of g_ble_channel */
+static unsigned int g_num_le_channels = RECEIVER_BLE_MAX_CHANNELS;
+static unsigned int g_bottom_le_channel = BLE_CH37_INDEX;   /* LE 37 = RF 0 */
 static receiver_session_t *g_session = NULL;
 
 static const app_output_mode_option_t s_output_modes[] = {
@@ -25,44 +25,47 @@ static const app_output_mode_option_t s_output_modes[] = {
 
 static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
 
-static int parse_ble_channel(const char *arg, uint8_t *out_channel, unsigned int *out_rf)
+static int parse_channel_count(const char *arg, unsigned int *out_channels)
 {
-    if (!arg || !out_channel || !out_rf)
+    if (!arg || !out_channels)
         return -1;
 
-    char *endptr = NULL;
-    unsigned long ch = strtoul(arg, &endptr, 10);
-    if (*arg == '\0' || !endptr || *endptr != '\0')
+    char *end = NULL;
+    unsigned long value = strtoul(arg, &end, 0);
+    if (end == arg || *end != '\0' ||
+        value < 1ul || value > (unsigned long)RECEIVER_BLE_MAX_CHANNELS)
         return -1;
 
-    switch ((uint8_t)ch)
-    {
-    case BLE_CH37_INDEX:
-        *out_channel = BLE_CH37_INDEX;
-        *out_rf = BLE_RF_ADV0_INDEX;
-        return 0;
-    case BLE_CH38_INDEX:
-        *out_channel = BLE_CH38_INDEX;
-        *out_rf = BLE_RF_ADV1_INDEX;
-        return 0;
-    case BLE_CH39_INDEX:
-        *out_channel = BLE_CH39_INDEX;
-        *out_rf = BLE_RF_ADV2_INDEX;
-        return 0;
-    default:
+    *out_channels = (unsigned int)value;
+    return 0;
+}
+
+static int parse_bottom_channel(const char *arg, unsigned int *out_bottom_channel)
+{
+    if (!arg || !out_bottom_channel)
         return -1;
-    }
+
+    char *end = NULL;
+    unsigned long value = strtoul(arg, &end, 0);
+    if (end == arg || *end != '\0' || value > 39ul)
+        return -1;
+
+    *out_bottom_channel = (unsigned int)value;
+    return 0;
 }
 
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [-v|--view full|summary] [-b|--ble-channel 37|38|39] "
+            "Usage: %s [-v|--view full|summary] [-c|--channels N] [-b|--bottom-channel CH] "
             "[-d|--device [<type>:<id>]] [--debug] "
             "[--enforce-crc on|off]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
-    fprintf(stderr, "  %-30s BLE advertising channel (37, 38, or 39; default: 37)\n",
-            "-b, --ble-channel 37|38|39");
+    fprintf(stderr, "  %-30s Number of consecutive LE RF channels (1-%u, default: %u)\n",
+            "-c, --channels N",
+            RECEIVER_BLE_MAX_CHANNELS, RECEIVER_BLE_MAX_CHANNELS);
+    fprintf(stderr, "  %-30s Bottom LE channel of the window (0-39, default: 37)\n",
+            "-b, --bottom-channel CH");
     app_print_device_usage_line();
     fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
     fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "--debug");
@@ -144,7 +147,8 @@ int main(int argc, char *argv[])
 {
     static const struct option long_opts[] = {
         {"view", required_argument, NULL, 'v'},
-        {"ble-channel", required_argument, NULL, 'b'},
+        {"channels", required_argument, NULL, 'c'},
+        {"bottom-channel", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
         {"version", no_argument, NULL, 'V'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
@@ -158,7 +162,7 @@ int main(int argc, char *argv[])
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:b:d::Vh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:c:b:d::Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -172,10 +176,20 @@ int main(int argc, char *argv[])
                 return EXIT_FAILURE;
             }
             break;
-        case 'b':
-            if (parse_ble_channel(optarg, &g_ble_channel, &g_ble_rf) != 0)
+        case 'c':
+            if (parse_channel_count(optarg, &g_num_le_channels) != 0)
             {
-                fprintf(stderr, "Invalid BLE channel: %s (expected 37, 38, or 39)\n", optarg);
+                fprintf(stderr, "Invalid --channels value: %s (expected 1-%u)\n",
+                        optarg, RECEIVER_BLE_MAX_CHANNELS);
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            break;
+        case 'b':
+            if (parse_bottom_channel(optarg, &g_bottom_le_channel) != 0)
+            {
+                fprintf(stderr, "Invalid --bottom-channel value: %s (expected 0-39)\n",
+                        optarg);
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
@@ -237,12 +251,40 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("BLE Advertising Packet Detector\n");
-    printf("================================\n");
-    printf("Channel     : %u (%.3f MHz)\n", g_ble_channel,
-           (double)ble_rf_channel_freq_hz(g_ble_rf) / 1e6);
-    printf("LO          : %.1f MHz, 4 Msps (channelized)\n",
-           (double)ble_rf_channel_freq_hz(g_ble_rf) / 1e6);
+    unsigned int bottom_rf = ble_rf_for_channel_number(g_bottom_le_channel);
+    if (bottom_rf >= BLE_RF_CHANNEL_COUNT ||
+        bottom_rf + g_num_le_channels > BLE_RF_CHANNEL_COUNT)
+    {
+        fprintf(stderr,
+                "Invalid window: LE ch%u with %u channel%s exceeds the LE band.\n",
+                g_bottom_le_channel, g_num_le_channels,
+                g_num_le_channels == 1u ? "" : "s");
+        return EXIT_FAILURE;
+    }
+
+    unsigned int span_mhz = 2u * g_num_le_channels;
+    unsigned int rate_mhz = (span_mhz == 2u) ? 4u : span_mhz;
+    double lo_mhz = 2401.0 + 2.0 * (double)bottom_rf + (double)g_num_le_channels;
+
+    printf("BLE Packet Detector\n");
+    printf("=====================\n");
+    printf("Window      : %u LE channel%s from ch%u (RF %u-%u):",
+           g_num_le_channels, g_num_le_channels == 1u ? "" : "s",
+           g_bottom_le_channel, bottom_rf, bottom_rf + g_num_le_channels - 1u);
+    for (unsigned int rf = bottom_rf; rf < bottom_rf + g_num_le_channels; rf++)
+        printf(" %u", (unsigned int)ble_channel_number_for_rf(rf));
+    printf("\n");
+    printf("Advertising :");
+    {
+        unsigned int adv_found = 0u;
+        for (unsigned int rf = bottom_rf; rf < bottom_rf + g_num_le_channels; rf++)
+            if (ble_rf_is_advertising(rf))
+                printf(" %u", (unsigned int)ble_channel_number_for_rf(rf)), adv_found++;
+        if (!adv_found)
+            printf(" (none in window)");
+    }
+    printf("\n");
+    printf("LO          : %.1f MHz, %u Msps (channelized)\n", lo_mhz, rate_mhz);
     printf("View mode   : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
@@ -256,12 +298,12 @@ int main(int argc, char *argv[])
     printf("Enforce CRC : %s\n", g_enforce_crc ? "on" : "off");
     app_install_sigint_handler(&g_session);
 
-    /* Single-channel window on the selected advertising channel. The
-     * session tunes a whole-MHz LO at the channel center (4 Msps for the
-     * 2 MHz span) and channelizes down to 2 Msps. */
+    /* Window of consecutive LE RF channels. The session tunes a whole-MHz
+     * LO at the window center and channelizes each channel down to 2 Msps;
+     * the unified decoder handles advertising and data PDUs alike. */
     receiver_ble_config_t config = {
-        .bottom_le_channel = g_ble_rf,
-        .le_channel_count = 1u,
+        .bottom_le_channel = bottom_rf,
+        .le_channel_count = g_num_le_channels,
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
@@ -278,8 +320,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    printf("Monitoring BLE Channel %u (%.3f GHz) for advertising packets...\n",
-           g_ble_channel, (double)ble_rf_channel_freq_hz(g_ble_rf) / 1e9);
+    printf("Monitoring %u LE channel%s from ch%u...\n",
+           g_num_le_channels, g_num_le_channels == 1u ? "" : "s",
+           g_bottom_le_channel);
     printf("Press Ctrl+C to exit\n\n");
         int result = receiver_session_run_ble(g_session, &config, &callbacks);
     receiver_session_destroy(g_session);
@@ -295,7 +338,9 @@ int main(int argc, char *argv[])
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
     printf("  Debug mode     : %s\n", g_debug ? "enabled" : "disabled");
-    printf("  BLE channel    : %u (%.3f MHz)\n", g_ble_channel, (double)ble_rf_channel_freq_hz(g_ble_rf) / 1e6);
+    printf("  Window         : %u LE channel%s from ch%u (RF %u-%u)\n",
+           g_num_le_channels, g_num_le_channels == 1u ? "" : "s",
+           g_bottom_le_channel, bottom_rf, bottom_rf + g_num_le_channels - 1u);
     printf("  Enforce CRC    : %s\n", g_enforce_crc ? "on" : "off");
     printf("  Total packets  : %lu\n", g_packet_count);
 

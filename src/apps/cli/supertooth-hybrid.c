@@ -126,24 +126,22 @@ static int parse_bottom_channel(const char *arg, unsigned int *out_bottom_channe
     return 0;
 }
 
-/* The single BLE advertising channel whose center lies inside the capture
- * window (at most one fits a <=20 MHz window), or 0 when none does — in
- * which case the hybrid BLE worker stays idle. */
-static uint8_t ble_adv_channel_for_window(unsigned int bottom, unsigned int count)
+/* LE channels whose centers lie fully inside the capture span (same rule
+ * the session's BLE fan-out uses): returns the count and collects the
+ * advertising channel numbers among them for display. */
+static unsigned int ble_channels_in_window(uint64_t lo_hz, uint32_t sample_rate,
+                                           uint8_t adv_out[3])
 {
-    static const struct { uint8_t channel; uint32_t freq_hz; } adv[] = {
-        { BLE_CH37_INDEX, BLE_CH37_FREQ_HZ },
-        { BLE_CH38_INDEX, BLE_CH38_FREQ_HZ },
-        { BLE_CH39_INDEX, BLE_CH39_FREQ_HZ },
-    };
-    double left_hz = (2401.5 + bottom) * 1e6;
-    double right_hz = left_hz + count * 1e6;
-    for (unsigned int i = 0; i < sizeof(adv) / sizeof(adv[0]); i++)
+    unsigned int count = 0u, adv_count = 0u;
+    for (unsigned int rf = 0; rf < BLE_RF_CHANNEL_COUNT; rf++)
     {
-        if ((double)adv[i].freq_hz >= left_hz && (double)adv[i].freq_hz <= right_hz)
-            return adv[i].channel;
+        if (!ble_rf_in_capture_span(rf, lo_hz, sample_rate))
+            continue;
+        count++;
+        if (ble_rf_is_advertising(rf) && adv_count < 3u)
+            adv_out[adv_count++] = ble_channel_number_for_rf(rf);
     }
-    return 0u;
+    return count;
 }
 
 static void print_usage(const char *argv0)
@@ -330,22 +328,26 @@ int main(int argc, char *argv[])
         }
     }
 
-    uint8_t ble_channel =
-        ble_adv_channel_for_window(g_bottom_bredr_channel, g_num_bredr_channels);
     unsigned int sample_rate =
         (g_num_bredr_channels == 2u) ? 4000000u : g_num_bredr_channels * 1000000u;
     double lo_mhz = 2402.0 + g_bottom_bredr_channel + (g_num_bredr_channels - 1u) / 2.0;
 
-    printf("Supertooth Hybrid: BR/EDR ch%u-%u", g_bottom_bredr_channel,
-           g_bottom_bredr_channel + g_num_bredr_channels - 1u);
-    if (ble_channel)
-        printf(" + BLE ch%u\n", ble_channel);
+    uint8_t ble_adv[3] = {0u, 0u, 0u};
+    unsigned int ble_count =
+        ble_channels_in_window((uint64_t)(lo_mhz * 1e6), sample_rate, ble_adv);
+
+    printf("Supertooth Hybrid: BR/EDR ch%u-%u + %u BLE channel%s (adv:",
+           g_bottom_bredr_channel,
+           g_bottom_bredr_channel + g_num_bredr_channels - 1u,
+           ble_count, ble_count == 1u ? "" : "s");
+    if (ble_adv[0])
+        for (unsigned int i = 0; i < 3u && ble_adv[i]; i++)
+            printf(" %u", ble_adv[i]);
     else
-        printf(" (no BLE advertising channel in window — BLE idle)\n");
-    printf("LO: %.1f MHz, %u BR/EDR channels%s, %u MHz bandwidth\n",
-           lo_mhz, g_num_bredr_channels,
-           ble_channel ? " + 1 BLE channel" : "",
-           sample_rate / 1000000u);
+        printf(" none in window");
+    printf(")\n");
+    printf("LO: %.1f MHz, %u BR/EDR + %u BLE channels, %u MHz bandwidth\n",
+           lo_mhz, g_num_bredr_channels, ble_count, sample_rate / 1000000u);
     printf("View mode   : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
@@ -366,7 +368,7 @@ int main(int argc, char *argv[])
         .channel_count = g_num_bredr_channels,
         .bottom_channel = g_bottom_bredr_channel,
         .le_grid = RECEIVER_BREDR_GRID_BREDR,
-        .ble_channel = ble_channel,
+        .ble_enabled = 1,
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,

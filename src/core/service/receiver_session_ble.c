@@ -73,6 +73,10 @@ int receiver_session_run_ble(receiver_session_t *session,
     session->ble_worker_running = 0u;
     session->ble_shutdown_requested = 0u;
     sample_dispatcher_reset(&session->sample_dispatcher);
+    /* Fresh connection state per run: confirmed CRCInits from a previous
+     * session must not gate packets in this one. */
+    ble_piconet_store_free(&session->ble_store);
+    ble_piconet_store_init(&session->ble_store);
     if (callbacks)
         session->ble_callbacks = *callbacks;
     else

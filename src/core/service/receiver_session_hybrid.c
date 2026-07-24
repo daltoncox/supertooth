@@ -70,11 +70,13 @@ static void receiver_hybrid_bredr_bridge(const bredr_event_t *event,
 static int receiver_hybrid_start_thread_pool(receiver_session_t *session)
 {
     unsigned int bredr_count = session->bredr_config.channel_count;
+    unsigned int ble_count =
+        session->hybrid_ble_enabled ? session->ble_ctx_count : 0u;
 
     session->hybrid_shutdown_requested = 0u;
     session->hybrid_worker_count = 0u;
     session->hybrid_worker_threads =
-        (pthread_t *)calloc(bredr_count + 1u, sizeof(pthread_t));
+        (pthread_t *)calloc(bredr_count + ble_count, sizeof(pthread_t));
     if (!session->hybrid_worker_threads)
         return -1;
 
@@ -86,10 +88,10 @@ static int receiver_hybrid_start_thread_pool(receiver_session_t *session)
         session->hybrid_worker_count++;
     }
 
-    if (session->hybrid_ble_enabled)
+    for (unsigned int i = 0; i < ble_count; i++)
     {
-        if (pthread_create(&session->hybrid_worker_threads[bredr_count], NULL,
-                           receiver_hybrid_ble_worker, session->ble_ctx) != 0)
+        if (pthread_create(&session->hybrid_worker_threads[bredr_count + i], NULL,
+                           receiver_hybrid_ble_worker, &session->ble_ctx[i]) != 0)
             return -1;
         session->hybrid_worker_count++;
     }
@@ -103,7 +105,8 @@ static void receiver_hybrid_stop_thread_pool(receiver_session_t *session)
     for (unsigned int i = 0; i < session->bredr_config.channel_count; i++)
         sample_reader_signal(&session->bredr_ctx[i].reader);
     if (session->hybrid_ble_enabled)
-        sample_reader_signal(&session->ble_ctx->reader);
+        for (unsigned int i = 0; i < session->ble_ctx_count; i++)
+            sample_reader_signal(&session->ble_ctx[i].reader);
     for (unsigned int i = 0; i < session->hybrid_worker_count; i++)
         pthread_join(session->hybrid_worker_threads[i], NULL);
     free(session->hybrid_worker_threads);
@@ -138,10 +141,13 @@ int receiver_session_run_hybrid(receiver_session_t *session,
     session->hybrid_shutdown_requested = 0;
     session->hybrid_worker_threads = NULL;
     session->hybrid_worker_count = 0u;
-    /* The BLE worker only runs when an advertising channel's center lies
-     * inside the capture window (ble_channel != 0). */
-    session->hybrid_ble_enabled =
-        (config->ble_channel >= 37u && config->ble_channel <= 39u) ? 1u : 0u;
+    /* Fresh connection state per run (CONNECT_IND seeds and recovered
+     * CRCInits from a previous session must not gate packets in this one). */
+    ble_piconet_store_free(&session->ble_store);
+    ble_piconet_store_init(&session->ble_store);
+    /* BLE workers fan out over every LE channel inside the capture window
+     * when BLE is enabled. */
+    session->hybrid_ble_enabled = config->ble_enabled ? 1u : 0u;
     if (callbacks)
         session->hybrid_callbacks = *callbacks;
     else
@@ -161,6 +167,9 @@ int receiver_session_run_hybrid(receiver_session_t *session,
         bredr_piconet_store_free(&session->bredr_store);
         return -1;
     }
+    /* No LE channel fully inside the window (defensive): stay BR/EDR-only. */
+    if (session->hybrid_ble_enabled && session->ble_ctx_count == 0u)
+        session->hybrid_ble_enabled = 0u;
 
     if (receiver_hybrid_start_thread_pool(session) != 0)
     {
