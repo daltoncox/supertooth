@@ -24,11 +24,11 @@ Rectangle {
         header.deviceID = deviceIdSelector.currentText
     }
 
-    height: 56
+    height: 64
     color: "black"
 
     RowLayout {
-        height: 40
+        height: 48
         // Stretches horizontally
         anchors.left: parent.left
         anchors.right: parent.right
@@ -37,7 +37,7 @@ Rectangle {
         anchors.verticalCenter: parent.verticalCenter
         Layout.alignment: Qt.AlignVCenter
 
-        anchors.leftMargin: 12
+        anchors.leftMargin: 0
         anchors.rightMargin: 12
         spacing: 12
 
