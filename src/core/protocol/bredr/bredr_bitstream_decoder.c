@@ -224,6 +224,7 @@ bredr_status_t bredr_bitstream_decoder_push_bit(bredr_bitstream_decoder_t *proc,
         if (lap == BREDR_LAP_GIAC || lap == BREDR_LAP_LIAC)
         {
             memset(&proc->last_frame, 0, sizeof(proc->last_frame));
+            proc->last_frame.phy = RECEIVER_PHY_BR;
             proc->last_frame.start_bit_index = proc->detected_packet_start_bit;
             proc->last_frame.lap = lap;
             proc->last_frame.ac_errors = ac_errors;
@@ -270,6 +271,7 @@ bredr_status_t bredr_bitstream_decoder_push_bit(bredr_bitstream_decoder_t *proc,
         {
             /* Invalid trailer: shortened access code, no header or payload. */
             memset(&proc->last_frame, 0, sizeof(proc->last_frame));
+            proc->last_frame.phy = RECEIVER_PHY_BR;
             proc->last_frame.start_bit_index = proc->detected_packet_start_bit;
             proc->last_frame.lap = proc->detected_lap;
             proc->last_frame.ac_errors = proc->detected_ac_errors;
@@ -337,6 +339,7 @@ bredr_status_t bredr_bitstream_decoder_push_bit(bredr_bitstream_decoder_t *proc,
     bredr_frame_t *frame = &proc->last_frame;
 
     memset(frame, 0, sizeof(*frame));
+    frame->phy = RECEIVER_PHY_BR;
     frame->start_bit_index = proc->detected_packet_start_bit;
     frame->lap = proc->detected_lap;
     frame->ac_errors = proc->detected_ac_errors;

@@ -13,8 +13,8 @@ Supertooth is a C-based software-defined radio (SDR) project for receiving and d
 It includes three runtime binaries:
 
 1. `supertooth-rx`: BR/EDR multichannel receiver with piconet tracking.
-2. `supertooth-ble`: BLE advertising capture/decoder on channel 37 (2.402 GHz).
-3. `supertooth-hybrid`: simultaneous BR/EDR multichannel + BLE channel 37 processing from a shared stream.
+2. `supertooth-ble`: BLE advertising capture/decoder on a selected advertising channel (37/38/39), channelized from a wideband capture.
+3. `supertooth-hybrid`: simultaneous BR/EDR multichannel + BLE advertising processing from a shared stream (advertising channel derived from the capture window).
 
 ## Prerequisites
 
@@ -93,6 +93,19 @@ Main binaries (require HackRF hardware):
 
 ```bash
 --ble-channel 37|38|39
+```
+
+The BLE session tunes a whole-MHz LO at the channel center and channelizes a
+4 Msps capture down to 2 Msps (the same pipeline the hybrid session uses).
+
+`supertooth-hybrid` additionally supports the same channel-window options as
+`supertooth-rx` (the BLE advertising channel is derived from the window: the
+single advertising channel whose center lies inside it, or the BLE worker
+stays idle when the window covers none):
+
+```bash
+--channels N          # even 2-20, default 20
+--bottom-channel CH   # 0-78, default 0
 ```
 
 ## Architecture

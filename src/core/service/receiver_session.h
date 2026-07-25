@@ -12,6 +12,7 @@
 #include "bredr_display.h"
 #include "bredr_bitstream_decoder.h"
 #include "ble_bitstream_decoder.h"
+#include "radio_common.h"
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
 #include "bredr_piconet.h"
@@ -21,6 +22,9 @@
 #define RECEIVER_BLE_LNA_GAIN 24u
 #define RECEIVER_BLE_VGA_GAIN 18u
 #define RECEIVER_BLE_SAMPLES_PER_SYMBOL 2u
+/* Max LE channel processors in a BLE session: the largest capture window
+ * (RECEIVER_BREDR_MAX_CHANNELS MHz) spans 10 LE channels at 2 MHz spacing. */
+#define RECEIVER_BLE_MAX_CHANNELS (RECEIVER_BREDR_MAX_CHANNELS / 2u)
 
 #define RECEIVER_BREDR_CHANNEL_0_FREQ 2402000000.0
 #define RECEIVER_BREDR_CHANNEL_BW 1000000.0
@@ -38,14 +42,25 @@
 #define RECEIVER_HYBRID_LO_FREQ_HZ 2411500000ULL
 #define RECEIVER_HYBRID_SAMPLE_RATE 20000000u
 
+/* Channel-layout grids for the BR/EDR channelizer. The layout is always N
+ * channels at 1 MHz offsets j-(N-1)/2 around the window-center LO; the grid
+ * only selects the window width and hence the LO alignment:
+ *   - BREDR grid: window = N MHz, LO at a half-MHz frequency.
+ *   - LE grid:    window = N+1 MHz, LO at a whole-MHz frequency; the two
+ *                 BR/EDR channels that would be centered exactly on the
+ *                 Nyquist edges (half cut) get no processor.
+ */
+#define RECEIVER_BREDR_GRID_BREDR 0u
+#define RECEIVER_BREDR_GRID_LE    1u
+
 #define RECEIVER_SOURCE_ID_DEFAULT 0u
 
 typedef struct receiver_session receiver_session_t;
 
 typedef enum
 {
-    RECEIVER_BLE_PIPELINE_DIRECT = 0,
-    RECEIVER_BLE_PIPELINE_HYBRID = 1,
+    RECEIVER_BLE_PIPELINE_SESSION = 0,  /* wideband channelized, BLE session */
+    RECEIVER_BLE_PIPELINE_HYBRID = 1,   /* wideband channelized, hybrid session */
 } receiver_ble_pipeline_t;
 
 typedef struct
@@ -75,32 +90,52 @@ typedef struct
     cpfskdem demod;
     ble_bitstream_decoder_t proc;
     float complex mixed[RECEIVER_BREDR_BUFFER_SIZE];
-    float complex decimated[(unsigned int)(RECEIVER_BREDR_BUFFER_SIZE / RECEIVER_HYBRID_DECIMATION) + 1u];
+    /* Decimation varies with the capture span (2..10), so size for the
+     * worst case (no decimation) rather than RECEIVER_HYBRID_DECIMATION. */
+    float complex decimated[RECEIVER_BREDR_BUFFER_SIZE];
     receiver_ble_pipeline_t pipeline;
     unsigned int input_decimation;
+    uint32_t input_sample_rate_hz;  /* wideband rate feeding this channel */
     uint32_t center_frequency_hz;
     uint16_t channel_index;
+    /* 1 = decode this channel (advertising); 0 = idle (data channels do no
+     * work until LE data-channel support lands). */
+    unsigned int active;
     unsigned int sample_scale;
     ble_status_t prev_status;
     long long pkt_start_sample;
     sample_reader_t reader;
+    unsigned int reader_initialized;
     struct receiver_session *session;
 } ble_channel_processor_t;
 
 typedef struct
 {
-    uint8_t ble_channel;
-    uint64_t lo_freq_hz;
+    /* Capture window in LE RF channels: le_channel_count consecutive RF
+     * channels (1..RECEIVER_BLE_MAX_CHANNELS) starting at bottom_le_channel
+     * (0..39). The radio tunes to the window center (a whole-MHz LO); only
+     * advertising RF channels (0/12/39) are decoded, the rest stay idle. */
+    unsigned int bottom_le_channel;
+    unsigned int le_channel_count;
+    radio_device_type_t device_type;
+    const char *device_id;
     int debug;
+    int enforce_crc;   /* 1 = drop frames whose BLE CRC fails (default on) */
 } receiver_ble_config_t;
 
 typedef struct
 {
     unsigned int channel_count;
     unsigned int bottom_channel;
+    /* RECEIVER_BREDR_GRID_*: BR/EDR grid (default, LO at a half-MHz) or LE
+     * grid (window widened by 1 MHz, LO at a whole MHz, edge channels not
+     * processed). */
+    unsigned int le_grid;
     unsigned int rssi_averaging_window;
     uint32_t lap_filter;
     int lap_filter_enabled;
+    radio_device_type_t device_type;
+    const char *device_id;
     int debug;
 } receiver_bredr_config_t;
 
@@ -115,7 +150,21 @@ typedef struct
 
 typedef struct
 {
+    /* BR/EDR side: channel_count processors covering a window of
+     * channel_count (BR/EDR grid) or channel_count+1 (LE grid) MHz starting
+     * at bottom_channel. BLE side: the single advertising channel (37/38/39)
+     * whose center lies inside the window, or 0 to leave the BLE worker
+     * idle (no advertising channel is fully inside the window). At most one
+     * advertising channel fits any <=20 MHz window, so one worker suffices.
+     */
+    unsigned int channel_count;
+    unsigned int bottom_channel;
+    unsigned int le_grid;      /* RECEIVER_BREDR_GRID_* */
+    uint8_t ble_channel;       /* 37/38/39, or 0 = BLE idle */
+    radio_device_type_t device_type;
+    const char *device_id;
     int debug;
+    int enforce_crc;   /* 1 = drop frames whose BLE CRC fails (default on) */
 } receiver_hybrid_config_t;
 
 typedef struct
@@ -169,9 +218,14 @@ struct receiver_session
     receiver_ble_config_t ble_config;
     receiver_ble_callbacks_t ble_callbacks;
     ble_channel_processor_t *ble_ctx;
-    pthread_t ble_worker_thread;
+    unsigned int ble_ctx_count;
+    pthread_t *ble_worker_threads;
+    unsigned int ble_worker_count;
     unsigned int ble_worker_running;
     unsigned int ble_shutdown_requested;
+    uint64_t ble_lo_freq_hz;
+    unsigned int ble_sample_rate;
+    unsigned int ble_decim_factor;
 
     receiver_bredr_config_t bredr_config;
     receiver_bredr_callbacks_t bredr_callbacks;
@@ -195,6 +249,7 @@ struct receiver_session
     receiver_hybrid_callbacks_t hybrid_callbacks;
     pthread_t *hybrid_worker_threads;
     unsigned int hybrid_worker_count;
+    unsigned int hybrid_ble_enabled;
     unsigned int hybrid_shutdown_requested;
     unsigned long hybrid_total_packets;
 };

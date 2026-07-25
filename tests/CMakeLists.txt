@@ -6,10 +6,14 @@
 # registers them with ctest.
 
 add_subdirectory(bredr)
+add_subdirectory(radio)
+add_subdirectory(service)
 
 set(_supertooth_test_targets
     test_fec_2_3
     test_crc
+    test_radio_list_devices
+    test_channel_layout
 )
 
 add_custom_target(tests)

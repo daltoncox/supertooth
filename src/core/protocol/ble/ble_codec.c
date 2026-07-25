@@ -167,6 +167,7 @@ int ble_decode_frame(const ble_frame_t *frame,
     ble_dewhiten(dewhitened, total_bytes, channel_index);
 
     memset(out, 0, sizeof(*out));
+    out->phy = frame->phy;
     out->preamble = frame->preamble;
     out->access_address = frame->access_address;
     out->pdu_type = dewhitened[0] & 0x0Fu;

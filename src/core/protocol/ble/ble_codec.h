@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "ble_bitstream_decoder.h"
+#include "phy.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -83,6 +84,8 @@ typedef struct
 
 typedef struct
 {
+    /** Physical-layer modulation/coding, propagated from the captured frame. */
+    receiver_phy_t phy;
     uint8_t preamble;
     uint32_t access_address;
     uint8_t pdu_type;

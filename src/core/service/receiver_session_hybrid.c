@@ -69,14 +69,16 @@ static void receiver_hybrid_bredr_bridge(const bredr_event_t *event,
 
 static int receiver_hybrid_start_thread_pool(receiver_session_t *session)
 {
+    unsigned int bredr_count = session->bredr_config.channel_count;
+
     session->hybrid_shutdown_requested = 0u;
     session->hybrid_worker_count = 0u;
     session->hybrid_worker_threads =
-        (pthread_t *)calloc(RECEIVER_BREDR_MAX_CHANNELS + 1u, sizeof(pthread_t));
+        (pthread_t *)calloc(bredr_count + 1u, sizeof(pthread_t));
     if (!session->hybrid_worker_threads)
         return -1;
 
-    for (unsigned int i = 0; i < RECEIVER_BREDR_MAX_CHANNELS; i++)
+    for (unsigned int i = 0; i < bredr_count; i++)
     {
         if (pthread_create(&session->hybrid_worker_threads[i], NULL,
                            receiver_hybrid_bredr_worker, &session->bredr_ctx[i]) != 0)
@@ -84,20 +86,24 @@ static int receiver_hybrid_start_thread_pool(receiver_session_t *session)
         session->hybrid_worker_count++;
     }
 
-    if (pthread_create(&session->hybrid_worker_threads[RECEIVER_BREDR_MAX_CHANNELS], NULL,
-                       receiver_hybrid_ble_worker, session->ble_ctx) != 0)
-        return -1;
+    if (session->hybrid_ble_enabled)
+    {
+        if (pthread_create(&session->hybrid_worker_threads[bredr_count], NULL,
+                           receiver_hybrid_ble_worker, session->ble_ctx) != 0)
+            return -1;
+        session->hybrid_worker_count++;
+    }
 
-    session->hybrid_worker_count++;
     return 0;
 }
 
 static void receiver_hybrid_stop_thread_pool(receiver_session_t *session)
 {
     session->hybrid_shutdown_requested = 1u;
-    for (unsigned int i = 0; i < RECEIVER_BREDR_MAX_CHANNELS; i++)
+    for (unsigned int i = 0; i < session->bredr_config.channel_count; i++)
         sample_reader_signal(&session->bredr_ctx[i].reader);
-    sample_reader_signal(&session->ble_ctx->reader);
+    if (session->hybrid_ble_enabled)
+        sample_reader_signal(&session->ble_ctx->reader);
     for (unsigned int i = 0; i < session->hybrid_worker_count; i++)
         pthread_join(session->hybrid_worker_threads[i], NULL);
     free(session->hybrid_worker_threads);
@@ -115,8 +121,9 @@ int receiver_session_run_hybrid(receiver_session_t *session,
         return -1;
 
     receiver_bredr_config_t bredr_config = {
-        .channel_count = RECEIVER_BREDR_MAX_CHANNELS,
-        .bottom_channel = 0u,
+        .channel_count = config->channel_count,
+        .bottom_channel = config->bottom_channel,
+        .le_grid = config->le_grid,
         .rssi_averaging_window = RECEIVER_BREDR_DEFAULT_RSSI_AVERAGING_WINDOW,
         .lap_filter = 0u,
         .lap_filter_enabled = 0,
@@ -131,6 +138,10 @@ int receiver_session_run_hybrid(receiver_session_t *session,
     session->hybrid_shutdown_requested = 0;
     session->hybrid_worker_threads = NULL;
     session->hybrid_worker_count = 0u;
+    /* The BLE worker only runs when an advertising channel's center lies
+     * inside the capture window (ble_channel != 0). */
+    session->hybrid_ble_enabled =
+        (config->ble_channel >= 37u && config->ble_channel <= 39u) ? 1u : 0u;
     if (callbacks)
         session->hybrid_callbacks = *callbacks;
     else
@@ -142,7 +153,8 @@ int receiver_session_run_hybrid(receiver_session_t *session,
         receiver_bredr_channel_processor_destroy(session);
         return -1;
     }
-    if (receiver_ble_channel_processor_setup(session, RECEIVER_BLE_PIPELINE_HYBRID) != 0)
+    if (session->hybrid_ble_enabled &&
+        receiver_ble_channel_processor_setup(session, RECEIVER_BLE_PIPELINE_HYBRID) != 0)
     {
         receiver_ble_channel_processor_destroy(session);
         receiver_bredr_channel_processor_destroy(session);
@@ -154,20 +166,23 @@ int receiver_session_run_hybrid(receiver_session_t *session,
     {
         if (session->hybrid_worker_threads)
             receiver_hybrid_stop_thread_pool(session);
-        receiver_ble_channel_processor_destroy(session);
+        if (session->hybrid_ble_enabled)
+            receiver_ble_channel_processor_destroy(session);
         receiver_bredr_channel_processor_destroy(session);
         bredr_piconet_store_free(&session->bredr_store);
         return -1;
     }
 
     radio_device_t *device = NULL;
-    int result = radio_open(&device, RADIO_DEVICE_HACKRF,
+    int result = radio_open(&device, config->device_type, config->device_id,
                             &session->sample_dispatcher, session->debug);
     if (result == RADIO_SUCCESS)
     {
+        /* LO/sample rate come from the bredr layout (window center + span),
+         * so the capture follows the configured channel window and grid. */
         radio_stream_config_t radio_config = {
-            .lo_freq_hz = RECEIVER_HYBRID_LO_FREQ_HZ,
-            .sample_rate = RECEIVER_HYBRID_SAMPLE_RATE,
+            .lo_freq_hz = session->bredr_lo_freq_hz,
+            .sample_rate = session->bredr_sample_rate,
             .lna_gain = RECEIVER_BREDR_LNA_GAIN,
             .vga_gain = RECEIVER_BREDR_VGA_GAIN,
         };
@@ -202,10 +217,11 @@ int receiver_session_run_hybrid(receiver_session_t *session,
     {
         memset(stats_out, 0, sizeof(*stats_out));
         stats_out->total_packets = session->hybrid_total_packets;
-        stats_out->bredr_channel_count = RECEIVER_BREDR_MAX_CHANNELS;
+        stats_out->bredr_channel_count = session->bredr_config.channel_count;
     }
 
-    receiver_ble_channel_processor_destroy(session);
+    if (session->hybrid_ble_enabled)
+        receiver_ble_channel_processor_destroy(session);
     receiver_bredr_channel_processor_destroy(session);
     return result;
 }

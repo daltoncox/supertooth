@@ -996,6 +996,7 @@ int bredr_decode_frame(const bredr_frame_t *frame,
         return -1;
 
     memset(out, 0, sizeof(*out));
+    out->phy = frame->phy;
     out->status = BREDR_DECODE_RAW_ONLY;
     out->limit = BREDR_DECODE_LIMIT_NONE;
     out->family = BREDR_PAYLOAD_FAMILY_NONE;

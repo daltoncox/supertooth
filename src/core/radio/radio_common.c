@@ -3,6 +3,7 @@
 #include "hackrf.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 struct radio_device
 {
@@ -10,8 +11,20 @@ struct radio_device
     void *impl;
 };
 
+const char *radio_device_type_name(radio_device_type_t type)
+{
+    switch (type)
+    {
+    case RADIO_DEVICE_HACKRF:
+        return "hackrf";
+    default:
+        return NULL;
+    }
+}
+
 int radio_open(radio_device_t **out_device,
                radio_device_type_t device_type,
+               const char *device_id,
                sample_dispatcher_t *dispatcher,
                int debug_enabled)
 {
@@ -31,10 +44,10 @@ int radio_open(radio_device_t **out_device,
     switch (device_type)
     {
     case RADIO_DEVICE_HACKRF:
-        result = hackrf_radio_open(&device->impl, dispatcher, debug_enabled);
+        result = hackrf_radio_open(&device->impl, device_id, dispatcher,
+                                   debug_enabled);
         break;
     default:
-        result = -1;
         break;
     }
 
@@ -105,4 +118,57 @@ void radio_close(radio_device_t *device)
     }
 
     free(device);
+}
+
+int radio_list_devices(radio_device_type_t device_type,
+                       char ***out_identifiers,
+                       size_t *out_count)
+{
+    if (!out_identifiers || !out_count)
+        return -1;
+
+    *out_identifiers = NULL;
+    *out_count = 0u;
+
+    switch (device_type)
+    {
+    case RADIO_DEVICE_HACKRF:
+        return hackrf_list_devices(out_identifiers, out_count);
+    default:
+        return -1;
+    }
+}
+
+void radio_free_device_list(char ***identifiers, size_t count)
+{
+    if (!identifiers || !*identifiers)
+        return;
+
+    char **list = *identifiers;
+    for (size_t i = 0u; i < count; i++)
+        free(list[i]);
+    free(list);
+    *identifiers = NULL;
+}
+
+int radio_device_exists(radio_device_type_t device_type, const char *device_id)
+{
+    char **identifiers = NULL;
+    size_t count = 0u;
+    int result = radio_list_devices(device_type, &identifiers, &count);
+    if (result != RADIO_SUCCESS)
+        return result;
+
+    result = RADIO_DEVICE_NOT_FOUND;
+    for (size_t i = 0u; i < count; i++)
+    {
+        if (identifiers[i] && strcmp(identifiers[i], device_id) == 0)
+        {
+            result = RADIO_SUCCESS;
+            break;
+        }
+    }
+
+    radio_free_device_list(&identifiers, count);
+    return result;
 }

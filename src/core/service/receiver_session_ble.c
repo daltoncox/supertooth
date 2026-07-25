@@ -1,6 +1,7 @@
 #include "ble_channel_processor.h"
 #include "radio_common.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -22,27 +23,39 @@ static void *receiver_ble_worker(void *arg)
     return NULL;
 }
 
-static int receiver_ble_start_worker(receiver_session_t *session)
+static int receiver_ble_start_workers(receiver_session_t *session)
 {
     session->ble_shutdown_requested = 0u;
+    session->ble_worker_count = 0u;
     session->ble_worker_running = 0u;
-    if (pthread_create(&session->ble_worker_thread, NULL, receiver_ble_worker,
-                       session->ble_ctx) != 0)
+    session->ble_worker_threads =
+        (pthread_t *)calloc(session->ble_ctx_count, sizeof(pthread_t));
+    if (!session->ble_worker_threads)
         return -1;
+
+    for (unsigned int i = 0; i < session->ble_ctx_count; i++)
+    {
+        if (pthread_create(&session->ble_worker_threads[i], NULL,
+                           receiver_ble_worker, &session->ble_ctx[i]) != 0)
+            return -1;
+        session->ble_worker_count++;
+    }
+
     session->ble_worker_running = 1u;
     return 0;
 }
 
-static void receiver_ble_stop_worker(receiver_session_t *session)
+static void receiver_ble_stop_workers(receiver_session_t *session)
 {
     session->ble_shutdown_requested = 1u;
-    if (session->ble_ctx)
-        sample_reader_signal(&session->ble_ctx->reader);
-    if (session->ble_worker_running)
-    {
-        pthread_join(session->ble_worker_thread, NULL);
-        session->ble_worker_running = 0u;
-    }
+    for (unsigned int i = 0; i < session->ble_ctx_count; i++)
+        sample_reader_signal(&session->ble_ctx[i].reader);
+    for (unsigned int i = 0; i < session->ble_worker_count; i++)
+        pthread_join(session->ble_worker_threads[i], NULL);
+    free(session->ble_worker_threads);
+    session->ble_worker_threads = NULL;
+    session->ble_worker_count = 0u;
+    session->ble_worker_running = 0u;
 }
 
 int receiver_session_run_ble(receiver_session_t *session,
@@ -55,6 +68,8 @@ int receiver_session_run_ble(receiver_session_t *session,
     session->stop_requested = 0;
     session->debug = config->debug;
     session->ble_config = *config;
+    session->ble_worker_threads = NULL;
+    session->ble_worker_count = 0u;
     session->ble_worker_running = 0u;
     session->ble_shutdown_requested = 0u;
     sample_dispatcher_reset(&session->sample_dispatcher);
@@ -63,27 +78,29 @@ int receiver_session_run_ble(receiver_session_t *session,
     else
         memset(&session->ble_callbacks, 0, sizeof(session->ble_callbacks));
 
-    if (receiver_ble_channel_processor_setup(session, RECEIVER_BLE_PIPELINE_DIRECT) != 0)
+    if (receiver_ble_channel_processor_setup(session, RECEIVER_BLE_PIPELINE_SESSION) != 0)
         return -1;
-    if (receiver_ble_start_worker(session) != 0)
+    if (receiver_ble_start_workers(session) != 0)
     {
         receiver_ble_channel_processor_destroy(session);
         return -1;
     }
 
     radio_device_t *device = NULL;
-    int result = radio_open(&device, RADIO_DEVICE_HACKRF,
+    int result = radio_open(&device, config->device_type, config->device_id,
                             &session->sample_dispatcher, session->debug);
     if (result != RADIO_SUCCESS)
     {
-        receiver_ble_stop_worker(session);
+        receiver_ble_stop_workers(session);
         receiver_ble_channel_processor_destroy(session);
         return result;
     }
 
+    /* LO/sample rate come from the BLE layout (window center + span), so
+     * the capture follows the configured LE channel window. */
     radio_stream_config_t radio_config = {
-        .lo_freq_hz = config->lo_freq_hz,
-        .sample_rate = RECEIVER_BLE_SAMPLE_RATE,
+        .lo_freq_hz = session->ble_lo_freq_hz,
+        .sample_rate = session->ble_sample_rate,
         .lna_gain = RECEIVER_BLE_LNA_GAIN,
         .vga_gain = RECEIVER_BLE_VGA_GAIN,
     };
@@ -113,7 +130,7 @@ int receiver_session_run_ble(receiver_session_t *session,
     }
 
     radio_close(device);
-    receiver_ble_stop_worker(session);
+    receiver_ble_stop_workers(session);
 
     receiver_ble_channel_processor_destroy(session);
 

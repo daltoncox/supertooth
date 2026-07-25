@@ -95,6 +95,7 @@ ble_status_t ble_bitstream_decoder_push_bit(ble_bitstream_decoder_t *proc, uint8
         {
             unsigned int frame_bytes = target / 8u;
             memcpy(proc->last_frame.raw_pdu, proc->raw_pdu, frame_bytes);
+            proc->last_frame.phy = RECEIVER_PHY_LE_1M;
             proc->last_frame.preamble = proc->detected_preamble;
             proc->last_frame.access_address = BLE_ADVERTISING_AA;
             proc->last_frame.raw_pdu_bytes = (uint16_t)frame_bytes;
