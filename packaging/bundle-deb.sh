@@ -82,6 +82,28 @@ trap 'rm -rf "$STAGING"' EXIT
 echo "=== Installing to staging ==="
 DESTDIR="$STAGING" cmake --install "$BUILD_DIR" --prefix /usr
 
+# Move the GUI binary into the bundle directory so it can ship with a
+# qt.conf alongside it.  Replace it at /usr/bin/supertooth with a thin
+# wrapper that sets plugin/QML import paths before exec'ing the real one.
+GUI_REAL="$STAGING/usr/lib/supertooth/supertooth"
+mkdir -p "$(dirname "$GUI_REAL")"
+mv "$STAGING/usr/bin/supertooth" "$GUI_REAL"
+
+cat > "$STAGING/usr/bin/supertooth" << 'WRAPPER'
+#!/bin/sh
+appdir=/usr/lib/supertooth
+export QT_PLUGIN_PATH="$appdir/qtplugins"
+export QML2_IMPORT_PATH="$appdir/qml"
+exec "$appdir/supertooth" "$@"
+WRAPPER
+chmod 755 "$STAGING/usr/bin/supertooth"
+
+cat > "$(dirname "$GUI_REAL")/qt.conf" << 'QTCONF'
+[Paths]
+Plugins = qtplugins
+Qml2Imports = qml
+QTCONF
+
 BUNDLE_DIR="$STAGING/usr/lib/supertooth"
 mkdir -p "$BUNDLE_DIR"
 
@@ -349,7 +371,7 @@ STAGED_BINARIES=(
     "$STAGING/usr/bin/supertooth-rx"
     "$STAGING/usr/bin/supertooth-ble"
     "$STAGING/usr/bin/supertooth-hybrid"
-    "$STAGING/usr/bin/supertooth"
+    "$STAGING/usr/lib/supertooth/supertooth"
 )
 
 echo "=== Setting RPATH ==="
@@ -375,9 +397,9 @@ else
 fi
 
 # ------------------------------------------------------------------
-# qt.conf is embedded into the supertooth binary via Qt resource
-# system (://qt/etc/qt.conf) — see src/apps/gui/qt.conf and
-# src/apps/gui/CMakeLists.txt.  No standalone file needed.
+# Plugin and QML paths are set by the wrapper script at
+# /usr/bin/supertooth.  The real binary is at /usr/lib/supertooth/
+# with a qt.conf alongside it.  No further config needed.
 
 # ------------------------------------------------------------------
 # Create DEBIAN/ control files

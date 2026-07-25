@@ -44,10 +44,6 @@ qt_add_resources(appSupertooth "app_resources"
     ${LINUX_PNG_REL}
 )
 
-qt_add_resources(appSupertooth "qt_conf_resource"
-    PREFIX "/qt/etc"
-    FILES qt.conf
-)
 
 qt_add_qml_module(appSupertooth
     URI Supertooth
