@@ -1,0 +1,61 @@
+name: Build Debian Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake build-essential pkg-config \
+            libhackrf-dev libliquid-dev libbtbb-dev \
+            libgl1-mesa-dev libxcb*-dev libfontconfig1-dev \
+            libxkbcommon-x11-dev libdbus-1-dev \
+            libpulse-dev libsdl2-dev \
+            python3-venv patchelf fakeroot
+
+      - name: Install Qt 6.8.0
+        run: |
+          python3 -m venv /tmp/qt-venv
+          /tmp/qt-venv/bin/pip install requests py7zr
+          /tmp/qt-venv/bin/python packaging/install-qt.py \
+            --version 6.8.0 \
+            --modules qtgraphs \
+            --output /opt/Qt/6.8.0/gcc_64
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_PREFIX_PATH=/opt/Qt/6.8.0/gcc_64 \
+            -DBUILD_GUI=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSUPERTOOTH_VERSION=${{ github.ref_name }}
+
+      - name: Build
+        run: |
+          cmake --build build --parallel $(nproc)
+
+      - name: Package Debian
+        run: |
+          bash packaging/bundle-deb.sh build \
+            --version "${{ github.ref_name }}" \
+            --qt-prefix /opt/Qt/6.8.0/gcc_64 \
+            --output "./supertooth_${{ github.ref_name }}_amd64.deb"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supertooth-deb
+          path: ./*.deb

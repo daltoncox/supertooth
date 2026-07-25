@@ -47,3 +47,8 @@ target_link_libraries(supertooth-hybrid
     cli_common
     supertooth_core
 )
+
+include(GNUInstallDirs)
+
+install(TARGETS supertooth-rx supertooth-ble supertooth-hybrid
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
