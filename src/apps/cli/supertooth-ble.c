@@ -6,6 +6,7 @@
 #include <getopt.h>
 #include <inttypes.h>
 #include "app_common.h"
+#include "version.h"
 #include "ble_display.h"
 #include "ble_bitstream_decoder.h"
 #include "receiver_session.h"
@@ -63,6 +64,7 @@ static void print_usage(const char *argv0)
     fprintf(stderr, "  %-30s BLE advertising channel (37, 38, or 39; default: 37)\n",
             "-b, --ble-channel 37|38|39");
     app_print_device_usage_line();
+    fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
     fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "--debug");
     fprintf(stderr, "  %-30s Drop frames whose BLE CRC fails (default: on)\n",
             "--enforce-crc on|off");
@@ -144,6 +146,7 @@ int main(int argc, char *argv[])
         {"view", required_argument, NULL, 'v'},
         {"ble-channel", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
+        {"version", no_argument, NULL, 'V'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
         {"enforce-crc", required_argument, NULL, APP_OPT_ENFORCE_CRC},
         {"help", no_argument, NULL, 'h'},
@@ -155,7 +158,7 @@ int main(int argc, char *argv[])
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:b:d::h", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:b:d::Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -201,6 +204,9 @@ int main(int argc, char *argv[])
             }
             break;
         }
+        case 'V':
+            printf("supertooth-ble %s\n", supertooth_get_version());
+            return EXIT_SUCCESS;
         case 'h':
             print_usage(argv[0]);
             return EXIT_SUCCESS;

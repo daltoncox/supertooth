@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include "app_common.h"
+#include "version.h"
 #include "ble_display.h"
 #include "bredr_display.h"
 #include "ble_bitstream_decoder.h"
@@ -159,6 +160,7 @@ static void print_usage(const char *argv0)
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
     app_print_device_usage_line();
+    fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
     fprintf(stderr, "  %-30s Print block-drop diagnostics\n", "--debug");
     fprintf(stderr, "  %-30s Drop BLE frames whose CRC fails (default: on)\n",
             "--enforce-crc on|off");
@@ -212,6 +214,7 @@ int main(int argc, char *argv[])
         {"channels", required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
+        {"version", no_argument, NULL, 'V'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
         {"enforce-crc", required_argument, NULL, APP_OPT_ENFORCE_CRC},
         {"help", no_argument, NULL, 'h'},
@@ -223,7 +226,7 @@ int main(int argc, char *argv[])
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:c:b:d::h", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:c:b:d::Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -280,6 +283,9 @@ int main(int argc, char *argv[])
             }
             break;
         }
+        case 'V':
+            printf("supertooth-hybrid %s\n", supertooth_get_version());
+            return EXIT_SUCCESS;
         case 'h':
             print_usage(argv[0]);
             return EXIT_SUCCESS;

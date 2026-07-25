@@ -106,7 +106,33 @@ set(CORE_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/protocol/ble
     ${CMAKE_CURRENT_SOURCE_DIR}/protocol/bredr
     ${CMAKE_CURRENT_SOURCE_DIR}/service
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+# ---------------------------------------------------------------------------
+# Version string
+# ---------------------------------------------------------------------------
+# Set via -DSUPERTOOTH_VERSION=vX.X.X for CI tagged releases; otherwise
+# derived from git describe --tags --always --dirty or falls back to
+# "unknown".
+set(SUPERTOOTH_VERSION "unknown" CACHE STRING
+    "Supertooth version string (set via -D for CI tagged releases)")
+
+if(SUPERTOOTH_VERSION STREQUAL "unknown")
+    find_package(Git QUIET)
+    if(Git_FOUND)
+        execute_process(COMMAND ${GIT_EXECUTABLE} describe --tags --always --dirty
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            OUTPUT_VARIABLE SUPERTOOTH_VERSION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(SUPERTOOTH_VERSION STREQUAL "")
+            set(SUPERTOOTH_VERSION "unknown")
+        endif()
+    endif()
+endif()
+
+configure_file(version.c.in version.c @ONLY)
 
 add_library(supertooth_core STATIC
     dsp/rssi_measurements.c
@@ -134,6 +160,7 @@ add_library(supertooth_core STATIC
     service/receiver_session_ble.c
     service/receiver_session_bredr.c
     service/receiver_session_hybrid.c
+    ${CMAKE_CURRENT_BINARY_DIR}/version.c
 )
 
 target_link_libraries(supertooth_core

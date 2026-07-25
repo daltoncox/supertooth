@@ -35,7 +35,7 @@ Rectangle {
             delegate: Button {
 		topInset: 0
 	        bottomInset: 0
-       	        leftInset: 0
+        	        leftInset: 0
 	        rightInset: 0
                 width: 48
                 height: 48
@@ -54,5 +54,15 @@ Rectangle {
                 }
             }
         }
+    }
+
+    Text {
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: 4
+        anchors.bottomMargin: 4
+        color: "#aaaaaa"
+        font.pixelSize: 9
+        text: Qt.application.version
     }
 }

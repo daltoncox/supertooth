@@ -1,0 +1,6 @@
+#include "version.h"
+
+const char *supertooth_get_version(void)
+{
+    return "@SUPERTOOTH_VERSION@";
+}

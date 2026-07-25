@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <getopt.h>
 #include "app_common.h"
+#include "version.h"
 #include "bredr_display.h"
 #include "radio_common.h"
 #include "receiver_session.h"
@@ -233,6 +234,7 @@ static void print_usage(const char *argv0)
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
     app_print_device_usage_line();
+    fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
     fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "--debug");
 }
 
@@ -261,6 +263,7 @@ int main(int argc, char *argv[])
         {"channels",       required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
         {"device",         optional_argument, NULL, 'd'},
+        {"version",        no_argument,       NULL, 'V'},
         {"debug",          no_argument,       NULL, APP_OPT_DEBUG},
         {"help",           no_argument,       NULL, 'h'},
         {NULL,             0,                 NULL,  0 }
@@ -271,7 +274,7 @@ int main(int argc, char *argv[])
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::h", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -333,6 +336,9 @@ int main(int argc, char *argv[])
             case APP_OPT_DEBUG:
                 g_debug = 1;
                 break;
+            case 'V':
+                printf("supertooth-rx %s\n", supertooth_get_version());
+                return EXIT_SUCCESS;
             case 'h':
                 print_usage(argv[0]);
                 return EXIT_SUCCESS;

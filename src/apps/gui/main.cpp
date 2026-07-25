@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <cstring>
 #include <QColor>
 #include <QDir>
 #include <QFont>
@@ -7,9 +9,42 @@
 #include <QPalette>
 #include <QLoggingCategory>
 #include <QIcon>
+#include "version.h"
+
+static void print_usage(const char *argv0)
+{
+    fprintf(stderr,
+            "Usage: %s [-h | --help] [-V | --version]\n"
+            "  %-30s Print this help and exit\n"
+            "  %-30s Print version and exit\n",
+            argv0,
+            "-h, --help",
+            "-V, --version");
+}
 
 int main(int argc, char *argv[])
 {
+    /* Parse flags before touching Qt. */
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] != '-')
+            continue;
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
+            printf("supertooth %s\n", supertooth_get_version());
+            return 0;
+        }
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        }
+        /* macOS process serial number — let Qt handle it. */
+        if (strncmp(argv[i], "-psn", 4) == 0)
+            continue;
+        /* Unrecognized flag. */
+        fprintf(stderr, "Unrecognized option: %s\n\n", argv[i]);
+        print_usage(argv[0]);
+        return 1;
+    }
+
     /* Ensure session lifecycle logging is visible regardless of build type. */
     QLoggingCategory::setFilterRules(
         QStringLiteral("supertooth.session.debug=true\n"
@@ -18,6 +53,7 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
 
+    app.setApplicationVersion(QString::fromUtf8(supertooth_get_version()));
     app.setWindowIcon(QIcon(":/assets/icons/Supertooth_Spaced_512_2x.png"));
     QPalette darkPalette;
     darkPalette.setColor(QPalette::Window, QColor(45, 45, 45));
