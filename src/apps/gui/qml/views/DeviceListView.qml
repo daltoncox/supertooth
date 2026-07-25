@@ -96,12 +96,28 @@ Item {
         deviceInfoView.model = deviceModel.detailFor(idx)
     }
 
+    function configureTimeAxis() {
+        // Configure the x-axis tick spacing and label format according to the
+        // active time window. This is independent of device selection, so it
+        // must be applied whenever chartRangeSec changes — otherwise Qt Graphs
+        // falls back to min/max defaults that produce a degenerate axis in the
+        // empty state (hundreds of tick lines / clustered "%.2f" labels).
+        axisX.tickInterval = chartRangeSec >= 120 ? 30
+                           : chartRangeSec >= 60 ? 10
+                           : chartRangeSec >= 15 ? 5
+                           : chartRangeSec >= 5  ? 1
+                           : 1
+        axisX.labelFormat = chartRangeSec >= 60 ? "%.0f" : "%.1f"
+        axisX.labelDecimals = chartRangeSec >= 60 ? 0 : 1
+    }
+
     function loadChart(idx) {
         if (!deviceModel || idx < 0) {
             rssiSeries.clear()
             rssiRawSeries.clear()
             axisX.min = 0.0
             axisX.max = chartRangeSec
+            configureTimeAxis()
             emptyChartLabel.visible = true
             return
         }
@@ -121,13 +137,7 @@ Item {
         if (nowX < chartRangeSec) nowX = chartRangeSec
         axisX.max = nowX
         axisX.min = nowX - chartRangeSec
-        axisX.tickInterval = chartRangeSec >= 120 ? 30
-                           : chartRangeSec >= 60 ? 10
-                           : chartRangeSec >= 15 ? 5
-                           : chartRangeSec >= 5  ? 1
-                           : 1
-        axisX.labelFormat = chartRangeSec >= 60 ? "%.0f" : "%.1f"
-        axisX.labelDecimals = chartRangeSec >= 60 ? 0 : 1
+        configureTimeAxis()
 
         // Auto-fit Y axis to the points currently inside the visible X
         // window, padded by 10% above max and 10% below min.
