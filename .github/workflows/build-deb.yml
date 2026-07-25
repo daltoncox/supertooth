@@ -1,17 +1,15 @@
-name: Build Debian Package
+name: Release
 
 on:
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - 'v*.*.*'
 
 jobs:
   build-deb:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -54,8 +52,26 @@ jobs:
             --qt-prefix /opt/Qt/6.8.0/gcc_64 \
             --output "./supertooth_${{ github.ref_name }}_amd64.deb"
 
-      - name: Upload artifact
+      - name: Upload .deb
         uses: actions/upload-artifact@v4
         with:
           name: supertooth-deb
           path: ./*.deb
+
+  release:
+    needs: build-deb
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: supertooth-deb
+          path: release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
