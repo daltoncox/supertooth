@@ -35,8 +35,9 @@
  * roles exposed via data() return comparable primitive values so that a
  * QSortFilterProxyModel can sort them numerically/lexically rather than on
  * formatted display strings:
- *   - RssiRole     double; -999.0 sentinel means "no signal yet"
- *   - LastSeenRole QDateTime; invalid QDateTime means "never seen"
+ *   - RssiRole      double; -999.0 sentinel means "no signal yet"
+ *   - FirstSeenRole QDateTime; set once when a device is first observed, frozen thereafter for the row's lifetime (mirrors core bredr_piconet idiom of seeding on first packet)
+ *   - LastSeenRole  QDateTime; invalid QDateTime means "never seen"
  *   - PacketRateRole int   (packets/second)
  * String formatting of these values for the table live is the rendering
  * layer's job (DeviceListView.qml).
@@ -57,6 +58,7 @@ public:
         AddrRole,
         DeviceRole,
         IdentifierRole,
+        FirstSeenRole,
         LastSeenRole,
         PacketsSeenRole,
         PacketRateRole,
@@ -116,8 +118,9 @@ private:
         double rssiDb = qQNaN();        // displayed 1s avg; held when idle
         double lastFrameRssiDb = qQNaN();// most recent raw sample (used for series tail)
 
-        qint64 firstFrameMs = 0;        // anchor for chart x-axis (t=0)
-        qint64 lastSeenMs = 0;
+        qint64 firstFrameMs = 0;   // anchor for chart x-axis (t=0)
+        qint64 lastSeenMs = 0;      // refreshed each observed frame; epoch ms
+        qint64 firstSeenMs = 0;     // set once at row creation, frozen thereafter
         unsigned long packetsSeen = 0;
         int packetsThisSecond = 0;      // reset each tick
         int lastRate = 0;               // rate reported by the most recent tick

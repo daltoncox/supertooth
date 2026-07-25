@@ -28,6 +28,7 @@ QHash<int, QByteArray> DeviceListModel::roleNames() const
         {AddrRole,        "addr"},
         {DeviceRole,      "device"},
         {IdentifierRole,  "identifier"},
+        {FirstSeenRole,   "firstSeen"},
         {LastSeenRole,    "lastSeen"},
         {PacketsSeenRole, "packetsSeen"},
         {PacketRateRole,  "packetRate"},
@@ -58,6 +59,14 @@ QVariant DeviceListModel::data(const QModelIndex &index, int role) const
                    ? QVariant()
                    : QVariant::fromValue(
                         QDateTime::fromMSecsSinceEpoch(r.lastSeenMs));
+    case FirstSeenRole:
+        // Frozen once at creation; mirrors core bredr_piconet (first_seen set on
+        // the first packet, never touched again). Returned as a comparable
+        // QDateTime so proxy sorting works identically to LastSeen.
+        return r.firstSeenMs == 0
+                   ? QVariant()
+                   : QVariant::fromValue(
+                        QDateTime::fromMSecsSinceEpoch(r.firstSeenMs));
     case PacketsSeenRole: return QVariant::fromValue(r.packetsSeen);
     case PacketRateRole:  return QVariant::fromValue(r.lastRate);
     case DeviceIdRole:    return r.id;
@@ -154,7 +163,8 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
         r.addr = addr;
         r.device = device;
         r.firstFrameMs = now;
-        r.lastSeenMs = now;
+        r.lastSeenMs   = now;
+        r.firstSeenMs  = now;
         r.packetsSeen = 1;
         r.packetsThisSecond = 1;
         if (!qIsNaN(rssiDb))
@@ -320,7 +330,8 @@ QVariantList DeviceListModel::detailFor(int index) const
     add(QStringLiteral("Packets seen"), QVariant::fromValue(r.packetsSeen));
     add(QStringLiteral("Packet rate"),
         QString::number(r.lastRate) + QStringLiteral("/s"));
-    add(QStringLiteral("Last seen"), formatLastSeen(r.lastSeenMs));
+    add(QStringLiteral("First seen"), formatLastSeen(r.firstSeenMs));
+    add(QStringLiteral("Last seen"),  formatLastSeen(r.lastSeenMs));
     add(QStringLiteral("Last raw RSSI"),
         qIsNaN(r.lastFrameRssiDb)
             ? QStringLiteral("--")

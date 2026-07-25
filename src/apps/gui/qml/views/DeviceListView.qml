@@ -76,6 +76,10 @@ Item {
             return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":"
                  + pad(d.getSeconds()) + "." + Math.floor(d.getMilliseconds() / 100)
         }
+        if (role === "firstSeen") {
+            // Same frozen-timestamp formatting as lastSeen so the column reads identically.
+            return formatCell("lastSeen", value)
+        }
         if (role === "packetRate") return Number(value) + "/s"
         return String(value)
     }
@@ -210,8 +214,9 @@ ListModel {
         // defaultOrder: 0 = Qt.AscendingOrder, 1 = Qt.DescendingOrder.
         ListElement { title: "RSSI";         role: "rssi";        width: 70;  hAlign: 1; color: "#b5cea8"; sortable: true;  defaultOrder: 1 }
         ListElement { title: "Protocol";     role: "proto";       width: 80;  hAlign: 1; color: "#dcdcaa"; sortable: true;  defaultOrder: 0 }
-        ListElement { title: "Identifier";   role: "identifier";  width: 220; hAlign: 1; color: "#569cd6"; sortable: true;  defaultOrder: 0 }
-        ListElement { title: "Last Seen";     role: "lastSeen";    width: 120; hAlign: 1; color: "#cccccc"; sortable: true;  defaultOrder: 0 }
+         ListElement { title: "Identifier";    role: "identifier";  width: 220; hAlign: 1; color: "#569cd6"; sortable: true; defaultOrder: 0 }
+         ListElement { title: "First Seen";    role: "firstSeen";   width: 120; hAlign: 1; color: "#cccccc"; sortable: true; defaultOrder: 0 }
+         ListElement { title: "Last Seen";     role: "lastSeen";    width: 120; hAlign: 1; color: "#cccccc"; sortable: true; defaultOrder: 0 }
         ListElement { title: "Packet Rate";  role: "packetRate";  width: 100; hAlign: 1; color: "#9cdcfe"; sortable: true;  defaultOrder: 1 }
     }
 
@@ -435,7 +440,7 @@ ListModel {
                         color: deviceListView.currentIndex === index ? "#094771" : (index % 2 === 0 ? "#1e1e1e" : "#252525")
                         clip: true
 
-                        property var cells: [rssi, proto, identifier, lastSeen, packetRate]
+                        property var cells: [rssi, proto, identifier, firstSeen, lastSeen, packetRate]
 
                         MouseArea {
                             anchors.fill: parent
