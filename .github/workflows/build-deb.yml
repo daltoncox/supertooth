@@ -32,7 +32,7 @@ jobs:
           /tmp/qt-venv/bin/pip install requests py7zr
           /tmp/qt-venv/bin/python packaging/install-qt.py \
             --version 6.8.0 \
-            --modules qtgraphs \
+            --modules qtgraphs qtquick3d qtshadertools \
             --output /opt/Qt/6.8.0/gcc_64
 
       - name: Configure
