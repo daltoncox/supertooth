@@ -36,7 +36,7 @@ Rectangle {
     // Derived helpers shared with the spectrum + summary labels.
     readonly property real windowLeftMhz: bleLocked ? 2401 + 2 * bottomLeIndex
                                                     : 2401.5 + bottomChannel
-    // Sample rate mirrors supertooth-rx.c: 4 Msps for 2 channels, else
+    // Sample rate mirrors supertooth-bredr.c: 4 Msps for 2 channels, else
     // count * 1 Msps.
     readonly property real sampleRateHz: numChannels === 2 ? 4e6 : numChannels * 1e6
     // LO sits at the center of the capture window — a half-MHz frequency
@@ -102,7 +102,7 @@ Rectangle {
         return 0
     }
 
-    // ---- Window clamping (mirrors supertooth-rx.c validation) --------------
+    // ---- Window clamping (mirrors supertooth-bredr.c validation) --------------
     function clampCount(c) {
         c = Math.round(c / 2) * 2
         return Math.max(2, Math.min(maxChannels, c))

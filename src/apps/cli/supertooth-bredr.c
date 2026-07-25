@@ -337,7 +337,7 @@ int main(int argc, char *argv[])
                 g_debug = 1;
                 break;
             case 'V':
-                printf("supertooth-rx %s\n", supertooth_get_version());
+                printf("supertooth-bredr %s\n", supertooth_get_version());
                 return EXIT_SUCCESS;
             case 'h':
                 print_usage(argv[0]);

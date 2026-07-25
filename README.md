@@ -10,32 +10,38 @@
 
 Supertooth is a C-based software-defined radio (SDR) project for receiving and decoding Bluetooth traffic with a HackRF.
 
-It includes three runtime binaries:
+It includes four runtime binaries:
 
-1. `supertooth-rx`: BR/EDR multichannel receiver with piconet tracking.
-2. `supertooth-ble`: BLE advertising capture/decoder on a selected advertising channel (37/38/39), channelized from a wideband capture.
-3. `supertooth-hybrid`: simultaneous BR/EDR multichannel + BLE advertising processing from a shared stream (advertising channel derived from the capture window).
+1. `supertooth`: Qt GUI application with live BR/EDR + BLE capture, spectrum view, and packet log.
+2. `supertooth-bredr`: BR/EDR multichannel receiver with piconet tracking.
+3. `supertooth-ble`: BLE advertising capture/decoder on a selected advertising channel (37/38/39), channelized from a wideband capture.
+4. `supertooth-hybrid`: simultaneous BR/EDR multichannel + BLE advertising processing from a shared stream.
 
-## Prerequisites
+## Install
 
-- CMake 3.10+
-- C compiler (C11)
-- `libhackrf`
-- `liquid-dsp`
-- `libbtbb`
-- pthreads (system)
+Pre-built `.deb` packages are available on the [releases page](https://github.com/daltoncox/supertooth/releases). Download the latest package for your architecture and install it:
 
-On macOS (Homebrew), the CMake files prioritize `/opt/homebrew` and `/usr/local`.
+```bash
+sudo apt install ./supertooth_*.deb
+supertooth          # GUI
+supertooth-bredr --help    # CLI
+```
 
-### Core dependencies (what they do)
+The package bundles Qt 6.8, radio libs, and QML modules — no extra runtime dependencies beyond glibc/libstdc++. The GUI binary is wrapped in a thin launcher at `/usr/bin/supertooth` that sets plugin and QML import paths before exec'ing the real binary in `/usr/lib/supertooth/`.
 
-- `liquid-dsp`: DSP primitives used for channelization, filtering, NCO mixing, and GFSK/CPFSK demodulation.
-- `libhackrf`: HackRF device API used by runtime binaries to configure and stream SDR samples.
-- `libbtbb`: Bluetooth baseband helpers used for BR/EDR access-code workflows and piconet UAP/clock recovery.
+## Building from source
 
-### Install dependencies
+### Prerequisites
 
-Linux (Debian-Based):
+| Dependency | Purpose |
+|---|---|
+| `libhackrf` | HackRF device API |
+| `liquid-dsp` | Channelization, filtering, NCO mixing, GFSK/CPFSK demodulation |
+| `libbtbb` | BR/EDR access-code workflows and piconet UAP/clock recovery |
+
+### CLI-only build (no GUI)
+
+Linux (Debian-based):
 
 ```bash
 sudo apt update
@@ -44,108 +50,86 @@ sudo apt install -y \
   hackrf libhackrf-dev libbtbb-dev libliquid-dev
 ```
 
-If your distro package name for Liquid-DSP differs, install the equivalent dev package that provides `liquid/liquid.h` and `libliquid`.
-
 macOS (Homebrew):
 
 ```bash
-brew update
 brew install cmake pkg-config hackrf liquid-dsp libbtbb
+```
+
+### GUI build (adds Qt 6.8)
+
+The GUI requires **Qt 6.8+** with Quick, QuickLayouts, and Graphs.  Because most distro Qt packages are too old, either use the **official Qt Installer** (gui installer or `aqtinstall`) or the project's convenience download helper:
+
+```bash
+python3 -m venv /tmp/qt-venv
+/tmp/qt-venv/bin/pip install requests py7zr
+sudo /tmp/qt-venv/bin/python packaging/install-qt.py \
+  --version 6.8.0 \
+  --modules qtgraphs qtquick3d qtshadertools \
+  --output /opt/Qt/6.8.0/gcc_64
+```
+
+The helper fetches prebuilt Qt archives from `download.qt.io` and is meant for CI/quick-setup — run it with `sudo` if writing to a system path like `/opt`.
+
+macOS users can install Qt via Homebrew (6.8+):
+
+```bash
+brew install qt@6
 ```
 
 ## Build
 
-From repository root:
-
 ```bash
-cmake -S . -B build
-cmake --build build
+cd supertooth
+mkdir build
+cd build
+cmake ..
+make
+
+# With GUI (point CMAKE_PREFIX_PATH at the Qt installation)
+cmake .. \
+  -DCMAKE_PREFIX_PATH=/opt/Qt/6.8.0/gcc_64 \
+  -DBUILD_GUI=ON
+make
 ```
 
-Output binaries are in:
-
-- `build/src/` (main executables)
+Output binaries are in `build/src/apps/cli/` (CLI) and `build/src/apps/gui/` (GUI).
 
 ## Run
 
-Main binaries (require HackRF hardware):
+All binaries require a HackRF:
 
 ```bash
-./build/src/supertooth-ble --view full
-./build/src/supertooth-rx --view full
-./build/src/supertooth-hybrid --view full
+./build/src/apps/cli/supertooth-ble --view full
+./build/src/apps/cli/supertooth-bredr --view full
+./build/src/apps/cli/supertooth-hybrid --view full
+./build/src/apps/gui/supertooth
 ```
 
-`supertooth-rx` supports runtime options:
-
-```bash
-./build/src/supertooth-rx --help
-```
-
-`supertooth-ble` and `supertooth-hybrid` also support:
-
-```bash
---view full|summary
---debug
-```
-
-`supertooth-ble` additionally supports:
-
-```bash
---ble-channel 37|38|39
-```
-
-The BLE session tunes a whole-MHz LO at the channel center and channelizes a
-4 Msps capture down to 2 Msps (the same pipeline the hybrid session uses).
-
-`supertooth-hybrid` additionally supports the same channel-window options as
-`supertooth-rx` (the BLE advertising channel is derived from the window: the
-single advertising channel whose center lies inside it, or the BLE worker
-stays idle when the window covers none):
-
-```bash
---channels N          # even 2-20, default 20
---bottom-channel CH   # 0-78, default 0
-```
+`supertooth-bredr`, `supertooth-ble`, and `supertooth-hybrid` accept `--help` for runtime flags.  The GUI needs a Wayland or X11 display.
 
 ## Architecture
-
-Supertooth is organized as a layered core library with thin CLI entrypoints.
 
 ### Source layout
 
 ```text
 src/
-  apps/            CLI binaries and presentation
-  service/         session API and runtime orchestration
-  dsp/             shared DSP utilities (RSSI measurement helpers)
-  radio/           HackRF integration
-  models/          shared packet and receive metadata types
-  protocol/
-    ble/           BLE bitstream decoder, codec helpers, assigned-number helpers
-    bredr/         BR/EDR bitstream decoder, codec helpers, tracking, recovery
+  apps/cli/        CLI binaries (supertooth-bredr, -ble, -hybrid) + shared cli_common
+  apps/gui/        Qt GUI application
+  core/
+    dsp/           Shared DSP utilities (RSSI measurement helpers)
+    models/        Shared packet and receive metadata types
+    radio/         HackRF integration, sample dispatcher, block pool
+    service/       Session API, channel processors, hybrid orchestration
+    protocol/
+      ble/         BLE bitstream decoder, codec, display utilities
+      bredr/       BR/EDR bitstream decoder, codec, piconet tracking, UAP recovery
 ```
 
-### Main layers
+### Key design points
 
-- `src/apps/`: `supertooth-rx`, `supertooth-ble`, and `supertooth-hybrid` user-facing binaries.
-- `src/service/`: reusable library boundary built around `receiver_session`.
-- `src/service/*_channel_processor.*`: per-mode sample processing, demodulation flow, and callback emission.
-- `src/dsp/`: shared DSP helper utilities (currently RSSI measurement primitives).
-- `src/radio/`: HackRF lifecycle and configuration wrapper.
-- `src/models/`: shared receive-event wrappers such as `ble_event_t`, `bredr_event_t`, and `rx_metadata_t`.
-- `src/protocol/ble/`: BLE bitstream decoding and decode support.
-- `src/protocol/bredr/`: BR/EDR bitstream decoding, measurement, tracking, and recovery support.
-
-### Frame And Packet Split
-
-The protocol pipeline now separates captured frames from decoded packets:
-
-- BLE bitstream decoder (`ble_bitstream_decoder.*`) produces `ble_frame_t`.
-- BLE codec owns the clean decoded `ble_packet_t` model and `ble_decode_frame()`.
-- Service callbacks carry `ble_event_t`, which pairs `rx_metadata_t` with a captured `ble_frame_t`.
-- BR/EDR bitstream decoder (`bredr_bitstream_decoder.*`) follows the same high-level shape with `bredr_event_t` carrying `bredr_frame_t`.
-
-This keeps capture-stage data in the bitstream decoder layer, decoded semantic packet fields in the codec layer, and display formatting in the display layer.
-
-For a broader description of the current architecture, see `docs/architecture.md`.
+- **Core library** (`libsupertooth_core.a`): all DSP, radio I/O, protocol decoding, and session logic live here.  CLI apps and the GUI link against this library — no code duplication.
+- **Decoder state machines**: per-channel/thread processor owns its decoder context.  Caller pulls decoded packets immediately after push-status signals readiness.
+- **Frame-vs-packet split**: bitstream decoders emit raw frames (`ble_frame_t` / `bredr_frame_t`); codec layer decodes into clean semantic packet models.  Service callbacks carry the frame (not the decoded packet), keeping layers decoupled.
+- **BR/EDR channel layout** avoids DC by centering LO at `-(N/2 - 0.5) × channel_bw`.
+- **Piconet tracking** is centralized through `bredr_piconet_store_add_packet()` — runtime binaries never duplicate UAP/clock logic.

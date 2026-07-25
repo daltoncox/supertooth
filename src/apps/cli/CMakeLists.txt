@@ -21,11 +21,11 @@ target_include_directories(cli_common PUBLIC
     ${CLI_INCLUDE_DIRS}
 )
 
-add_executable(supertooth-rx
-    supertooth-rx.c
+add_executable(supertooth-bredr
+    supertooth-bredr.c
 )
 
-target_link_libraries(supertooth-rx
+target_link_libraries(supertooth-bredr
     cli_common
     supertooth_core
 )
@@ -50,5 +50,5 @@ target_link_libraries(supertooth-hybrid
 
 include(GNUInstallDirs)
 
-install(TARGETS supertooth-rx supertooth-ble supertooth-hybrid
+install(TARGETS supertooth-bredr supertooth-ble supertooth-hybrid
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

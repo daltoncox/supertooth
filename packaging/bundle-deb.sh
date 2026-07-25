@@ -118,7 +118,7 @@ BUILD_BIN_DIR="$BUILD_DIR/src/apps/cli"
 BUILD_GUI_DIR="$BUILD_DIR/src/apps/gui"
 
 BINARIES=(
-    "$BUILD_BIN_DIR/supertooth-rx"
+    "$BUILD_BIN_DIR/supertooth-bredr"
     "$BUILD_BIN_DIR/supertooth-ble"
     "$BUILD_BIN_DIR/supertooth-hybrid"
     "$BUILD_GUI_DIR/supertooth"
@@ -368,7 +368,7 @@ done < <(find "$BUNDLE_DIR" -name '*.so' -o -name '*.so.*' -type f -print0)
 # Set RPATH on all binaries
 # ------------------------------------------------------------------
 STAGED_BINARIES=(
-    "$STAGING/usr/bin/supertooth-rx"
+    "$STAGING/usr/bin/supertooth-bredr"
     "$STAGING/usr/bin/supertooth-ble"
     "$STAGING/usr/bin/supertooth-hybrid"
     "$STAGING/usr/lib/supertooth/supertooth"
@@ -422,7 +422,7 @@ Description: Software-defined Bluetooth packet sniffer for HackRF
  captures and decodes BR/EDR and BLE packets using a HackRF SDR.
  .
  This package includes all four applications:
-  - supertooth-rx:  BR/EDR multichannel receiver
+  - supertooth-bredr:  BR/EDR multichannel receiver
   - supertooth-ble: BLE advertising channel scanner
   - supertooth-hybrid: simultaneous BR/EDR + BLE receiver
   - supertooth:     Qt GUI application

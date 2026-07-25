@@ -668,7 +668,7 @@ int backend_session_run_bredr(backend_session_t *session,
     radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
     (void)input_type; /* Only HackRF is supported by the backend today. */
 
-    /* Defensive clamping, mirroring supertooth-rx validation. The on-air
+    /* Defensive clamping, mirroring supertooth-bredr validation. The on-air
      * band is channels 0..78. */
     channel_count &= ~1u;
     if (channel_count < 2u)
