@@ -521,6 +521,10 @@ ListModel {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
 
+			theme: GraphsTheme {
+				colorScheme: GraphsTheme.ColorScheme.Dark
+			}
+
                         axisX: ValueAxis {
                             id: axisX
                             min: 0.0

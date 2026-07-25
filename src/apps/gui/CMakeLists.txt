@@ -58,7 +58,7 @@ qt_add_qml_module(appSupertooth
 )
 
 set_target_properties(appSupertooth PROPERTIES
-    OUTPUT_NAME Supertooth
+    OUTPUT_NAME supertooth
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}

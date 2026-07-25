@@ -33,6 +33,10 @@ Rectangle {
             }
 
             delegate: Button {
+		topInset: 0
+	        bottomInset: 0
+       	        leftInset: 0
+	        rightInset: 0
                 width: 48
                 height: 48
                 flat: sidebar.selectedIndex !== index

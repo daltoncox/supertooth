@@ -45,7 +45,7 @@ Rectangle {
             id: inputTypeSelector
             enabled: !header.playing
             Layout.preferredHeight: parent.height
-            Layout.preferredWidth: 100
+            Layout.preferredWidth: 120
 
             model: ["HackRF"]
 
@@ -72,7 +72,7 @@ Rectangle {
                 ComboBox {
                     id: deviceIdSelector
                     Layout.preferredHeight: parent.height
-		            Layout.preferredWidth: 180
+		    Layout.preferredWidth: 300
 
                     model: radioDeviceModel
                     textRole: "display"
@@ -84,6 +84,11 @@ Rectangle {
 
                 Button {
                     id: refreshButton
+		    topInset: 0
+		    bottomInset: 0
+		    leftInset: 0
+		    rightInset: 0
+
                     enabled: !header.playing
                     Layout.preferredHeight: parent.height
                     Layout.preferredWidth: parent.height
@@ -116,6 +121,10 @@ Rectangle {
         }
 
         Button {
+	    topInset: 0
+	    bottomInset: 0
+	    leftInset: 0
+	    rightInset: 0
             Layout.preferredHeight: parent.height
             Layout.preferredWidth: parent.height
 
