@@ -6,6 +6,15 @@ import QtGraphs
 Item {
     id: root
 
+    // Initialise the chart's time scale at creation. Until now loadChart() was only
+    // invoked on user interaction (device click or timescale pick), so Qt Graphs
+    // rendered axisX with its hardcoded 0.0..1.0 defaults — producing the "0.00 to
+    // 1.00" x-axis for the no-selection/empty state. chartRangeSec (60.0) and
+    // chartRangeIndex (3 => "1 min") are already consistent; loadChart(-1) simply
+    // applies them now via the same code path that runs on device selection, so there
+    // is exactly one place responsible for axis layout across empty + active states.
+    Component.onCompleted: root.loadChart(-1)
+
     property var deviceModel: null
 
     // Selection is tracked by stable device ID, not row index, so that a
@@ -596,9 +605,10 @@ ListModel {
                         id: graphsView
                         Layout.fillWidth: true
                         Layout.fillHeight: true
+			marginRight: 24
 
 			theme: GraphsTheme {
-				colorScheme: GraphsTheme.ColorScheme.Dark
+			    colorScheme: GraphsTheme.ColorScheme.Dark
 			}
 
                         axisX: ValueAxis {
@@ -613,11 +623,11 @@ ListModel {
 
                         axisY: ValueAxis {
                             id: axisY
-                            min: -100.0
-                            max: -30.0
-                            titleText: "RSSI (dBm)"
+                            min: -140.0
+                            max: 0.0
+			    //titleText: "RSSI" // text overlaps
                             tickInterval: 10
-                            labelFormat: "%.0f"
+                            labelFormat: "%5.0f"
                             labelDecimals: 0
                         }
 

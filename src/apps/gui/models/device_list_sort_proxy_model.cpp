@@ -161,5 +161,16 @@ bool DeviceListSortProxyModel::lessThan(const QModelIndex &left,
         if (rSentinel) return true;                 // right is "greatest"
         return l < r;
     }
+
+    // When sorting by identifier, group rows by protocol first so a 0x??<LAP>
+    // BR/EDR address never interleaves with a short BLE advertising address —
+    // then apply Qt's default comparison for the identifier within each group.
+    if (sortRole() >= Qt::UserRole && m_sortRoleName == QStringLiteral("identifier")) {
+        const QString lp = sourceModel()->data(left, DeviceListModel::ProtoRole).toString();
+        const QString rp = sourceModel()->data(right, DeviceListModel::ProtoRole).toString();
+        if (lp != rp)
+            return (m_sortOrder == Qt::AscendingOrder) ? (lp < rp) : (lp > rp);
+    }
+
     return QSortFilterProxyModel::lessThan(left, right);
 }
