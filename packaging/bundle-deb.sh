@@ -454,7 +454,7 @@ fakeroot dpkg-deb --build "$STAGING" "$OUTPUT_DEB"
 
 echo ""
 echo "Package built: $OUTPUT_DEB"
-dpkg-deb --info "$OUTPUT_DEB" 2>/dev/null | grep -E "^ Package|^ Version|^ Depends|^ Architecture"
+dpkg-deb --info "$OUTPUT_DEB" 2>/dev/null | grep -E "^ Package|^ Version|^ Depends|^ Architecture" || true
 echo ""
 echo "Contents:"
-dpkg-deb --contents "$OUTPUT_DEB" 2>/dev/null | head -30
+dpkg-deb --contents "$OUTPUT_DEB" 2>/dev/null | head -30 || true
