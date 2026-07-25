@@ -621,17 +621,19 @@ ListModel {
                             labelDecimals: 0
                         }
 
-                        LineSeries {
-                            id: rssiSeries
-                            color: "#4EC9B0"
-                            width: 1.5
-                        }
-
+                        // Raw samples drawn first so the averaged line renders on top of it,
+                        // making the average easier to read where they overlap.
                         LineSeries {
                             id: rssiRawSeries
                             color: "#9e9e9e"
                             opacity: 0.35
                             width: 1.0
+                        }
+
+                        LineSeries {
+                            id: rssiSeries
+                            color: "#4EC9B0"
+                            width: 1.5
                         }
 
                         Label {
