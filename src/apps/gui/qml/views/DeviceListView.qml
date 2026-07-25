@@ -17,6 +17,10 @@ Item {
     // Selectable chart time window (seconds). Defaults to 60s.
     property real chartRangeSec: 60.0
 
+    // Current timescale selection index into rangeModel below (default = 1 min).
+    // Drives both the displayed label and which row is checked in the picker popup.
+    property int chartRangeIndex: 3
+
     property real tableWidth: 0
     readonly property int minColWidth: 20
     readonly property int handleHit: 6
@@ -190,6 +194,19 @@ ListModel {
         ListElement { title: "Identifier";   role: "identifier";  width: 220; hAlign: 1; color: "#569cd6"; sortable: true;  defaultOrder: 0 }
         ListElement { title: "Last Seen";     role: "lastSeen";    width: 120; hAlign: 1; color: "#cccccc"; sortable: true;  defaultOrder: 0 }
         ListElement { title: "Packet Rate";  role: "packetRate";  width: 100; hAlign: 1; color: "#9cdcfe"; sortable: true;  defaultOrder: 1 }
+    }
+
+    // Available chart time windows. Order must match the on-disk rangeModel below,
+    // which was previously embedded in the old ComboBox. Kept at root scope so both
+    // the timescale label and the picker Popup can bind to it as a single source of truth.
+    ListModel {
+        id: rangeModel
+        ListElement { label: "5 s";   secs: 5 }
+        ListElement { label: "15 s";  secs: 15 }
+        ListElement { label: "30 s";  secs: 30 }
+        ListElement { label: "1 min"; secs: 60 }
+        ListElement { label: "2 min"; secs: 120 }
+        ListElement { label: "5 min"; secs: 300 }
     }
 
     SplitView {
@@ -475,37 +492,86 @@ ListModel {
                             font.bold: true
                         }
 
-                        Label {
-                            id: chartRangeLabel
-                            anchors.right: chartRangeCombo.left
+        		Label {
+                            id: chartRangeHintLabel
+                            anchors.right: chartRangeValueLabel.left
                             anchors.verticalCenter: parent.verticalCenter
+                            leftPadding: 8
                             rightPadding: 6
                             text: "Window:"
                             color: "#858585"
                             verticalAlignment: Text.AlignVCenter
                         }
 
-                        ComboBox {
-                            id: chartRangeCombo
+                        Label {
+                            id: chartRangeValueLabel
                             anchors.right: parent.right
+                            anchors.leftMargin: 4
                             anchors.verticalCenter: parent.verticalCenter
-                            rightPadding: 8
-                            width: 90
-                            height: 18
-                            model: ListModel {
-                                id: rangeModel
-                                ListElement { label: "5 s";   secs: 5 }
-                                ListElement { label: "15 s";  secs: 15 }
-                                ListElement { label: "30 s";  secs: 30 }
-                                ListElement { label: "1 min"; secs: 60 }
-                                ListElement { label: "2 min"; secs: 120 }
-                                ListElement { label: "5 min"; secs: 300 }
+                            rightPadding: 10
+                            text: rangeModel.get(root.chartRangeIndex).label
+                            color: rangeSelectMA.containsMouse ? "#ffffff" : "#cccccc"
+                            verticalAlignment: Text.AlignVCenter
+                            font.bold: true
+                        }
+
+                        MouseArea {
+                            id: rangeSelectMA
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            anchors.left: chartRangeValueLabel.left
+                            anchors.right: chartRangeValueLabel.right
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            onClicked: function () {
+                                var p = chartHeader.mapToItem(rangePicker.parent, 0, 0)
+                                rangePicker.x = Math.round(p.x + chartRangeValueLabel.x - (rangeModel.count > 3 ? 12 : 0))
+                                var maxX = chartPane.width - rangePicker.width - 8
+                                if (maxX > 8 && rangePicker.x > maxX) rangePicker.x = maxX
+                                rangePicker.y = Math.round(p.y + parent.height + 4)
+                                rangePicker.open()
                             }
-                            // Default to "1 min".
-                            currentIndex: 3
-                            onActivated: function (i) {
-                                root.chartRangeSec = rangeModel.get(i).secs
-                                root.loadChart(deviceListView.currentIndex)
+                        }
+
+                        Popup {
+                            id: rangePicker
+                            // Lives within the RSSI pane so coordinates / stacking resolve correctly.
+                            parent: Overlay.overlay
+                            modal: true
+                            focus: true
+			    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+			    margins: 0
+                            width: 90
+                            padding: 4
+                            topMargin: 6
+
+			    onAboutToShow: {
+			    x = parent.width - width - 6
+			    }
+
+                            background: Rectangle { color: "#3c3c3c" }
+
+                            property int rowHeight: 24
+
+                            Column {
+                                anchors.fill: parent
+                                spacing: 2
+                                Repeater {
+                                    model: rangeModel
+                                    delegate: ItemDelegate {
+                                        width: parent.width
+                                        height: rangePicker.rowHeight
+                                        text: label
+                                        highlighted: index === root.chartRangeIndex
+                                        hoverEnabled: true
+                                        onClicked: {
+                                            root.chartRangeIndex = index
+                                            root.chartRangeSec   = model.secs
+                                            root.loadChart(deviceListView.currentIndex)
+                                            rangePicker.close()
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
