@@ -84,6 +84,7 @@ typedef struct
     struct receiver_session *session;
 } bredr_channel_processor_t;
 
+#ifndef BLE_CHANNEL_PROCESSOR_NEW_H
 typedef struct
 {
     nco_crcf nco;
@@ -109,6 +110,7 @@ typedef struct
     unsigned int reader_initialized;
     struct receiver_session *session;
 } ble_channel_processor_t;
+#endif
 
 typedef struct
 {

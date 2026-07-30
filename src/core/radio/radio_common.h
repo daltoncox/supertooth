@@ -9,6 +9,11 @@
 #define RADIO_SUCCESS 0
 #define RADIO_DEVICE_NOT_FOUND (-2)
 
+/* Maximum sample rate any supported radio can sustain (HackRF ceiling).
+ * Capture windows wider than this (e.g. >20 BR/EDR channels at 1 MHz each)
+ * are rejected at tune time rather than driven at an unsupported rate. */
+#define RADIO_MAX_SAMPLE_RATE_HZ 20000000u
+
 typedef struct
 {
     uint64_t lo_freq_hz;
@@ -49,6 +54,18 @@ int radio_configure(radio_device_t *device, const radio_stream_config_t *config)
 int radio_start_rx(radio_device_t *device);
 int radio_stop_rx(radio_device_t *device);
 void radio_close(radio_device_t *device);
+
+/**
+ * Maximum sample rate (Hz) a device of @p type can sustain. Used by callers
+ * to pick a capture bandwidth that the hardware can actually drive (e.g. a
+ * default BR/EDR channel count that fits within the radio's sample-rate
+ * ceiling rather than the full 79-channel band).
+ *
+ * @return RADIO_SUCCESS with *out_rate_hz set, or a negative value if @p type
+ *         is unknown.
+ */
+int radio_get_max_sample_rate_for_type(radio_device_type_t type,
+                                       uint32_t *out_rate_hz);
 
 /**
  * Enumerate available devices of the given type.

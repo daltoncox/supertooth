@@ -10,7 +10,7 @@
 #include "version.h"
 #include "bredr_display.h"
 #include "radio_common.h"
-#include "receiver_session.h"
+#include "session.h"
 
 #define BREDR_MAX_CHANNEL 79u
 
@@ -19,21 +19,23 @@
  * -------------------------------------------------------------------------*/
 
 typedef void (*packet_formatter_fn)(unsigned long packet_no,
-                                    const bredr_event_t *event,
-                                    const receiver_bredr_piconet_snapshot_t *pnet);
+                                     const bredr_event_t *event,
+                                     const bredr_piconet_snapshot_t *pnet);
 
 static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
 static int g_debug = 0;
 static int g_lap_filter_enabled = 0;
 static uint32_t g_lap_filter = 0u;
-static unsigned int g_rssi_averaging_window = RECEIVER_BREDR_DEFAULT_RSSI_AVERAGING_WINDOW;
-static unsigned int g_num_bredr_channels = RECEIVER_BREDR_MAX_CHANNELS;
+static unsigned int g_rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW;
+/* Default BR/EDR channel count is derived from the radio's max sample rate
+ * (see main()); this initial value is overwritten before use. */
+static unsigned int g_num_bredr_channels = BREDR_SESSION_MAX_CHANNELS;
 static unsigned int g_bottom_bredr_channel = 0u;
 static int g_bottom_channel_explicit = 0;
 
 /* Counters. */
 static unsigned long g_total_packets = 0UL;
-static receiver_session_t *g_session = NULL;
+static session_t *g_session = NULL;
 
 /* -------------------------------------------------------------------------
  * Helpers
@@ -41,8 +43,8 @@ static receiver_session_t *g_session = NULL;
 
 static int piconet_lap_cmp(const void *a, const void *b)
 {
-    const receiver_bredr_piconet_snapshot_t *pa = *(const receiver_bredr_piconet_snapshot_t *const *)a;
-    const receiver_bredr_piconet_snapshot_t *pb = *(const receiver_bredr_piconet_snapshot_t *const *)b;
+    const bredr_piconet_snapshot_t *pa = *(const bredr_piconet_snapshot_t *const *)a;
+    const bredr_piconet_snapshot_t *pb = *(const bredr_piconet_snapshot_t *const *)b;
     uint32_t la = pa ? (pa->lap & 0xFFFFFFu) : 0u;
     uint32_t lb = pb ? (pb->lap & 0xFFFFFFu) : 0u;
     if (la < lb)
@@ -54,13 +56,13 @@ static int piconet_lap_cmp(const void *a, const void *b)
 
 static void print_session_piconets(void)
 {
-    size_t count = receiver_session_bredr_piconet_count(g_session);
+    size_t count = session_bredr_piconet_count(g_session);
     printf("=== BR/EDR Piconet Store (%zu piconet%s) ===\n",
            count, count == 1u ? "" : "s");
     for (size_t i = 0; i < count; i++)
     {
-        receiver_bredr_piconet_snapshot_t snapshot;
-        if (receiver_session_bredr_piconet_snapshot(g_session, i, &snapshot) == 0)
+        bredr_piconet_snapshot_t snapshot;
+        if (session_bredr_piconet_snapshot(g_session, i, &snapshot) == 0)
             bredr_print_piconet_snapshot(&snapshot);
     }
 }
@@ -71,8 +73,8 @@ static unsigned int current_master_clock_mhz(void)
 }
 
 static void print_packet_full(unsigned long packet_no,
-                              const bredr_event_t *event,
-                              const receiver_bredr_piconet_snapshot_t *pnet)
+                               const bredr_event_t *event,
+                               const bredr_piconet_snapshot_t *pnet)
 {
     const bredr_frame_t *frame = &event->frame;
     const rx_metadata_t *meta = &event->meta;
@@ -91,33 +93,33 @@ static void print_packet_full(unsigned long packet_no,
 }
 
 static void print_packet_summary(unsigned long packet_no,
-                                 const bredr_event_t *event,
-                                 const receiver_bredr_piconet_snapshot_t *pnet)
+                                  const bredr_event_t *event,
+                                  const bredr_piconet_snapshot_t *pnet)
 {
     bredr_print_packet_summary_line(packet_no, &event->frame, pnet, &event->meta);
 }
 
 static void print_packet_rssi(unsigned long packet_no,
-                              const bredr_event_t *event,
-                              const receiver_bredr_piconet_snapshot_t *pnet)
+                               const bredr_event_t *event,
+                               const bredr_piconet_snapshot_t *pnet)
 {
     (void)pnet;
     const bredr_frame_t *frame = &event->frame;
     const rx_metadata_t *meta = &event->meta;
-    size_t count = receiver_session_bredr_piconet_count(g_session);
-    const receiver_bredr_piconet_snapshot_t **ordered =
-        (const receiver_bredr_piconet_snapshot_t **)malloc(sizeof(*ordered) * (count > 0u ? count : 1u));
+    size_t count = session_bredr_piconet_count(g_session);
+    const bredr_piconet_snapshot_t **ordered =
+        (const bredr_piconet_snapshot_t **)malloc(sizeof(*ordered) * (count > 0u ? count : 1u));
     if (!ordered)
         return;
 
     size_t used = 0u;
     for (size_t i = 0; i < count; i++)
     {
-        receiver_bredr_piconet_snapshot_t *cur =
-            (receiver_bredr_piconet_snapshot_t *)malloc(sizeof(*cur));
+        bredr_piconet_snapshot_t *cur =
+            (bredr_piconet_snapshot_t *)malloc(sizeof(*cur));
         if (!cur)
             continue;
-        if (receiver_session_bredr_piconet_snapshot(g_session, i, cur) == 0)
+        if (session_bredr_piconet_snapshot(g_session, i, cur) == 0)
             ordered[used++] = cur;
         else
             free(cur);
@@ -193,7 +195,7 @@ static int parse_channel_count(const char *arg, unsigned int *out_channels)
     char *end = NULL;
     unsigned long value = strtoul(arg, &end, 0);
     if (end == arg || *end != '\0' ||
-        value < 2ul || value > (unsigned long)RECEIVER_BREDR_MAX_CHANNELS ||
+        value < 2ul || value > (unsigned long)BREDR_SESSION_MAX_CHANNELS ||
         (value & 1ul) != 0ul)
         return -1;
 
@@ -229,7 +231,7 @@ static void print_usage(const char *argv0)
             "--rssi-averaging N|none");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
             "-c, --channels N",
-            RECEIVER_BREDR_MAX_CHANNELS, RECEIVER_BREDR_MAX_CHANNELS);
+            BREDR_SESSION_MAX_CHANNELS, g_num_bredr_channels);
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
@@ -239,8 +241,8 @@ static void print_usage(const char *argv0)
 }
 
 static void handle_bredr_packet(const bredr_event_t *event,
-                                const receiver_bredr_piconet_snapshot_t *pnet,
-                                void *user)
+                                 const bredr_piconet_snapshot_t *pnet,
+                                 void *user)
 {
     (void)user;
     app_output_lock();
@@ -273,6 +275,19 @@ int main(int argc, char *argv[])
     const char *g_device_spec = NULL;
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
+
+    /* Default the channel count to what the radio can actually sustain:
+     * max sample rate / 1 MHz per BR/EDR channel. For a HackRF (~20 MHz
+     * ceiling) this is 20 channels instead of the full 79-channel band, so
+     * the capture window fits within the radio's sample-rate limit. */
+    {
+        uint32_t max_rate = 0u;
+        if (radio_get_max_sample_rate_for_type(g_device_spec_parsed.type,
+                                               &max_rate) == 0 &&
+            max_rate >= 1000000u)
+            g_num_bredr_channels = max_rate / 1000000u;
+    }
+
     int opt;
     while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::Vh", long_opts, NULL)) != -1)
     {
@@ -306,13 +321,13 @@ int main(int argc, char *argv[])
                 }
                 break;
             case 'c':
-                if (parse_channel_count(optarg, &g_num_bredr_channels) != 0)
-                {
-                    fprintf(stderr, "Invalid --channels value: %s (expected even 2-%u)\n",
-                            optarg, RECEIVER_BREDR_MAX_CHANNELS);
-                    print_usage(argv[0]);
-                    return EXIT_FAILURE;
-                }
+        if (parse_channel_count(optarg, &g_num_bredr_channels) != 0)
+        {
+            fprintf(stderr, "Invalid --channels value: %s (expected even 2-%u)\n",
+                    optarg, BREDR_SESSION_MAX_CHANNELS);
+            print_usage(argv[0]);
+            return EXIT_FAILURE;
+        }
                 break;
             case 'b':
                 if (parse_bottom_channel(optarg, &g_bottom_bredr_channel) != 0)
@@ -393,11 +408,8 @@ int main(int argc, char *argv[])
                              sizeof(s_output_modes) / sizeof(s_output_modes[0]));
     unsigned int sample_rate = (g_num_bredr_channels == 2u) ? 4000000u : g_num_bredr_channels * 1000000u;
     unsigned int decim_factor = sample_rate / 2000000u;
-    double lo_mhz = ((RECEIVER_BREDR_CHANNEL_0_FREQ + g_bottom_bredr_channel * 1000000.0) -
-                    (-(g_num_bredr_channels / 2.0 - 0.5) * 1000000.0)) / 1e6;
     printf("Supertooth RX (BR/EDR)\n");
     printf("======================\n");
-    printf("LO          : %.3f MHz\n", lo_mhz);
     printf("Sample rate : %u Msps\n", sample_rate / 1000000u);
     printf("Decimation  : /%u -> %u Msps demod input\n",
            decim_factor, 2u);
@@ -412,8 +424,6 @@ int main(int argc, char *argv[])
         printf("RSSI EMA    : disabled\n");
     else
         printf("RSSI EMA    : window=%u\n", g_rssi_averaging_window);
-    printf("Block pool  : %u blocks, per-channel queue: %u\n",
-           RECEIVER_BREDR_BLOCK_POOL_SIZE, RECEIVER_BREDR_CHANNEL_RING_SIZE);
     if (g_device_selected)
         printf("Device      : %s:%s\n",
                radio_device_type_name(g_device_spec_parsed.type),
@@ -422,26 +432,44 @@ int main(int argc, char *argv[])
         printf("Device      : (default)\n");
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
     printf("Press Ctrl+C to stop.\n\n");
-    app_install_sigint_handler(&g_session);
-    receiver_bredr_config_t config = {
-        .channel_count = g_num_bredr_channels,
-        .bottom_channel = g_bottom_bredr_channel,
-        .rssi_averaging_window = g_rssi_averaging_window,
-        .lap_filter = g_lap_filter,
-        .lap_filter_enabled = g_lap_filter_enabled,
+
+    session_config_t config = {
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
     };
-    receiver_bredr_callbacks_t callbacks = {
-        .on_packet = handle_bredr_packet,
-        .user = NULL,
-    };
-    receiver_bredr_stats_t stats;
-    g_session = receiver_session_create();
+    g_session = (session_t *)calloc(1, sizeof(*g_session));
     if (!g_session)
         return EXIT_FAILURE;
-    int result = receiver_session_run_bredr(g_session, &config, &callbacks, &stats);
+    if (session_init(g_session, &config) != 0)
+    {
+        free(g_session);
+        g_session = NULL;
+        return EXIT_FAILURE;
+    }
+
+    /* Install the Ctrl+C handler only once the session exists, so the signal
+     * actually reaches a valid session and stops the capture loop. */
+    app_install_sigint_handler(g_session);
+
+    session_bredr_config_t bredr_cfg = {
+        .rssi_averaging_window = g_rssi_averaging_window,
+        .lap_filter = g_lap_filter,
+        .lap_filter_enabled = g_lap_filter_enabled,
+    };
+    session_enable_bredr(g_session, &bredr_cfg, handle_bredr_packet, NULL);
+
+    if (session_tune(g_session, SESSION_REF_BREDR, g_bottom_bredr_channel,
+                     g_num_bredr_channels) != 0)
+    {
+        fprintf(stderr, "Failed to tune session.\n");
+        session_destroy(g_session);
+        free(g_session);
+        g_session = NULL;
+        return EXIT_FAILURE;
+    }
+
+    int result = session_run(g_session);
 
     printf("\n\n=== Session Summary ===\n");
     printf("  Output mode    : %s\n", mode_name);
@@ -452,16 +480,14 @@ int main(int argc, char *argv[])
     if (g_rssi_averaging_window == 0u)
         printf("  RSSI EMA       : disabled\n");
     else
-    printf("  RSSI EMA       : window=%u\n", g_rssi_averaging_window);
-    printf("  Total bits     : %" PRIu64 "\n", stats.total_bits);
-    printf("  Header packets : %lu\n", stats.header_packets);
-    printf("  ID packets     : %lu\n", stats.id_packets);
+        printf("  RSSI EMA       : window=%u\n", g_rssi_averaging_window);
     if (g_debug)
         printf("  Dropped blocks : %lu\n",
-               receiver_session_dispatcher_dropped_blocks(g_session));
+                session_dropped_blocks(g_session));
     printf("\n");
     print_session_piconets();
-    receiver_session_destroy(g_session);
+    session_destroy(g_session);
+    free(g_session);
     g_session = NULL;
 
     return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

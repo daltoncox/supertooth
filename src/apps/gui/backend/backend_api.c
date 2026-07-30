@@ -10,7 +10,7 @@
 #include <string.h>
 #include <inttypes.h>
 
-#include "receiver_session.h"
+#include "session.h"
 #include "receive_event_models.h"
 #include "ble_bitstream_decoder.h"
 #include "ble_codec.h"
@@ -23,9 +23,10 @@
 
 struct backend_session
 {
-    receiver_session_t *session;
+    session_t *session;
     backend_row_fn  on_row;
     void               *user;
+    backend_stopped_fn on_stopped;
     unsigned long       packet_count;
     int                 enforce_crc;   /* drop BLE frames whose CRC fails */
 };
@@ -362,7 +363,7 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
  * bredr_build_decode_inputs() so the facade can attempt a header decode
  * without depending on static CLI helpers. Returns 1 when both UAP and
  * CLK1-6 are available, 0 otherwise. */
-static int bredr_gui_build_decode_inputs(const receiver_bredr_piconet_snapshot_t *pnet,
+static int bredr_gui_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
                                          const rx_metadata_t *meta,
                                          uint8_t *uap_out,
                                          uint8_t *clk1_6_out)
@@ -419,7 +420,7 @@ static void bredr_build_raw(backend_row_t *row, const bredr_frame_t *frame)
 }
 
 static void bredr_packet_trampoline(const bredr_event_t *event,
-                                    const receiver_bredr_piconet_snapshot_t *pnet,
+                                    const bredr_piconet_snapshot_t *pnet,
                                     void *user)
 {
     backend_session_t *bs = (backend_session_t *)user;
@@ -590,7 +591,7 @@ backend_session_t *backend_session_create(void)
     backend_session_t *bs = (backend_session_t *)calloc(1, sizeof(*bs));
     if (!bs)
         return NULL;
-    bs->session = receiver_session_create();
+    bs->session = (session_t *)calloc(1, sizeof(*bs->session));
     if (!bs->session)
     {
         free(bs);
@@ -599,12 +600,30 @@ backend_session_t *backend_session_create(void)
     return bs;
 }
 
+void backend_session_set_stopped_callback(backend_session_t *session,
+                                          backend_stopped_fn on_stopped,
+                                          void *user)
+{
+    if (!session)
+        return;
+    session->on_stopped = on_stopped;
+    session->user = user;
+}
+
+static void backend_session_stopped_trampoline(void *user)
+{
+    backend_session_t *bs = (backend_session_t *)user;
+    if (bs && bs->on_stopped)
+        bs->on_stopped(bs->user);
+}
+
 void backend_session_destroy(backend_session_t *session)
 {
     if (!session)
         return;
     if (session->session)
-        receiver_session_destroy(session->session);
+        session_destroy(session->session);
+    free(session->session);
     free(session);
 }
 
@@ -617,9 +636,10 @@ int backend_session_run_ble(backend_session_t *session,
                             backend_row_fn on_row,
                             void *user)
 {
-    if (!session)
+    if (!session || !session->session)
         return -1;
 
+    session_t *s = session->session;
     session->on_row = on_row;
     session->user = user;
     session->packet_count = 0ul;
@@ -629,31 +649,31 @@ int backend_session_run_ble(backend_session_t *session,
     (void)input_type; /* Only HackRF is supported by the backend today. */
 
     /* Defensive clamping of the LE window: 40 RF channels (0..39), up to
-     * RECEIVER_BLE_MAX_CHANNELS processors. */
+     * BLE_SESSION_MAX_CHANNELS processors. */
     if (le_channel_count < 1u)
         le_channel_count = 1u;
-    if (le_channel_count > RECEIVER_BLE_MAX_CHANNELS)
-        le_channel_count = RECEIVER_BLE_MAX_CHANNELS;
+    if (le_channel_count > BLE_SESSION_MAX_CHANNELS)
+        le_channel_count = BLE_SESSION_MAX_CHANNELS;
     if (bottom_le_rf >= BLE_RF_CHANNEL_COUNT)
         bottom_le_rf = BLE_RF_CHANNEL_COUNT - 1u;
     if (bottom_le_rf + le_channel_count > BLE_RF_CHANNEL_COUNT)
         le_channel_count = BLE_RF_CHANNEL_COUNT - bottom_le_rf;
 
-    receiver_ble_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.bottom_le_channel = bottom_le_rf;
-    cfg.le_channel_count = le_channel_count;
-    cfg.device_type = dev_type;
-    cfg.device_id = device_id;
-    cfg.debug = 0;
-    cfg.enforce_crc = session->enforce_crc;
+    session_config_t cfg = {
+        .device_type = dev_type,
+        .device_id = device_id,
+        .debug = 0,
+    };
+    if (session_init(s, &cfg) != 0)
+        return -1;
 
-    receiver_ble_callbacks_t cb;
-    memset(&cb, 0, sizeof(cb));
-    cb.on_packet = ble_packet_trampoline;
-    cb.user = session;
+    session_ble_config_t ble_cfg = { .enforce_crc = session->enforce_crc };
+    session_enable_ble(s, &ble_cfg, ble_packet_trampoline, session);
+    session_set_stopped_callback(s, backend_session_stopped_trampoline, session);
 
-    return receiver_session_run_ble(session->session, &cfg, &cb);
+    return session_tune(s, SESSION_REF_BLE, bottom_le_rf, le_channel_count) == 0
+                ? session_run(s)
+                : -1;
 }
 
 int backend_session_run_bredr(backend_session_t *session,
@@ -679,32 +699,29 @@ int backend_session_run_bredr(backend_session_t *session,
     channel_count &= ~1u;
     if (channel_count < 2u)
         channel_count = 2u;
-    if (channel_count > RECEIVER_BREDR_MAX_CHANNELS)
-        channel_count = RECEIVER_BREDR_MAX_CHANNELS;
+    if (channel_count > BREDR_SESSION_MAX_CHANNELS)
+        channel_count = BREDR_SESSION_MAX_CHANNELS;
     unsigned int max_bottom = 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;
 
-    receiver_bredr_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.channel_count = channel_count;
-    cfg.bottom_channel = bottom_channel;
-    cfg.le_grid = RECEIVER_BREDR_GRID_BREDR;
-    cfg.rssi_averaging_window = RECEIVER_BREDR_DEFAULT_RSSI_AVERAGING_WINDOW;
-    cfg.lap_filter = 0u;
-    cfg.lap_filter_enabled = 0;
-    cfg.device_type = dev_type;
-    cfg.device_id = device_id;
-    cfg.debug = 0;
+    session_config_t cfg = {
+        .device_type = dev_type,
+        .device_id = device_id,
+        .debug = 0,
+    };
+    if (session_init(session->session, &cfg) != 0)
+        return -1;
 
-    receiver_bredr_callbacks_t cb;
-    memset(&cb, 0, sizeof(cb));
-    cb.on_packet = bredr_packet_trampoline;
-    cb.user = session;
+    session_bredr_config_t bredr_cfg = {
+        .rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW,
+    };
+    session_enable_bredr(session->session, &bredr_cfg, bredr_packet_trampoline, session);
+    session_set_stopped_callback(session->session, backend_session_stopped_trampoline, session);
 
-    receiver_bredr_stats_t stats;
-    memset(&stats, 0, sizeof(stats));
-    return receiver_session_run_bredr(session->session, &cfg, &cb, &stats);
+    return session_tune(session->session, SESSION_REF_BREDR, bottom_channel, channel_count) == 0
+                ? session_run(session->session)
+                : -1;
 }
 
 int backend_session_run_hybrid(backend_session_t *session,
@@ -732,61 +749,63 @@ int backend_session_run_hybrid(backend_session_t *session,
     /* Defensive validation of the channel window. On the BR/EDR grid the
      * window is channel_count MHz (even count); on the LE grid it is
      * channel_count+1 MHz (odd count, even bottom). */
+    session_protocol_ref_t ref = SESSION_REF_BREDR;
     if (le_grid == BACKEND_GRID_LE)
     {
         bottom_channel &= ~1u;
         if (channel_count < 1u)
             channel_count = 1u;
-        if (channel_count > RECEIVER_BREDR_MAX_CHANNELS - 1u)
-            channel_count = RECEIVER_BREDR_MAX_CHANNELS - 1u;
+        if (channel_count > BREDR_SESSION_MAX_CHANNELS - 1u)
+            channel_count = BREDR_SESSION_MAX_CHANNELS - 1u;
         if ((channel_count & 1u) == 0u)
             channel_count -= 1u;
         if (channel_count < 1u)
             return -1;
+        ref = SESSION_REF_BLE;
     }
     else
     {
-        le_grid = BACKEND_GRID_BREDR;
         channel_count &= ~1u;
         if (channel_count < 2u)
             channel_count = 2u;
-        if (channel_count > RECEIVER_BREDR_MAX_CHANNELS)
-            channel_count = RECEIVER_BREDR_MAX_CHANNELS;
+        if (channel_count > BREDR_SESSION_MAX_CHANNELS)
+            channel_count = BREDR_SESSION_MAX_CHANNELS;
     }
     unsigned int max_bottom = 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;
 
-    receiver_hybrid_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.channel_count = channel_count;
-    cfg.bottom_channel = bottom_channel;
-    cfg.le_grid = (le_grid == BACKEND_GRID_LE) ? RECEIVER_BREDR_GRID_LE
-                                               : RECEIVER_BREDR_GRID_BREDR;
-    /* The session fans BLE processors out over every LE channel inside the
-     * window; the picked advertising channel now acts as a BLE on/off. */
-    cfg.ble_enabled = (ble_channel >= 37u && ble_channel <= 39u);
-    cfg.device_type = dev_type;
-    cfg.device_id = device_id;
-    cfg.debug = 0;
-    cfg.enforce_crc = session->enforce_crc;
+    session_config_t cfg = {
+        .device_type = dev_type,
+        .device_id = device_id,
+        .debug = 0,
+    };
+    if (session_init(session->session, &cfg) != 0)
+        return -1;
 
-    /* Both protocols route through the same on_row sink; the proto field in
-     * each row distinguishes "LE" from "BR/EDR". */
-    receiver_hybrid_callbacks_t cb;
-    memset(&cb, 0, sizeof(cb));
-    cb.on_bredr_packet = bredr_packet_trampoline;
-    cb.on_ble_packet = ble_packet_trampoline;
-    cb.user = session;
+    session_bredr_config_t bredr_cfg = {
+        .rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW,
+    };
+    session_enable_bredr(session->session, &bredr_cfg, bredr_packet_trampoline, session);
 
-    receiver_hybrid_stats_t stats;
-    memset(&stats, 0, sizeof(stats));
-    return receiver_session_run_hybrid(session->session, &cfg, &cb, &stats);
+    /* BLE is always available on the hybrid window; the picked advertising
+     * channel (if any) acts as a BLE on/off for the higher layers. */
+    if (ble_channel >= 37u && ble_channel <= 39u)
+    {
+        session_ble_config_t ble_cfg = { .enforce_crc = session->enforce_crc };
+        session_enable_ble(session->session, &ble_cfg, ble_packet_trampoline, session);
+    }
+
+    session_set_stopped_callback(session->session, backend_session_stopped_trampoline, session);
+
+    return session_tune(session->session, ref, bottom_channel, channel_count) == 0
+                ? session_run(session->session)
+                : -1;
 }
 
 void backend_session_request_stop(backend_session_t *session)
 {
     if (!session || !session->session)
         return;
-    receiver_session_request_stop(session->session);
+    session_request_stop(session->session);
 }

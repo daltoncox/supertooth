@@ -29,9 +29,15 @@ ReceiverController::ReceiverController(QObject *parent)
 ReceiverController::~ReceiverController()
 {
     stop();
+    /* Detach rather than join: the worker thread tears the session down on its
+     * own (session_run() calls session_destroy()), so joining here would block
+     * the GUI thread on device shutdown during app teardown. The wrapper is
+     * released by the running onFinish() cleanup thread (if any); if the
+     * controller is destroyed before a stop was requested, the worker keeps
+     * the session valid until it finishes. */
     if (m_thread && m_thread->joinable())
-        m_thread->join();
-    backend_session_destroy(m_session);
+        m_thread->detach();
+    m_session = nullptr;
 }
 
 void ReceiverController::setRunning(bool running)
@@ -66,9 +72,15 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
 
     if (!m_session)
     {
-        qCWarning(lcSession) << "start() aborted: no session";
-        emit errorOccurred(tr("No receiver session available."));
-        return false;
+        /* A previous run's onFinish() cleanup thread releases the old session;
+         * recreate a fresh one for this run. */
+        m_session = backend_session_create();
+        if (!m_session)
+        {
+            qCWarning(lcSession) << "start() aborted: no session";
+            emit errorOccurred(tr("No receiver session available."));
+            return false;
+        }
     }
 
     if (inputType == BACKEND_INPUT_FILE)
@@ -78,9 +90,12 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         return false;
     }
 
-    /* Join any previous (finished) thread before starting a new one. */
+    /* Detach any previous (still-finishing) worker thread rather than joining
+     * it on the GUI thread; its teardown is owned by the prior onFinish()
+     * cleanup thread. The new run gets a fresh thread below. */
     if (m_thread && m_thread->joinable())
-        m_thread->join();
+        m_thread->detach();
+    m_thread.reset();
 
     QString idStr = deviceId;
     backend_session_t *session = m_session;
@@ -104,6 +119,9 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
             QByteArray idBytes = idStr.toUtf8();
             const char *idPtr = idBytes.isEmpty() ? nullptr
                                                   : idBytes.constData();
+            /* Flip the UI to "stopped" the instant capture ends, before the
+             * (potentially blocking) radio teardown runs on this thread. */
+            backend_session_set_stopped_callback(session, &stopTrampoline, self);
             int result;
             if (sessionType == BACKEND_SESSION_BLE)
             {
@@ -158,25 +176,56 @@ void ReceiverController::stop()
     qCInfo(lcSession) << "stop() requested; running=" << m_running;
     if (m_session)
         backend_session_request_stop(m_session);
-    /* The worker's onFinish() handler (queued to the main thread) joins the
-     * thread once run_ble returns. */
+    /* The UI flips to "stopped" via stopTrampoline (queued from the worker
+     * thread) before the blocking radio teardown; onFinish() then performs the
+     * join off the GUI thread so the UI never freezes. */
 }
 
 void ReceiverController::onFinish(int result)
 {
     qCInfo(lcSession) << "onFinish: result=" << result;
-    if (m_thread && m_thread->joinable())
-        m_thread->join();
+
+    /* Capture the session/thread handles we own so a subsequent start() that
+     * reassigns m_session/m_thread cannot be destroyed by this cleanup. */
+    backend_session_t *old_session = m_session;
+    std::unique_ptr<std::thread> old_thread = std::move(m_thread);
+    m_session = nullptr;
     m_thread.reset();
-    setRunning(false);
-    if (result != 0)
+
+    /* Perform teardown join + session destruction on a separate thread so the
+     * GUI/main thread is never blocked waiting on device shutdown. The worker
+     * thread has already torn the session down inside session_run(); here we
+     * only join it and free the wrapper. */
+    std::thread cleanup([old_session, old_thread = std::move(old_thread), this, result]() mutable {
+        if (old_thread && old_thread->joinable())
+            old_thread->join();
+        backend_session_destroy(old_session);
+        QMetaObject::invokeMethod(this, [this, result]() {
+            setRunning(false);
+            if (result != 0)
+            {
+                qCWarning(lcSession) << "receiver failed with code" << result;
+                emit errorOccurred(tr("Receiver failed (code %1).").arg(result));
+            }
+            else
+            {
+                qCInfo(lcSession) << "receiver session stopped cleanly";
+            }
+        }, Qt::QueuedConnection);
+    });
+    cleanup.detach();
+}
+
+/* static */ void ReceiverController::stopTrampoline(void *user)
+{
+    auto *self = static_cast<ReceiverController *>(user);
+    if (self)
     {
-        qCWarning(lcSession) << "receiver failed with code" << result;
-        emit errorOccurred(tr("Receiver failed (code %1).").arg(result));
-    }
-    else
-    {
-        qCInfo(lcSession) << "receiver session stopped cleanly";
+        /* Runs on the session worker thread, just before radio teardown.
+         * Queue the UI update to the main thread so the icon flips
+         * immediately and does not wait on device shutdown. */
+        QMetaObject::invokeMethod(self, &ReceiverController::setRunning,
+                                  Qt::QueuedConnection, false);
     }
 }
 

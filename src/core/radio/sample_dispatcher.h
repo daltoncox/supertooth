@@ -55,7 +55,7 @@ int sample_reader_init(sample_reader_t *reader,
 void sample_reader_destroy(sample_reader_t *reader);
 void sample_reader_signal(sample_reader_t *reader);
 int sample_reader_wait_pop(sample_reader_t *reader,
-                           const unsigned int *shutdown_requested,
-                           sample_block_t **block);
+                            const _Atomic unsigned int *shutdown_requested,
+                            sample_block_t **block);
 
 #endif

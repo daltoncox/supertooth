@@ -1,6 +1,7 @@
 #include "sample_dispatcher.h"
 
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,16 +67,17 @@ void sample_reader_signal(sample_reader_t *reader)
 }
 
 int sample_reader_wait_pop(sample_reader_t *reader,
-                           const unsigned int *shutdown_requested,
-                           sample_block_t **block)
+                            const _Atomic unsigned int *shutdown_requested,
+                            sample_block_t **block)
 {
     if (!reader || !shutdown_requested || !block)
         return -1;
 
     pthread_mutex_lock(&reader->mutex);
-    while (!*shutdown_requested && reader->count == 0u)
+    while (atomic_load_explicit(shutdown_requested, memory_order_acquire) == 0u &&
+           reader->count == 0u)
         pthread_cond_wait(&reader->cv, &reader->mutex);
-    if (*shutdown_requested)
+    if (atomic_load_explicit(shutdown_requested, memory_order_acquire) != 0u)
     {
         pthread_mutex_unlock(&reader->mutex);
         return -1;
@@ -199,12 +201,17 @@ sample_block_t *sample_dispatcher_acquire_block(sample_dispatcher_t *dispatcher)
 }
 
 unsigned int sample_dispatcher_push_block(sample_dispatcher_t *dispatcher,
-                                          sample_block_t *block)
+                                           sample_block_t *block)
 {
     unsigned int delivered = 0u;
 
     if (!dispatcher || !block)
         return 0u;
+
+    static unsigned long push_dbg = 0;
+    if (dispatcher->reader_count == 0u && (push_dbg++ % 500u) == 0u)
+        fprintf(stderr,
+                "[dispatcher] push with reader_count=0 (block leaked!)\n");
 
     for (unsigned int i = 0; i < dispatcher->reader_count; i++)
     {

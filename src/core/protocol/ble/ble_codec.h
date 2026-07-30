@@ -178,6 +178,8 @@ typedef struct
 int ble_connect_ind_parse(const uint8_t ll_data[BLE_CONNECT_IND_DATA_MAX_BYTES],
                           ble_connect_ind_params_t *out);
 
+uint8_t ble_rf_to_le_channel(unsigned int rf_channel_index);
+
 int ble_decode_frame(const ble_frame_t *frame,
                      uint8_t channel_index,
                      ble_packet_t *out);

@@ -5,18 +5,20 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <signal.h>
+#include "session.h"
 #include "app_common.h"
 #include "version.h"
 #include "ble_display.h"
 #include "ble_bitstream_decoder.h"
-#include "receiver_session.h"
 
 static unsigned long g_packet_count = 0;
 static int g_debug = 0;
-static int g_enforce_crc = 1;   /* drop BLE frames whose CRC fails; default on */
-static unsigned int g_num_le_channels = RECEIVER_BLE_MAX_CHANNELS;
-static unsigned int g_bottom_le_channel = BLE_CH37_INDEX;   /* LE 37 = RF 0 */
-static receiver_session_t *g_session = NULL;
+static int g_enforce_crc = 1;
+static unsigned int g_num_le_channels = BLE_SESSION_MAX_CHANNELS;
+static unsigned int g_bottom_le_channel = BLE_CH37_INDEX;
+static session_t g_session;
+static int g_session_initialized = 0;
 
 static const app_output_mode_option_t s_output_modes[] = {
     {APP_OUTPUT_MODE_FULL, "full"},
@@ -24,6 +26,13 @@ static const app_output_mode_option_t s_output_modes[] = {
 };
 
 static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
+
+static void handle_sigint(int sig)
+{
+    (void)sig;
+    if (g_session_initialized)
+        session_request_stop(&g_session);
+}
 
 static int parse_channel_count(const char *arg, unsigned int *out_channels)
 {
@@ -33,7 +42,7 @@ static int parse_channel_count(const char *arg, unsigned int *out_channels)
     char *end = NULL;
     unsigned long value = strtoul(arg, &end, 0);
     if (end == arg || *end != '\0' ||
-        value < 1ul || value > (unsigned long)RECEIVER_BLE_MAX_CHANNELS)
+        value < 1ul || value > (unsigned long)BLE_SESSION_MAX_CHANNELS)
         return -1;
 
     *out_channels = (unsigned int)value;
@@ -63,7 +72,7 @@ static void print_usage(const char *argv0)
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of consecutive LE RF channels (1-%u, default: %u)\n",
             "-c, --channels N",
-            RECEIVER_BLE_MAX_CHANNELS, RECEIVER_BLE_MAX_CHANNELS);
+            BLE_SESSION_MAX_CHANNELS, BLE_SESSION_MAX_CHANNELS);
     fprintf(stderr, "  %-30s Bottom LE channel of the window (0-39, default: 37)\n",
             "-b, --bottom-channel CH");
     app_print_device_usage_line();
@@ -80,9 +89,9 @@ static void print_ble_packet_full(unsigned long packet_no,
     ble_packet_t packet;
     printf("\n------------------ Packet #%lu --------------------\n", packet_no);
     printf("[RX Info]\n");
-        printf("Radio Sample : %" PRIu64 " (%u Msps input)\n",
-            meta->radio_start_sample_index,
-            (unsigned int)(meta->radio_sample_rate_hz / 1000000u));
+    printf("Radio Sample : %" PRIu64 " (%u Msps input)\n",
+        meta->radio_start_sample_index,
+        (unsigned int)(meta->radio_sample_rate_hz / 1000000u));
     printf("Type         : BLE\n");
     printf("Frequency    : %u MHz (Channel %u)\n",
            (unsigned int)(meta->center_frequency_hz / 1000000u), meta->channel_index);
@@ -120,9 +129,6 @@ static void handle_ble_packet(const ble_event_t *event,
 {
     (void)user;
 
-    /* When CRC enforcement is on, drop frames whose CRC fails (or that fail
-     * to decode) before emitting anything — no packet number is consumed and
-     * no line is printed, mirroring the receiver going back to searching. */
     if (g_enforce_crc)
     {
         ble_packet_t pkt;
@@ -140,8 +146,6 @@ static void handle_ble_packet(const ble_event_t *event,
     fflush(stdout);
     app_output_unlock();
 }
-
-// --- Main --------------------------------------------------------------------
 
 int main(int argc, char *argv[])
 {
@@ -180,7 +184,7 @@ int main(int argc, char *argv[])
             if (parse_channel_count(optarg, &g_num_le_channels) != 0)
             {
                 fprintf(stderr, "Invalid --channels value: %s (expected 1-%u)\n",
-                        optarg, RECEIVER_BLE_MAX_CHANNELS);
+                        optarg, BLE_SESSION_MAX_CHANNELS);
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
@@ -296,27 +300,29 @@ int main(int argc, char *argv[])
         printf("Device      : (default)\n");
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
     printf("Enforce CRC : %s\n", g_enforce_crc ? "on" : "off");
-    app_install_sigint_handler(&g_session);
+    signal(SIGINT, handle_sigint);
 
-    /* Window of consecutive LE RF channels. The session tunes a whole-MHz
-     * LO at the window center and channelizes each channel down to 2 Msps;
-     * the unified decoder handles advertising and data PDUs alike. */
-    receiver_ble_config_t config = {
-        .bottom_le_channel = bottom_rf,
-        .le_channel_count = g_num_le_channels,
+    session_config_t config = {
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
-        .enforce_crc = g_enforce_crc,
     };
-    receiver_ble_callbacks_t callbacks = {
-        .on_packet = handle_ble_packet,
-        .user = NULL,
-    };
-    g_session = receiver_session_create();
-    if (!g_session)
+
+    if (session_init(&g_session, &config) != 0)
     {
-        fprintf(stderr, "Failed to create receiver session.\n");
+        fprintf(stderr, "Failed to initialize session.\n");
+        return EXIT_FAILURE;
+    }
+    g_session_initialized = 1;
+
+    session_ble_config_t ble_cfg = { .enforce_crc = g_enforce_crc ? 1u : 0u };
+    session_enable_ble(&g_session, &ble_cfg, handle_ble_packet, NULL);
+
+    if (session_tune(&g_session, SESSION_REF_BLE, bottom_rf, g_num_le_channels) != 0)
+    {
+        fprintf(stderr, "Failed to tune session.\n");
+        session_destroy(&g_session);
+        g_session_initialized = 0;
         return EXIT_FAILURE;
     }
 
@@ -324,9 +330,11 @@ int main(int argc, char *argv[])
            g_num_le_channels, g_num_le_channels == 1u ? "" : "s",
            g_bottom_le_channel);
     printf("Press Ctrl+C to exit\n\n");
-        int result = receiver_session_run_ble(g_session, &config, &callbacks);
-    receiver_session_destroy(g_session);
-    g_session = NULL;
+
+    int result = session_run(&g_session);
+    session_destroy(&g_session);
+    g_session_initialized = 0;
+
     if (result != 0)
     {
         fprintf(stderr, "BLE receiver failed.\n");

@@ -73,6 +73,9 @@ private:
     static void rowTrampoline(const backend_row_t *row, void *user);
     // Runs on the worker thread; builds a QVariantMap and emits frameDecoded().
     void handleRow(const backend_row_t *row);
+    // Runs on the session worker thread the moment capture ends, before the
+    // blocking radio teardown; flips the UI to "stopped" without blocking.
+    static void stopTrampoline(void *user);
     void onFinish(int result);
     void setRunning(bool running);
 

@@ -80,11 +80,26 @@ typedef struct
 
 typedef void (*backend_row_fn)(const backend_row_t *row, void *user);
 
+/**
+ * Invoked (on the session worker thread) the moment the capture loop ends,
+ * BEFORE the blocking radio teardown. Lets the GUI flip to "stopped"
+ * immediately rather than waiting on device shutdown.
+ */
+typedef void (*backend_stopped_fn)(void *user);
+
 /** Opaque session handle (hides receiver_session_t). */
 typedef struct backend_session backend_session_t;
 
 backend_session_t *backend_session_create(void);
 void backend_session_destroy(backend_session_t *session);
+
+/**
+ * Register the capture-stopped callback. @p on_stopped is invoked on the
+ * session worker thread just before the blocking radio teardown begins.
+ */
+void backend_session_set_stopped_callback(backend_session_t *session,
+                                          backend_stopped_fn on_stopped,
+                                          void *user);
 
 /**
  * Start a blocking BLE receive session on the given LE channel window:

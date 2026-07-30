@@ -10,13 +10,20 @@
 #define HACKRF_ID_LEN 16u
 
 int hackrf_radio_open(void **out_device,
-                      const char *device_id,
-                      sample_dispatcher_t *dispatcher,
-                      int debug_enabled);
+                       const char *device_id,
+                       sample_dispatcher_t *dispatcher,
+                       int debug_enabled);
 int hackrf_radio_configure(void *device, const radio_stream_config_t *config);
 int hackrf_radio_start_rx(void *device);
 int hackrf_radio_stop_rx(void *device);
 void hackrf_radio_close(void *device);
+
+/**
+ * Maximum sample rate (Hz) a HackRF can sustain. The ADC/DAC is spec'd for
+ * 2-20 MHz; the upper bound is the practical capture ceiling. @p device may
+ * be NULL (the limit is hardware-wide, not per-unit).
+ */
+int hackrf_radio_get_max_sample_rate(void *device, uint32_t *out_rate_hz);
 
 /**
  * Enumerate connected HackRF devices by serial number.

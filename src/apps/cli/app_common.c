@@ -5,14 +5,14 @@
 #include <stdio.h>
 #include <string.h>
 
-static receiver_session_t **g_session_slot = NULL;
+static session_t *g_session_slot = NULL;
 static pthread_mutex_t g_output_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void app_handle_sigint(int sig)
 {
     (void)sig;
-    if (g_session_slot && *g_session_slot)
-        receiver_session_request_stop(*g_session_slot);
+    if (g_session_slot)
+        session_request_stop(g_session_slot);
 }
 
 int app_parse_output_mode(const char *arg,
@@ -70,7 +70,7 @@ void app_output_unlock(void)
     pthread_mutex_unlock(&g_output_mutex);
 }
 
-void app_install_sigint_handler(receiver_session_t **session_slot)
+void app_install_sigint_handler(session_t *session_slot)
 {
     g_session_slot = session_slot;
     signal(SIGINT, app_handle_sigint);

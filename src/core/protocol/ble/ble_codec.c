@@ -378,3 +378,12 @@ int ble_verify_crc(const ble_packet_t *pkt)
 {
     return pkt ? (pkt->crc_ok ? 1 : 0) : 0;
 }
+
+uint8_t ble_rf_to_le_channel(unsigned int rf_channel_index)
+{
+    if (rf_channel_index == 0u)   return 37u;
+    if (rf_channel_index == 12u)  return 38u;
+    if (rf_channel_index >= 39u)  return 39u;
+    if (rf_channel_index < 12u)   return (uint8_t)(rf_channel_index - 1u);
+    return (uint8_t)(rf_channel_index - 2u);
+}

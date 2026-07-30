@@ -120,6 +120,21 @@ void radio_close(radio_device_t *device)
     free(device);
 }
 
+int radio_get_max_sample_rate_for_type(radio_device_type_t type,
+                                       uint32_t *out_rate_hz)
+{
+    if (!out_rate_hz)
+        return -1;
+
+    switch (type)
+    {
+    case RADIO_DEVICE_HACKRF:
+        return hackrf_radio_get_max_sample_rate(NULL, out_rate_hz);
+    default:
+        return -1;
+    }
+}
+
 int radio_list_devices(radio_device_type_t device_type,
                        char ***out_identifiers,
                        size_t *out_count)
