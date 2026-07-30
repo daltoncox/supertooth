@@ -8,8 +8,8 @@
 
 #include <liquid/liquid.h>
 
-#include "ble_channel_processor_new.h"
-#include "bredr_channel_processor_new.h"
+#include "ble_channel_processor.h"
+#include "bredr_channel_processor.h"
 #include "ble_piconet.h"
 #include "bredr_piconet.h"
 #include "bredr_display.h"

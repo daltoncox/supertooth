@@ -156,14 +156,8 @@ add_library(supertooth_core STATIC
     radio/sample_dispatcher.c radio/sample_dispatcher.h
     radio/hackrf.c radio/hackrf.h
     service/ble_channel_processor.c service/ble_channel_processor.h
-    service/ble_channel_processor_new.c service/ble_channel_processor_new.h
-    service/bredr_channel_processor_new.c service/bredr_channel_processor_new.h
-    service/session.c service/session.h
     service/bredr_channel_processor.c service/bredr_channel_processor.h
-    service/receiver_session.c service/receiver_session.h
-    service/receiver_session_ble.c
-    service/receiver_session_bredr.c
-    service/receiver_session_hybrid.c
+    service/session.c service/session.h
     ${CMAKE_CURRENT_BINARY_DIR}/version.c
 )
 

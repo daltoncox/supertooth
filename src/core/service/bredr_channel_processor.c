@@ -1,257 +1,224 @@
 #include "bredr_channel_processor.h"
-#include "rssi_measurements.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
-static float receiver_bredr_rssi_from_history(bredr_channel_processor_t *ctx,
-                                              uint64_t start_sample,
-                                              uint64_t end_sample)
+#include "radio_common.h"
+#include "rssi_measurements.h"
+#include "session.h"
+
+#ifndef RECEIVER_SOURCE_ID_DEFAULT
+#define RECEIVER_SOURCE_ID_DEFAULT 0u
+#endif
+
+static rx_metadata_t bredr_make_metadata(uint64_t radio_start_sample_index,
+                                         uint32_t radio_sample_rate_hz,
+                                         uint32_t center_frequency_hz,
+                                         uint16_t channel_index,
+                                         float rssi_dbr)
 {
-    if (!ctx || !ctx->rssi_history || start_sample >= end_sample)
-        return RECEIVER_RSSI_INVALID;
-
-    uint64_t history_base = ctx->rssi_history_next_sample - (uint64_t)ctx->rssi_history_valid;
-    if (end_sample <= history_base)
-        return RECEIVER_RSSI_INVALID;
-    if (start_sample < history_base)
-        start_sample = history_base;
-
-    uint64_t history_limit = history_base + (uint64_t)ctx->rssi_history_valid;
-    if (start_sample >= history_limit)
-        return RECEIVER_RSSI_INVALID;
-    if (end_sample > history_limit)
-        end_sample = history_limit;
-    if (start_sample >= end_sample)
-        return RECEIVER_RSSI_INVALID;
-
-    float complex *history = NULL;
-    if (windowcf_read(ctx->rssi_history, &history) != 0 || !history)
-        return RECEIVER_RSSI_INVALID;
-
-    return receiver_rssi_from_mean_power_range(history,
-                                               (unsigned int)(start_sample - history_base),
-                                               (unsigned int)(end_sample - history_base),
-                                               RECEIVER_RSSI_INVALID);
+    rx_metadata_t meta = {
+        .source_id = RECEIVER_SOURCE_ID_DEFAULT,
+        .radio_start_sample_index = radio_start_sample_index,
+        .radio_sample_rate_hz = radio_sample_rate_hz,
+        .center_frequency_hz = center_frequency_hz,
+        .channel_index = channel_index,
+        .rssi_dbr = rssi_dbr,
+    };
+    return meta;
 }
 
-void receiver_bredr_update_layout(receiver_session_t *session)
+int bredr_channel_processor_init(bredr_channel_processor_t *proc,
+                                 sample_dispatcher_t *dispatcher,
+                                 uint16_t rf_channel_index,
+                                 int32_t frequency_offset_hz,
+                                 uint32_t center_frequency_hz,
+                                 unsigned int sample_rate_hz)
 {
-    unsigned int channel_count = session->bredr_config.channel_count;
-    /* The capture span is the channel window width: N MHz on the BR/EDR
-     * grid, N+1 MHz on the LE grid (where the outer channels are centered
-     * on the Nyquist edges and are deliberately not processed). */
-    unsigned int span_mhz = channel_count +
-        (session->bredr_config.le_grid == RECEIVER_BREDR_GRID_LE ? 1u : 0u);
-    session->bredr_sample_rate = (uint32_t)(span_mhz * (unsigned int)RECEIVER_BREDR_CHANNEL_BW);
-    if (span_mhz == 2u)
-        session->bredr_sample_rate = 4000000u;
-    session->bredr_decim_factor = session->bredr_sample_rate / 2000000u;
-    session->bredr_raw_samps_per_bit = session->bredr_decim_factor * RECEIVER_BREDR_SYMBOL_STEP;
+    if (!proc || !dispatcher) return -1;
+    memset(proc, 0, sizeof(*proc));
 
-    /* LO = lowest channel center - lowest NCO offset
-     *      = 2402 + bottom + (N-1)/2 MHz.
-     * For even N (BR/EDR grid) this lands on a half-MHz; for odd N (LE
-     * grid) on a whole MHz — the window center in both cases. */
-    double lowest_ctx_freq_offset =
-        -(channel_count / 2.0 - 0.5) * RECEIVER_BREDR_CHANNEL_BW;
-    double lowest_channel_freq_hz =
-        RECEIVER_BREDR_CHANNEL_0_FREQ +
-        session->bredr_config.bottom_channel * RECEIVER_BREDR_CHANNEL_BW;
-    session->bredr_lo_freq_hz = (uint64_t)llround(lowest_channel_freq_hz - lowest_ctx_freq_offset);
-}
+    proc->rf_channel_index    = rf_channel_index;
+    proc->frequency_offset_hz = frequency_offset_hz;
+    proc->center_frequency_hz  = center_frequency_hz;
+    proc->samps_per_symbol     = BREDR_SESSION_SAMPLES_PER_SYMBOL;
 
-int receiver_bredr_channel_processor_setup(receiver_session_t *session)
-{
-    float lowest_ctx_freq_offset =
-        -(session->bredr_config.channel_count / 2.0f - 0.5f) * (float)RECEIVER_BREDR_CHANNEL_BW;
-
-    for (unsigned int i = 0; i < session->bredr_config.channel_count; i++)
+    if (sample_reader_init(&proc->reader, dispatcher) != 0)
     {
-        bredr_channel_processor_t *ctx = &session->bredr_ctx[i];
-        memset(ctx, 0, sizeof(*ctx));
-        ctx->session = session;
-        ctx->bredr_channel = session->bredr_config.bottom_channel + i;
+        bredr_channel_processor_destroy(proc);
+        return -1;
+    }
 
-        float channel_offset_freq =
-            (float)i * (float)RECEIVER_BREDR_CHANNEL_BW + lowest_ctx_freq_offset;
-        float normalized_freq =
-            2.0f * (float)M_PI * channel_offset_freq / (float)session->bredr_sample_rate;
+    double rate_d   = (double)sample_rate_hz;
+    int decimation  = (int)(rate_d / (2.0 * 1e6));
+    if (decimation < 1) decimation = 1;
+    proc->input_decimation = (unsigned int)decimation;
 
-        ctx->nco = nco_crcf_create(LIQUID_NCO);
-        ctx->firdec = firdecim_crcf_create_kaiser(session->bredr_decim_factor, 7, 60.0f);
-        ctx->demod = cpfskdem_create(1, 0.3f, RECEIVER_BREDR_SYMBOL_STEP, 3, 0.5f,
-                                     LIQUID_CPFSK_GMSK);
-        ctx->rssi_history_capacity = RECEIVER_BREDR_BUFFER_SIZE / session->bredr_decim_factor;
-        if (ctx->rssi_history_capacity < BREDR_AC_DETECT_SAMPLES)
-            ctx->rssi_history_capacity = BREDR_AC_DETECT_SAMPLES;
-        ctx->rssi_history_capacity += BREDR_AC_DETECT_SAMPLES;
-        if (ctx->rssi_history_capacity > RECEIVER_BREDR_BUFFER_SIZE)
-            ctx->rssi_history_capacity = RECEIVER_BREDR_BUFFER_SIZE;
-        ctx->rssi_history = windowcf_create(ctx->rssi_history_capacity);
-        ctx->prev_status = BREDR_SEARCHING;
-        ctx->pending_rssi_dbr = RECEIVER_RSSI_INVALID;
-        if (!ctx->nco || !ctx->firdec || !ctx->demod || !ctx->rssi_history)
-            return -1;
+    proc->nco = nco_crcf_create(LIQUID_NCO);
+    if (!proc->nco) { bredr_channel_processor_destroy(proc); return -1; }
+    double omega_nco = ((double)frequency_offset_hz / rate_d) * 2.0 * M_PI;
+    nco_crcf_set_frequency(proc->nco, (float)omega_nco);
 
-        nco_crcf_set_frequency(ctx->nco, normalized_freq);
-        bredr_bitstream_decoder_init(&ctx->proc, BREDR_AC_ERRORS_DEFAULT);
-        if (sample_reader_init(&ctx->reader, &session->sample_dispatcher) != 0)
-            return -1;
+    proc->decimator = firdecim_crcf_create_kaiser((unsigned int)decimation, 7u, 60.0f);
+    if (!proc->decimator) { bredr_channel_processor_destroy(proc); return -1; }
+
+    unsigned int m_taps   = 3u;
+    proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samps_per_symbol,
+                                        m_taps, 0.5f, LIQUID_CPFSK_GMSK);
+    if (!proc->demodulator) { bredr_channel_processor_destroy(proc); return -1; }
+
+    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY;
+    proc->mixed_buf       = malloc(sizeof(float complex) * proc->buf_cap_samples);
+    size_t decim_out_cap  = proc->buf_cap_samples / (size_t)decimation + 16u;
+    proc->decimated       = malloc(sizeof(float complex) * decim_out_cap);
+    if (!proc->mixed_buf || !proc->decimated) { bredr_channel_processor_destroy(proc); return -1; }
+
+    bredr_bitstream_decoder_init(&proc->decoder, BREDR_AC_ERRORS_DEFAULT);
+
+    proc->prev_state                = BREDR_SEARCHING;
+    proc->pkt_start_decim_sample    = 0u;
+    proc->block_start_decim_sample  = 0u;
+    proc->block_start_bit_index     = 0u;
+    proc->active                    = 1;
+    return 0;
+}
+
+void bredr_channel_processor_destroy(bredr_channel_processor_t *proc)
+{
+    if (!proc) return;
+    if (proc->demodulator) cpfskdem_destroy(proc->demodulator);
+    if (proc->decimator)   firdecim_crcf_destroy(proc->decimator);
+    if (proc->nco)         nco_crcf_destroy(proc->nco);
+    free(proc->mixed_buf);
+    free(proc->decimated);
+    sample_reader_destroy(&proc->reader);
+    memset(proc, 0, sizeof(*proc));
+}
+
+static int emit_frame(bredr_channel_processor_t *proc,
+                      unsigned int end_decim_sample,
+                      unsigned int decim_out,
+                      unsigned long abs_block_base_radio)
+{
+    bredr_frame_t frame;
+    if (bredr_bitstream_decoder_get_frame(&proc->decoder, &frame) != 0) return -1;
+
+    /* RSSI is averaged over the packet span in the decimated buffer: from the
+     * packet start sample (derived from the decoder's absolute bit index) to
+     * the end of the current symbol, with a small pre-trigger guard. */
+    unsigned long rel_start = 0u;
+    if (frame.start_bit_index > proc->block_start_bit_index)
+        rel_start = (unsigned long)(frame.start_bit_index - proc->block_start_bit_index);
+    unsigned int i_start = (unsigned int)(rel_start / proc->samps_per_symbol);
+    if (i_start > 4u) i_start -= 4u;
+    unsigned int i_end = end_decim_sample + proc->samps_per_symbol;
+    if (i_end > decim_out) i_end = decim_out;
+
+    float rssi_dbr = receiver_rssi_from_mean_power_range(
+        proc->decimated, i_start, i_end, RECEIVER_RSSI_INVALID);
+
+    /* Radio sample index = block base (input samples) + decimated offset
+     * scaled back up to the input rate by input_decimation. */
+    uint64_t abs_radio = abs_block_base_radio +
+        (uint64_t)i_end * (uint64_t)proc->input_decimation;
+
+    rx_metadata_t meta = bredr_make_metadata(
+        abs_radio,
+        proc->input_decimation * 2000000u,
+        proc->center_frequency_hz,
+        proc->rf_channel_index,
+        rssi_dbr);
+
+    bredr_event_t event = { .meta = meta, .frame = frame };
+
+    if (proc->session)
+    {
+        session_t *s = proc->session;
+        if (s->bredr_cfg.lap_filter_enabled &&
+            ((frame.lap & 0xFFFFFFu) != s->bredr_cfg.lap_filter))
+            return 0;
+        session_process_bredr_event(s, &event);
     }
 
     return 0;
 }
 
-void receiver_bredr_channel_processor_destroy(receiver_session_t *session)
+int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sample_block_t *blk)
 {
-    for (unsigned int i = 0; i < session->bredr_config.channel_count; i++)
+    if (!proc || !proc->active || !blk) return -1;
+
+    proc->block_start_bit_index = proc->decoder.total_bits_seen;
+
+    unsigned int input_count = blk->num_samples;
+    unsigned int decim_count = input_count / proc->input_decimation;
+
+    nco_crcf_mix_block_down(proc->nco, blk->samples, proc->mixed_buf, input_count);
+
+    firdecim_crcf_execute_block(proc->decimator, proc->mixed_buf,
+                               decim_count, proc->decimated);
+    unsigned int decim_out = decim_count;
+
+    proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
+
+    int dbg = proc->session ? proc->session->config.debug : 0;
+    if (dbg && proc->dbg_blocks_seen < 4u)
+        fprintf(stderr,
+                "[bredr_proc ch=%u] block #%u: num_samples=%u decim_count=%u "
+                "decim_out=%u\n",
+                proc->rf_channel_index, proc->dbg_blocks_seen,
+                input_count, decim_count, decim_out);
+    proc->dbg_blocks_seen++;
+
+    unsigned int num_bits = decim_out / proc->samps_per_symbol;
+    for (unsigned int s = 0u; s < num_bits; s++)
     {
-        bredr_channel_processor_t *ctx = &session->bredr_ctx[i];
-        if (ctx->demod)
+        unsigned int sample_index = s * proc->samps_per_symbol;
+        uint32_t raw_sym_val = cpfskdem_demodulate(proc->demodulator,
+                                                   &proc->decimated[sample_index]);
+        uint8_t bit = (uint8_t)(raw_sym_val & 0x1u);
+
+        bredr_status_t status = bredr_bitstream_decoder_push_bit(&proc->decoder, bit);
+
+        if (proc->prev_state == BREDR_SEARCHING && status != BREDR_SEARCHING)
+            proc->pkt_start_decim_sample = proc->block_start_decim_sample + sample_index;
+
+        proc->prev_state = status;
+
+        if (status == BREDR_VALID_PACKET)
         {
-            cpfskdem_destroy(ctx->demod);
-            ctx->demod = NULL;
+            proc->valid_packets++;
+            if (dbg)
+                fprintf(stderr,
+                        "[bredr_proc ch=%u] VALID_PACKET #%lu (decim_out=%u)\n",
+                        proc->rf_channel_index, proc->valid_packets, decim_out);
+            emit_frame(proc, sample_index, decim_out, blk->block_base_sample);
         }
-        if (ctx->rssi_history)
-        {
-            windowcf_destroy(ctx->rssi_history);
-            ctx->rssi_history = NULL;
-        }
-        if (ctx->firdec)
-        {
-            firdecim_crcf_destroy(ctx->firdec);
-            ctx->firdec = NULL;
-        }
-        if (ctx->nco)
-        {
-            nco_crcf_destroy(ctx->nco);
-            ctx->nco = NULL;
-        }
-        sample_reader_destroy(&ctx->reader);
     }
+    return 0;
 }
 
-void receiver_bredr_channel_processor_process(bredr_channel_processor_t *ctx,
-                                              sample_block_t *blk)
+void *bredr_channel_worker(void *arg)
 {
-    receiver_session_t *session = ctx->session;
-    uint64_t block_start_bit_index = ctx->proc.total_bits_seen;
-    uint64_t block_start_decimated_sample = ctx->rssi_history_next_sample;
-    nco_crcf_mix_block_down(ctx->nco, blk->samples, ctx->mixed, blk->num_samples);
+    bredr_channel_processor_t *proc = (bredr_channel_processor_t *)arg;
+    if (!proc || !proc->session) return NULL;
 
-    unsigned int decimated_samples = blk->num_samples / session->bredr_decim_factor;
-    firdecim_crcf_execute_block(ctx->firdec, ctx->mixed, decimated_samples, ctx->decimated);
-    if (decimated_samples != 0u)
+    const _Atomic unsigned int *shutdown = &proc->session->shutdown_requested;
+    sample_block_t *block = NULL;
+
+    for (;;)
     {
-        windowcf_write(ctx->rssi_history, ctx->decimated, decimated_samples);
-        if (ctx->rssi_history_valid + decimated_samples >= ctx->rssi_history_capacity)
-            ctx->rssi_history_valid = ctx->rssi_history_capacity;
-        else
-            ctx->rssi_history_valid += decimated_samples;
-        ctx->rssi_history_next_sample += decimated_samples;
+        if (sample_reader_wait_pop(&proc->reader,
+                                   (const unsigned int *)shutdown, &block) != 0)
+            break;
+
+        if (block)
+        {
+            bredr_channel_processor_process_block(proc, block);
+            sample_block_release(block);
+            block = NULL;
+        }
     }
 
-    unsigned long long local_bits = 0ULL;
-
-    for (unsigned int i = 0; i + RECEIVER_BREDR_SYMBOL_STEP <= decimated_samples;
-         i += RECEIVER_BREDR_SYMBOL_STEP)
-    {
-        unsigned int raw_sym = cpfskdem_demodulate(ctx->demod, &ctx->decimated[i]);
-        uint8_t bit = (uint8_t)(raw_sym & 1u);
-        bredr_status_t prev_status = ctx->prev_status;
-        bredr_status_t s = bredr_bitstream_decoder_push_bit(&ctx->proc, bit);
-        local_bits++;
-
-        if (prev_status == BREDR_SEARCHING && s != BREDR_SEARCHING)
-        {
-            uint64_t ac_end_sample =
-                block_start_decimated_sample + (uint64_t)i + RECEIVER_BREDR_SYMBOL_STEP;
-            uint64_t ac_start_sample =
-                (ac_end_sample >= BREDR_AC_DETECT_SAMPLES)
-                ? (ac_end_sample - (uint64_t)BREDR_AC_DETECT_SAMPLES)
-                : 0u;
-            ctx->pending_rssi_dbr =
-                receiver_bredr_rssi_from_history(ctx, ac_start_sample, ac_end_sample);
-            ctx->pending_rssi_valid = !isnan(ctx->pending_rssi_dbr);
-        }
-        else if (s == BREDR_SEARCHING || s == BREDR_ERROR)
-        {
-            ctx->pending_rssi_dbr = RECEIVER_RSSI_INVALID;
-            ctx->pending_rssi_valid = 0;
-        }
-
-        ctx->prev_status = (s == BREDR_VALID_PACKET) ? BREDR_SEARCHING : s;
-
-        if (s != BREDR_VALID_PACKET)
-            continue;
-
-        bredr_frame_t frame;
-        if (bredr_bitstream_decoder_get_frame(&ctx->proc, &frame) != 0)
-            continue;
-        if (session->bredr_config.lap_filter_enabled &&
-            ((frame.lap & 0xFFFFFFu) != session->bredr_config.lap_filter))
-            continue;
-
-        unsigned long long abs_raw = blk->block_base_sample;
-        if (frame.start_bit_index >= block_start_bit_index)
-        {
-            unsigned long long bits_from_block_start =
-                frame.start_bit_index - block_start_bit_index;
-            abs_raw += bits_from_block_start *
-                       (unsigned long long)session->bredr_raw_samps_per_bit;
-        }
-        else
-        {
-            unsigned long long bits_before_block =
-                block_start_bit_index - frame.start_bit_index;
-            unsigned long long samples_before_block =
-                bits_before_block * (unsigned long long)session->bredr_raw_samps_per_bit;
-            abs_raw = (samples_before_block <= blk->block_base_sample)
-                ? (blk->block_base_sample - samples_before_block)
-                : 0ULL;
-        }
-        float rssi_dbr = ctx->pending_rssi_valid ? ctx->pending_rssi_dbr : RECEIVER_RSSI_INVALID;
-        rx_metadata_t meta = receiver_make_metadata(abs_raw,
-                                                    session->bredr_sample_rate,
-                                                    (uint32_t)(RECEIVER_BREDR_CHANNEL_0_FREQ +
-                                                               (double)ctx->bredr_channel *
-                                                                   RECEIVER_BREDR_CHANNEL_BW),
-                                                    (uint16_t)ctx->bredr_channel,
-                                                    rssi_dbr);
-        bredr_event_t event = {
-            .meta = meta,
-            .frame = frame,
-        };
-
-        pthread_mutex_lock(&session->decoded_packet_mutex);
-        int packet_is_newest = 0;
-        bredr_piconet_t *pnet =
-            bredr_piconet_store_add_packet(&session->bredr_store, &event,
-                                           &packet_is_newest);
-        receiver_bredr_callbacks_t callbacks = session->bredr_callbacks;
-        receiver_bredr_piconet_snapshot_t snapshot;
-        receiver_bredr_piconet_snapshot_t *snapshot_ptr = NULL;
-        if (pnet)
-        {
-            receiver_fill_bredr_piconet_snapshot(pnet, &snapshot);
-            if (!packet_is_newest)
-                snapshot.clk_known = 0;
-            snapshot_ptr = &snapshot;
-        }
-        session->bredr_total_packets++;
-        if (frame.has_header)
-            session->bredr_header_packets++;
-        else
-            session->bredr_id_packets++;
-        pthread_mutex_unlock(&session->decoded_packet_mutex);
-
-        if (callbacks.on_packet)
-            callbacks.on_packet(&event, snapshot_ptr, callbacks.user);
-
-        ctx->pending_rssi_dbr = RECEIVER_RSSI_INVALID;
-        ctx->pending_rssi_valid = 0;
-    }
-
-    __atomic_add_fetch(&session->bredr_total_bits, local_bits, __ATOMIC_RELAXED);
+    return NULL;
 }

@@ -87,7 +87,7 @@ typedef void (*backend_row_fn)(const backend_row_t *row, void *user);
  */
 typedef void (*backend_stopped_fn)(void *user);
 
-/** Opaque session handle (hides receiver_session_t). */
+/** Opaque session handle (hides session_t). */
 typedef struct backend_session backend_session_t;
 
 backend_session_t *backend_session_create(void);
