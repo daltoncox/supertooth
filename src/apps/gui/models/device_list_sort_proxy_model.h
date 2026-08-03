@@ -37,6 +37,13 @@ class DeviceListSortProxyModel : public QSortFilterProxyModel
 
 public:
     explicit DeviceListSortProxyModel(QObject *parent = nullptr);
+
+    /// Re-applies the configured sort whenever the source model is attached
+    /// (from QML or otherwise). Without this, an initial sort state that
+    /// already matches the C++ defaults never gets applied, because the
+    /// setters early-return on unchanged values before a source model exists.
+    void setSourceModel(QAbstractItemModel *sourceModel) override;
+
     int count() const { return rowCount(); }
 
     QString sortRoleName() const { return m_sortRoleName; }
@@ -84,8 +91,8 @@ protected:
 private:
     void applySort();   // resolves role name -> role id, then sort(0, order)
 
-    QString m_sortRoleName = QStringLiteral("rssi");
-    Qt::SortOrder m_sortOrder = Qt::DescendingOrder;
+    QString m_sortRoleName = QStringLiteral("identifier");
+    Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
 };
 
 #endif // DEVICE_LIST_SORT_PROXY_MODEL_H

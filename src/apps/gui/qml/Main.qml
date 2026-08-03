@@ -26,8 +26,8 @@ ApplicationWindow {
     DeviceListSortProxyModel {
         id: deviceSortProxy
         sourceModel: deviceListModel
-        sortRoleName: "rssi"
-        sortOrder: Qt.DescendingOrder
+        sortRoleName: "identifier"
+        sortOrder: Qt.AscendingOrder
     }
 
     Connections {
