@@ -264,6 +264,53 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
     }
 }
 
+static void build_data_detail(backend_row_t *row, const ble_packet_t *pkt,
+                              const rx_metadata_t *meta)
+{
+    const ble_data_pdu_t *data = &pkt->pdu.data;
+
+    add_detail(row, "Channel", "%u", meta->channel_index);
+    add_detail(row, "Access Address", "0x%08" PRIX32, pkt->access_address);
+    add_detail(row, "PHY", "%s", receiver_phy_name(pkt->phy));
+    add_detail(row, "CRCInit", "0x%06" PRIX32, pkt->crc_init);
+    add_detail(row, "LLID", "%u [%s]", (unsigned int)data->llid,
+               ble_llid_name(data->llid));
+    add_detail(row, "NESN", "%u", (unsigned int)data->nesn);
+    add_detail(row, "SN", "%u", (unsigned int)data->sn);
+    add_detail(row, "MD", "%u", (unsigned int)data->md);
+    add_detail(row, "Length", "%u", (unsigned int)data->payload_len);
+
+    /* Payload hex, capped so it stays inside the detail value buffer. */
+    if (data->payload_len == 0u)
+    {
+        add_detail(row, "Payload", "(empty)");
+    }
+    else
+    {
+        char hex[BACKEND_DETAIL_VAL_LEN];
+        size_t pos = 0u;
+        hex[0] = '\0';
+        unsigned int show = data->payload_len;
+        unsigned int max_bytes = (BACKEND_DETAIL_VAL_LEN - 24u) / 3u;
+        if (show > max_bytes)
+            show = max_bytes;
+        for (unsigned int i = 0u; i < show; i++)
+            pos += (size_t)snprintf(hex + pos, sizeof(hex) - pos, "%02X ",
+                                    data->payload[i]);
+        if (pos > 0u && hex[pos - 1u] == ' ')
+            hex[pos - 1u] = '\0';
+        if (show < data->payload_len)
+            add_detail(row, "Payload", "%s ... (+%u bytes)", hex,
+                       (unsigned int)(data->payload_len - show));
+        else
+            add_detail(row, "Payload", "%s", hex);
+    }
+
+    add_detail(row, "CRC", "0x%06" PRIX32 " (%s)", pkt->crc,
+               ble_verify_crc(pkt) ? "PASS" : "FAIL");
+    add_detail(row, "RSSI", "%.1f dBr", meta->rssi_dbr);
+}
+
 static void build_raw(backend_row_t *row, const ble_frame_t *frame)
 {
     unsigned int pos = 0u;
@@ -325,11 +372,6 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
     if (bs->enforce_crc && !ble_verify_crc(&pkt))
         return;
 
-    /* Data-channel PDUs are not rendered yet: the GUI only tunes
-     * advertising channels today, so this cannot happen in practice. */
-    if (!pkt.is_adv_pdu)
-        return;
-
     backend_row_t row;
     memset(&row, 0, sizeof(row));
     row.no = ++bs->packet_count;
@@ -343,6 +385,31 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
     snprintf(row.proto, sizeof(row.proto), "LE");
     row.ch_idx = m->channel_index;
     snprintf(row.addr, sizeof(row.addr), "0x%08" PRIX32, event->frame.access_address);
+
+    /* Data-channel (LL) PDUs carry no device addresses: the connection is
+     * identified by its random access address. The framer only emits these
+     * once the per-connection CRCInit is confirmed, so every row below is a
+     * recovered link-layer connection. */
+    if (!pkt.is_adv_pdu)
+    {
+        const ble_data_pdu_t *data = &pkt.pdu.data;
+        snprintf(row.type, sizeof(row.type), "LL_DATA");
+        snprintf(row.info, sizeof(row.info),
+                 "llid=%s sn=%u nesn=%u md=%u len=%u crc=%s",
+                 ble_llid_name(data->llid),
+                 (unsigned int)data->sn,
+                 (unsigned int)data->nesn,
+                 (unsigned int)data->md,
+                 (unsigned int)data->payload_len,
+                 ble_verify_crc(&pkt) ? "PASS" : "FAIL");
+        snprintf(row.src, sizeof(row.src), "--");
+        snprintf(row.dst, sizeof(row.dst), "--");
+        build_data_detail(&row, &pkt, m);
+        build_raw(&row, &event->frame);
+        bs->on_row(&row, bs->user);
+        return;
+    }
+
     snprintf(row.type, sizeof(row.type), "%s", ble_pdu_type_name(pkt.pdu.adv.pdu_type));
     snprintf(row.info, sizeof(row.info), "%s, CRC %s",
              ble_pdu_type_desc(pkt.pdu.adv.pdu_type),
@@ -752,15 +819,22 @@ int backend_session_run_hybrid(backend_session_t *session,
     session_protocol_ref_t ref = SESSION_REF_BREDR;
     if (le_grid == BACKEND_GRID_LE)
     {
+        /* The GUI passes the window in BR/EDR-style MHz units (an odd
+         * channel_count spanning channel_count+1 MHz and an even
+         * bottom_channel). session_tune() expects LE RF units on the LE
+         * grid (one LE channel per 2 MHz), so halve both before tuning. */
         bottom_channel &= ~1u;
         if (channel_count < 1u)
             channel_count = 1u;
-        if (channel_count > BREDR_SESSION_MAX_CHANNELS - 1u)
-            channel_count = BREDR_SESSION_MAX_CHANNELS - 1u;
+        if (channel_count > 2u * BLE_SESSION_MAX_CHANNELS - 1u)
+            channel_count = 2u * BLE_SESSION_MAX_CHANNELS - 1u;
         if ((channel_count & 1u) == 0u)
             channel_count -= 1u;
-        if (channel_count < 1u)
-            return -1;
+
+        channel_count = (channel_count + 1u) / 2u;
+        if (channel_count > BLE_SESSION_MAX_CHANNELS)
+            channel_count = BLE_SESSION_MAX_CHANNELS;
+        bottom_channel /= 2u;
         ref = SESSION_REF_BLE;
     }
     else
@@ -771,7 +845,9 @@ int backend_session_run_hybrid(backend_session_t *session,
         if (channel_count > BREDR_SESSION_MAX_CHANNELS)
             channel_count = BREDR_SESSION_MAX_CHANNELS;
     }
-    unsigned int max_bottom = 78u - (channel_count - 1u);
+    unsigned int max_bottom = (ref == SESSION_REF_BLE)
+                                  ? BLE_RF_CHANNEL_COUNT - channel_count
+                                  : 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;
 

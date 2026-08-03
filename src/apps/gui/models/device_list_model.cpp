@@ -25,6 +25,7 @@ QHash<int, QByteArray> DeviceListModel::roleNames() const
     return {
         {RssiRole,        "rssi"},
         {ProtoRole,       "proto"},
+        {TypeRole,        "type"},
         {AddrRole,        "addr"},
         {DeviceRole,      "device"},
         {IdentifierRole,  "identifier"},
@@ -49,6 +50,7 @@ QVariant DeviceListModel::data(const QModelIndex &index, int role) const
         // "--" is reproduced on the renderer side.
         return QVariant::fromValue(qIsNaN(r.rssiDb) ? kRssiSentinel : r.rssiDb);
     case ProtoRole:       return r.proto;
+    case TypeRole:        return typeLabelFor(r.proto, r.device);
     case AddrRole:       return r.addr;
     case DeviceRole:     return r.device;
     case IdentifierRole: return identifierLabelFor(r);
@@ -84,6 +86,13 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
     const qint64 now    = QDateTime::currentMSecsSinceEpoch();
 
     QString device = deviceLabelFor(proto, src, dst);
+
+    // BLE data-channel PDUs carry no device addresses: bucket them as a
+    // "connection" identified by the random access address (the `addr`
+    // field), mirroring how BR/EDR piconets get their own row.
+    if (proto == QStringLiteral("LE") &&
+        frame.value(QStringLiteral("type")).toString() == QStringLiteral("LL_DATA"))
+        device = QStringLiteral("connection");
 
     // BR/EDR piconet handling: a single piconet (identified by LAP, the low
     // 24 bits of the address) may emit frames whose `addr` flips between
@@ -415,6 +424,21 @@ QString DeviceListModel::deviceLabelFor(const QString &proto, const QString &src
     return QStringLiteral("Unknown");
 }
 
+QString DeviceListModel::typeLabelFor(const QString &proto, const QString &device)
+{
+    if (proto == QStringLiteral("LE"))
+        // Advertising rows are keyed by a device address; connection rows
+        // (data-channel PDUs) are keyed by an access address.
+        return device == QStringLiteral("connection") ? QStringLiteral("CONN")
+                                                      : QStringLiteral("ADV_ADDR");
+    if (proto == QStringLiteral("BR/EDR"))
+        // Pre-break-out piconet rows have no slave track yet; broken-out
+        // rows are addressed by LT_ADDR (or the Central).
+        return device == QStringLiteral("piconet") ? QStringLiteral("CONN")
+                                                   : QStringLiteral("LT_ADDR");
+    return QStringLiteral("--");
+}
+
 QString DeviceListModel::identifierLabelFor(const Row &r)
 {
     if (r.proto == QStringLiteral("BR/EDR"))
@@ -441,6 +465,11 @@ QString DeviceListModel::identifierLabelFor(const Row &r)
             return r.addr;
         return r.addr + QStringLiteral("-") + suffix;
     }
+
+    // BLE connection rows (data-channel traffic) are identified by their
+    // random access address; there is never a learned local name for one.
+    if (r.device == QStringLiteral("connection"))
+        return r.addr.isEmpty() ? QStringLiteral("Connection") : r.addr;
 
     // BLE: a learned local name (from an advertising packet's AD structure)
     // wins over the raw AdvA so the table reads naturally. Fall back to the

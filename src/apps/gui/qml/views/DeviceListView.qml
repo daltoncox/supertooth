@@ -214,7 +214,8 @@ ListModel {
         // defaultOrder: 0 = Qt.AscendingOrder, 1 = Qt.DescendingOrder.
         ListElement { title: "RSSI";         role: "rssi";        width: 70;  hAlign: 1; color: "#b5cea8"; sortable: true;  defaultOrder: 1 }
         ListElement { title: "Protocol";     role: "proto";       width: 80;  hAlign: 1; color: "#dcdcaa"; sortable: true;  defaultOrder: 0 }
-         ListElement { title: "Identifier";    role: "identifier";  width: 220; hAlign: 1; color: "#569cd6"; sortable: true; defaultOrder: 0 }
+        ListElement { title: "Type";         role: "type";        width: 100;  hAlign: 1; color: "#c586c0"; sortable: true; defaultOrder: 0 }
+        ListElement { title: "Identifier";    role: "identifier";  width: 200; hAlign: 1; color: "#569cd6"; sortable: true; defaultOrder: 0 }
          ListElement { title: "First Seen";    role: "firstSeen";   width: 120; hAlign: 1; color: "#cccccc"; sortable: true; defaultOrder: 0 }
          ListElement { title: "Last Seen";     role: "lastSeen";    width: 120; hAlign: 1; color: "#cccccc"; sortable: true; defaultOrder: 0 }
         ListElement { title: "Packet Rate";  role: "packetRate";  width: 100; hAlign: 1; color: "#9cdcfe"; sortable: true;  defaultOrder: 1 }
@@ -440,7 +441,7 @@ ListModel {
                         color: deviceListView.currentIndex === index ? "#094771" : (index % 2 === 0 ? "#1e1e1e" : "#252525")
                         clip: true
 
-                        property var cells: [rssi, proto, identifier, firstSeen, lastSeen, packetRate]
+                        property var cells: [rssi, proto, type, identifier, firstSeen, lastSeen, packetRate]
 
                         MouseArea {
                             anchors.fill: parent

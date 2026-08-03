@@ -55,6 +55,7 @@ public:
     enum Roles {
         RssiRole = Qt::UserRole + 1,
         ProtoRole,
+        TypeRole,
         AddrRole,
         DeviceRole,
         IdentifierRole,
@@ -137,6 +138,7 @@ private:
                            const QString &device);
     static QString deviceLabelFor(const QString &proto, const QString &src,
                            const QString &dst);
+    static QString typeLabelFor(const QString &proto, const QString &device);
     static QString identifierLabelFor(const Row &r);
     static QString formatLastSeen(qint64 ms);
     void recomputeAverage(Row &r, qint64 now);

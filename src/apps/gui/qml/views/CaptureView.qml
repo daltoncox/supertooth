@@ -12,12 +12,13 @@ Rectangle {
     property bool enforceCrc: true
     property bool running: false
 
-    // Channel layout. The capture window is numChannels MHz wide (even,
-    // 2..maxChannels) and its bottom edge snaps to one of two grids:
-    //   - BR/EDR lock: bottom = BR/EDR channel index, 1 MHz steps, LO at a
-    //     half-MHz frequency (e.g. 2411.5, like the current hybrid fixed LO).
-    //   - BLE lock: bottom = LE RF channel index, 2 MHz steps, LO at a
-    //     whole-MHz frequency.
+    // Channel layout. numChannels is the count of channels in the active
+    // grid, and the window's bottom edge snaps to one of two grids:
+    //   - BR/EDR lock: numChannels = BR/EDR channels (even, 2..maxChannels),
+    //     window = numChannels MHz, LO at a half-MHz frequency (e.g. 2411.5).
+    //   - BLE lock: numChannels = BLE channels to capture (2..maxBleChannels)
+    //     from bottomLeIndex, window = numChannels*2 MHz, LO at a whole-MHz
+    //     frequency.
     // The lock is user-selectable in hybrid mode; BLE-only sessions are
     // always BLE-locked and BR/EDR-only sessions always BR/EDR-locked.
     // CaptureView is the single source of truth — all writes (SpinBoxes,
@@ -27,7 +28,9 @@ Rectangle {
     property int bottomChannel: 0       // BR/EDR channel index (BR/EDR lock)
     property int bottomLeIndex: 0       // LE RF channel index (BLE lock)
     property int numChannels: 20
-    readonly property int maxChannels: 20   // RECEIVER_BREDR_MAX_CHANNELS
+    readonly property int maxChannels: 20        // RECEIVER_BREDR_MAX_CHANNELS
+    readonly property int maxBleChannels: 10     // BLE_SESSION_MAX_CHANNELS
+    readonly property int windowMaxChannels: bleLocked ? maxBleChannels : maxChannels
 
     readonly property bool bleLocked: sessionTypeIndex === 1 ? true
                                     : sessionTypeIndex === 2 ? false
@@ -36,26 +39,31 @@ Rectangle {
     // Derived helpers shared with the spectrum + summary labels.
     readonly property real windowLeftMhz: bleLocked ? 2401 + 2 * bottomLeIndex
                                                     : 2401.5 + bottomChannel
-    // Sample rate mirrors supertooth-bredr.c: 4 Msps for 2 channels, else
-    // count * 1 Msps.
-    readonly property real sampleRateHz: numChannels === 2 ? 4e6 : numChannels * 1e6
+    // Capture-window width in MHz: numChannels for the BR/EDR grid (1 MHz
+    // per channel), numChannels*2 for the BLE grid (2 MHz per channel).
+    readonly property real windowMhz: bleLocked ? numChannels * 2
+                                                : numChannels
+    // Sample rate mirrors supertooth-bredr.c: 4 Msps for a 2 MHz window,
+    // else window MHz * 1 Msps.
+    readonly property real sampleRateHz: windowMhz === 2 ? 4e6 : windowMhz * 1e6
     // LO sits at the center of the capture window — a half-MHz frequency
     // when BR/EDR-locked, a whole-MHz frequency when BLE-locked.
-    readonly property real loFreqHz: (windowLeftMhz + numChannels / 2.0) * 1e6
+    readonly property real loFreqHz: (windowLeftMhz + windowMhz / 2.0) * 1e6
 
     // ---- Channel ranges covered by the window ------------------------------
-    // LE: the window is always exactly numChannels/2 LE channels wide
-    // (window edges never land on LE centers when BR/EDR-locked; they land
-    // on LE edges when BLE-locked).
+    // LE: when BLE-locked the window is exactly numChannels LE channels
+    // wide from bottomLeIndex; when BR/EDR-locked the edges never land on
+    // LE centers so the window spans numChannels/2 LE channels.
     readonly property int leFirstRf: bleLocked ? bottomLeIndex
                                                : Math.max(0, Math.ceil((bottomChannel - 0.5) / 2))
-    readonly property int leLastRf: leFirstRf + numChannels / 2 - 1
+    readonly property int leLastRf: bleLocked ? bottomLeIndex + numChannels - 1
+                                              : leFirstRf + numChannels / 2 - 1
     // BR/EDR: native range when BR/EDR-locked; when BLE-locked, the
     // channels whose centers fall strictly inside the window (channels
     // centered exactly on an edge are half out of band).
     readonly property int brFirstCh: bleLocked ? Math.min(78, bottomLeIndex * 2)
                                                : bottomChannel
-    readonly property int brLastCh: bleLocked ? Math.min(78, bottomLeIndex * 2 + numChannels - 2)
+    readonly property int brLastCh: bleLocked ? Math.min(78, bottomLeIndex * 2 + windowMhz - 2)
                                               : bottomChannel + numChannels - 1
 
     function rfToLeLabel(rf) {
@@ -82,18 +90,21 @@ Rectangle {
     // What actually gets captured, translated per the lock reference:
     //   - BR/EDR grid: numChannels processors (even), window = numChannels
     //     MHz, LO at a half-MHz.
-    //   - LE grid: numChannels-1 processors (odd), window = numChannels MHz,
-    //     LO at a whole MHz; the two BR/EDR channels centered on the
+    //   - LE grid: numChannels BLE channels from bottomLeIndex, window =
+    //     2*numChannels MHz, LO at a whole MHz; the backend hybrid path
+    //     takes an odd channel_count one MHz wider than the window, so
+    //     2*numChannels-1 is sent; the two BR/EDR channels centered on the
     //     Nyquist edges are not processed.
     // bleAdvChannel is the advertising channel whose center lies inside the
     // window (at most one fits a <=20 MHz window), or 0 = none — the hybrid
     // BLE worker idles and BLE-only sessions fall back to ch37.
-    readonly property int backendChannelCount: bleLocked ? numChannels - 1
+    readonly property int backendChannelCount: bleLocked ? numChannels * 2 - 1
                                                          : numChannels
     readonly property int backendBottomChannel: bleLocked ? Math.min(78, bottomLeIndex * 2)
                                                           : bottomChannel
-    // BLE-only sessions take their window in LE RF units instead.
-    readonly property int backendLeChannelCount: numChannels / 2
+    // BLE-only sessions take their window in LE RF units (numChannels
+    // channels from bottomLeIndex).
+    readonly property int backendLeChannelCount: numChannels
     readonly property int backendLeGrid: bleLocked ? 1 : 0
     readonly property int backendBleAdvChannel: {
         if (leFirstRf <= 0 && leLastRf >= 0) return 37
@@ -104,6 +115,10 @@ Rectangle {
 
     // ---- Window clamping (mirrors supertooth-bredr.c validation) --------------
     function clampCount(c) {
+        if (bleLocked) {
+            c = Math.round(c)
+            return Math.max(2, Math.min(maxBleChannels, c))
+        }
         c = Math.round(c / 2) * 2
         return Math.max(2, Math.min(maxChannels, c))
     }
@@ -115,20 +130,19 @@ Rectangle {
     }
     function setWindowBle(kBottom, count) {
         var c = clampCount(count)
-        var k = Math.max(0, Math.min(40 - c / 2, kBottom))
+        var k = Math.max(0, Math.min(40 - c, kBottom))
         if (c !== numChannels) numChannels = c
         if (k !== bottomLeIndex) bottomLeIndex = k
     }
 
-    // Re-align the window to the newly active grid when the lock changes
-    // (mode switch or hybrid lock toggle). BR/EDR b -> LE k snaps to the
-    // nearest LE channel; LE k -> BR/EDR b = 2k keeps the left edge within
-    // half a MHz.
+    // Re-align the window when the lock changes (mode switch or hybrid lock
+    // toggle): reset to the new grid's defaults — the lowest bottom channel
+    // (0) and the maximum channel count (maxBleChannels/maxChannels).
     onBleLockedChanged: {
         if (bleLocked)
-            setWindowBle(Math.round(bottomChannel / 2), numChannels)
+            setWindowBle(0, maxBleChannels)
         else
-            setWindowBredr(bottomLeIndex * 2, numChannels)
+            setWindowBredr(0, maxChannels)
     }
 
     color: "#1e1e1e"
@@ -157,7 +171,7 @@ Rectangle {
             bottomLeIndex: root.bottomLeIndex
             bleLocked: root.bleLocked
             numChannels: root.numChannels
-            maxChannels: root.maxChannels
+            maxChannels: root.windowMaxChannels
             running: root.running
             brRangeText: root.brRangeText
             leRangeText: root.leRangeText
@@ -188,8 +202,8 @@ Rectangle {
                     id: numChannelsSpin
                     enabled: !root.running
                     from: 2
-                    to: root.maxChannels
-                    stepSize: 2
+                    to: root.bleLocked ? root.maxBleChannels : root.maxChannels
+                    stepSize: root.bleLocked ? 1 : 2
                     editable: false
 
                     Component.onCompleted: value = root.numChannels
@@ -208,8 +222,16 @@ Rectangle {
                     Connections {
                         target: root
                         function onNumChannelsChanged() {
-                            if (numChannelsSpin.value !== root.numChannels)
-                                numChannelsSpin.value = root.numChannels
+                            // Defer until the SpinBox's `to`/`stepSize`
+                            // bindings have re-evaluated for the new grid.
+                            // Otherwise writing `value` while `to` is still
+                            // the previous grid's max clamps it (e.g. 10
+                            // after switching back to BR/EDR), leaving the
+                            // selector out of sync with numChannels.
+                            Qt.callLater(function () {
+                                if (numChannelsSpin.value !== root.numChannels)
+                                    numChannelsSpin.value = root.numChannels
+                            })
                         }
                     }
 
@@ -234,7 +256,7 @@ Rectangle {
                     enabled: !root.running
                     from: 0
                     // Can't start lower than the window can fit in the band.
-                    to: root.bleLocked ? 40 - root.numChannels / 2
+                    to: root.bleLocked ? 40 - root.numChannels
                                        : 78 - (root.numChannels - 1)
                     stepSize: 1
                     editable: false
@@ -253,27 +275,57 @@ Rectangle {
                     }
                     Connections {
                         target: root
+                        // All writes are deferred until the SpinBox's
+                        // `to`/`stepSize` bindings have re-evaluated for the
+                        // new grid. Writing while `to` still reflects the old
+                        // grid can clamp `value` (e.g. a BR/EDR bottom clamped
+                        // by the transient LE max), leaving the selector stale.
                         function onBottomChannelChanged() {
-                            if (!root.bleLocked && bottomChannelSpin.value !== root.bottomChannel)
-                                bottomChannelSpin.value = root.bottomChannel
+                            Qt.callLater(function () {
+                                if (!root.bleLocked && bottomChannelSpin.value !== root.bottomChannel)
+                                    bottomChannelSpin.value = root.bottomChannel
+                            })
                         }
                         function onBottomLeIndexChanged() {
-                            if (root.bleLocked && bottomChannelSpin.value !== root.bottomLeIndex)
-                                bottomChannelSpin.value = root.bottomLeIndex
+                            Qt.callLater(function () {
+                                if (root.bleLocked && bottomChannelSpin.value !== root.bottomLeIndex)
+                                    bottomChannelSpin.value = root.bottomLeIndex
+                            })
                         }
                         function onBleLockedChanged() {
-                            bottomChannelSpin.value = root.bleLocked ? root.bottomLeIndex
-                                                                     : root.bottomChannel
+                            Qt.callLater(function () {
+                                var target = root.bleLocked ? root.bottomLeIndex
+                                                            : root.bottomChannel
+                                // QQuickSpinBox::setValue early-returns (and
+                                // skips updateDisplayText()) when the value is
+                                // unchanged. The reset sets bottom to its default
+                                // (0) on every switch, so with the value already
+                                // at the default the grid-dependent label would
+                                // stay stale. Round-trip the value to force the
+                                // display to re-render with the new formatter.
+                                if (bottomChannelSpin.value === target) {
+                                    var nudge = target < bottomChannelSpin.to ? 1 : -1
+                                    bottomChannelSpin.value = target + nudge
+                                }
+                                bottomChannelSpin.value = target
+                            })
                         }
                     }
 
+                    // Qt's SpinBox only recomputes displayText (via
+                    // textFromValue) when `value` changes, not when the
+                    // formatter or other state changes. So the formatter
+                    // itself may close over bleLocked; see onBleLockedChanged
+                    // below for forcing a re-render when the reset leaves the
+                    // value unchanged.
                     textFromValue: function (value) {
                         return root.bleLocked
                                ? "LE " + root.rfToLeLabel(value) + " (" + (2402 + 2 * value) + " MHz)"
                                : value + " (" + (2402 + value) + " MHz)"
                     }
                     valueFromText: function (text) {
-                        return parseInt(text.split(" ")[0])
+                        var m = text.match(/LE (\d+)/)
+                        return m ? parseInt(m[1]) : parseInt(text.split(" ")[0])
                     }
                 }
             }
