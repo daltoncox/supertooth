@@ -58,9 +58,16 @@ qt_add_qml_module(appSupertooth
         qml/views/ChannelSpectrum.qml
 )
 
+if(APPLE)
+    set(_supertooth_output_name Supertooth)
+else()
+    set(_supertooth_output_name supertooth)
+endif()
+
 set_target_properties(appSupertooth PROPERTIES
-    OUTPUT_NAME supertooth
+    OUTPUT_NAME ${_supertooth_output_name}
     MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_BUNDLE_NAME "Supertooth"
     MACOSX_BUNDLE_BUNDLE_VERSION "${SUPERTOOTH_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${SUPERTOOTH_VERSION}"
     MACOSX_BUNDLE_ICON_FILE "Supertooth.icns"
