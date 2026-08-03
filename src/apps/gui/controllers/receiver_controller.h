@@ -21,6 +21,11 @@
  * trampoline calls handleRow() on the worker thread; emitting frameDecoded()
  * from a non-Qt thread is delivered to Qt slots via a queued connection (the
  * controller lives in the main thread).
+ *
+ * Lifecycle: the worker thread is the only background thread and is always
+ * joined before the controller is destroyed — by onFinish() after a normal
+ * stop, or by ~ReceiverController() on teardown — so nothing ever calls back
+ * into `this` after it is gone.
  */
 class ReceiverController : public QObject
 {
@@ -73,9 +78,8 @@ private:
     static void rowTrampoline(const backend_row_t *row, void *user);
     // Runs on the worker thread; builds a QVariantMap and emits frameDecoded().
     void handleRow(const backend_row_t *row);
-    // Runs on the session worker thread the moment capture ends, before the
-    // blocking radio teardown; flips the UI to "stopped" without blocking.
-    static void stopTrampoline(void *user);
+    // Runs on the main thread once the worker has finished; joins the worker
+    // and releases the session, then flips running() to false.
     void onFinish(int result);
     void setRunning(bool running);
 

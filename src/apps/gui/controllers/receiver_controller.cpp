@@ -29,14 +29,18 @@ ReceiverController::ReceiverController(QObject *parent)
 ReceiverController::~ReceiverController()
 {
     stop();
-    /* Detach rather than join: the worker thread tears the session down on its
-     * own (session_run() calls session_destroy()), so joining here would block
-     * the GUI thread on device shutdown during app teardown. The wrapper is
-     * released by the running onFinish() cleanup thread (if any); if the
-     * controller is destroyed before a stop was requested, the worker keeps
-     * the session valid until it finishes. */
+    /* Join the worker rather than detaching it. A detached thread keeps
+     * calling back into `this` (rowTrampoline -> handleRow, and the queued
+     * onFinish) long after the controller is destroyed, which segfaulted on
+     * app exit. stop() was just requested, so session_run()'s 50 ms stop
+     * poll returns promptly; the blocking radio teardown runs on the worker
+     * thread inside session_run(), so this join never blocks the GUI thread
+     * for long. */
     if (m_thread && m_thread->joinable())
-        m_thread->detach();
+        m_thread->join();
+    m_thread.reset();
+    if (m_session)
+        backend_session_destroy(m_session);
     m_session = nullptr;
 }
 
@@ -90,11 +94,13 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         return false;
     }
 
-    /* Detach any previous (still-finishing) worker thread rather than joining
-     * it on the GUI thread; its teardown is owned by the prior onFinish()
-     * cleanup thread. The new run gets a fresh thread below. */
+    /* A prior run's worker is always joined and released by onFinish() before
+     * running() flips back to false, so nothing should be pending here. Guard
+     * defensively: if a thread is somehow still joinable, session_run() has
+     * already returned (otherwise running() would be true and start() would
+     * have bailed), so this join is immediate. */
     if (m_thread && m_thread->joinable())
-        m_thread->detach();
+        m_thread->join();
     m_thread.reset();
 
     QString idStr = deviceId;
@@ -119,9 +125,10 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
             QByteArray idBytes = idStr.toUtf8();
             const char *idPtr = idBytes.isEmpty() ? nullptr
                                                   : idBytes.constData();
-            /* Flip the UI to "stopped" the instant capture ends, before the
-             * (potentially blocking) radio teardown runs on this thread. */
-            backend_session_set_stopped_callback(session, &stopTrampoline, self);
+            /* Note: no stopped-callback is registered. running() stays true
+             * until onFinish() runs (which is queued only after session_run()
+             * has torn the radio down), so a new start() can never race a
+             * still-finishing worker/session. */
             int result;
             if (sessionType == BACKEND_SESSION_BLE)
             {
@@ -176,9 +183,9 @@ void ReceiverController::stop()
     qCInfo(lcSession) << "stop() requested; running=" << m_running;
     if (m_session)
         backend_session_request_stop(m_session);
-    /* The UI flips to "stopped" via stopTrampoline (queued from the worker
-     * thread) before the blocking radio teardown; onFinish() then performs the
-     * join off the GUI thread so the UI never freezes. */
+    /* The worker observes the stop request within its 50 ms poll, tears the
+     * radio down inside session_run(), then posts onFinish(); running() stays
+     * true until that queued onFinish() runs on the main thread. */
 }
 
 void ReceiverController::onFinish(int result)
@@ -192,40 +199,25 @@ void ReceiverController::onFinish(int result)
     m_session = nullptr;
     m_thread.reset();
 
-    /* Perform teardown join + session destruction on a separate thread so the
-     * GUI/main thread is never blocked waiting on device shutdown. The worker
-     * thread has already torn the session down inside session_run(); here we
-     * only join it and free the wrapper. */
-    std::thread cleanup([old_session, old_thread = std::move(old_thread), this, result]() mutable {
-        if (old_thread && old_thread->joinable())
-            old_thread->join();
+    /* The worker has already returned from backend_session_run_*(), which
+     * performed the blocking radio teardown on its own thread before posting
+     * this callback. Joining is therefore immediate, and doing it here on the
+     * main thread keeps `this` alive until every worker callback has drained —
+     * no detached cleanup thread, so nothing outlives the controller. */
+    if (old_thread && old_thread->joinable())
+        old_thread->join();
+    if (old_session)
         backend_session_destroy(old_session);
-        QMetaObject::invokeMethod(this, [this, result]() {
-            setRunning(false);
-            if (result != 0)
-            {
-                qCWarning(lcSession) << "receiver failed with code" << result;
-                emit errorOccurred(tr("Receiver failed (code %1).").arg(result));
-            }
-            else
-            {
-                qCInfo(lcSession) << "receiver session stopped cleanly";
-            }
-        }, Qt::QueuedConnection);
-    });
-    cleanup.detach();
-}
 
-/* static */ void ReceiverController::stopTrampoline(void *user)
-{
-    auto *self = static_cast<ReceiverController *>(user);
-    if (self)
+    setRunning(false);
+    if (result != 0)
     {
-        /* Runs on the session worker thread, just before radio teardown.
-         * Queue the UI update to the main thread so the icon flips
-         * immediately and does not wait on device shutdown. */
-        QMetaObject::invokeMethod(self, &ReceiverController::setRunning,
-                                  Qt::QueuedConnection, false);
+        qCWarning(lcSession) << "receiver failed with code" << result;
+        emit errorOccurred(tr("Receiver failed (code %1).").arg(result));
+    }
+    else
+    {
+        qCInfo(lcSession) << "receiver session stopped cleanly";
     }
 }
 
