@@ -74,6 +74,8 @@ int bredr_channel_processor_init(bredr_channel_processor_t *proc,
     proc->pkt_start_decim_sample   = 0u;
     proc->block_start_decim_sample = 0u;
     proc->block_start_bit_index    = 0u;
+    proc->noise_floor_linear       = 0.0f;
+    proc->noise_floor_initialized  = 0u;
     proc->active                   = 1;
     return 0;
 }
@@ -97,17 +99,25 @@ static int emit_frame(bredr_channel_processor_t *proc,
 
     /* RSSI is averaged over the packet span in the decimated buffer: from the
      * packet start sample (derived from the decoder's absolute bit index) to
-     * the end of the current symbol, with a small pre-trigger guard. */
-    unsigned int i_start = 0u, i_end = 0u;
+     * the end of the current symbol, with a small pre-trigger guard.  The idle
+     * prefix before the packet seeds a per-channel noise-floor estimate that is
+     * subtracted so the reported value reflects signal alone. */
+    unsigned int i_start = 0u, i_end = 0u, i_idle = 0u;
     receiver_rssi_packet_window(proc->block_start_bit_index,
                                 frame.start_bit_index,
                                 end_decim_sample,
                                 proc->samps_per_symbol,
                                 decim_out,
-                                &i_start, &i_end);
+                                &i_start, &i_end, &i_idle);
 
-    float rssi_dbr = receiver_rssi_from_mean_power_range(
-        proc->decimated, i_start, i_end, RECEIVER_RSSI_INVALID);
+    /* Skip the demodulator group-delay region at the head of the packet. */
+    if (i_end > i_start + RECEIVER_RSSI_DEMOD_DELAY_SAMPLES)
+        i_start += RECEIVER_RSSI_DEMOD_DELAY_SAMPLES;
+
+    float rssi_dbr = receiver_rssi_signal_dbr(
+        proc->decimated, i_start, i_end, i_idle,
+        &proc->noise_floor_linear, &proc->noise_floor_initialized,
+        RECEIVER_RSSI_INVALID);
     rssi_dbr += proc->rssi_cal_db;
 
     /* Radio sample index = block base (input samples) + decimated offset

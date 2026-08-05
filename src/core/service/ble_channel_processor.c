@@ -59,6 +59,8 @@ int ble_channel_processor_init(ble_channel_processor_t *proc,
 
     proc->prev_state       = BLE_SEARCHING;
     proc->pkt_start_decim_sample = -1L;
+    proc->noise_floor_linear     = 0.0f;
+    proc->noise_floor_initialized = 0u;
     proc->active           = 1;
     return 0;
 }
@@ -96,8 +98,18 @@ static int emit_frame(ble_channel_processor_t *proc,
             i_end = decim_out;
     }
 
-    float rssi_dbr = receiver_rssi_from_mean_power_range(
-        proc->decimated, i_start_ui, i_end, RECEIVER_RSSI_INVALID);
+    /* The idle prefix [0, i_start_ui) before the packet seeds a per-channel
+     * noise-floor estimate that is subtracted so the reported RSSI reflects
+     * signal alone.  Skip the demodulator group-delay region at the packet
+     * head. */
+    unsigned int sig_start = i_start_ui;
+    if (i_end > sig_start + RECEIVER_RSSI_DEMOD_DELAY_SAMPLES)
+        sig_start += RECEIVER_RSSI_DEMOD_DELAY_SAMPLES;
+
+    float rssi_dbr = receiver_rssi_signal_dbr(
+        proc->decimated, sig_start, i_end, i_start_ui,
+        &proc->noise_floor_linear, &proc->noise_floor_initialized,
+        RECEIVER_RSSI_INVALID);
     rssi_dbr += proc->rssi_cal_db;
 
     /* Radio sample index = block base (input samples) + decimated-sample offset

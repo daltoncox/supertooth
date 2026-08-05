@@ -40,37 +40,38 @@ static int g_failures = 0;
  * -------------------------------------------------------------------------- */
 static void test_window_indices(void)
 {
-    unsigned int start = 0u, end = 0u;
+    unsigned int start = 0u, end = 0u, idle = 0u;
 
     /* Packet starting at bit 600 of this block occupies samples 1200.. */
     receiver_rssi_packet_window(0u, 600u, 1336u - SPS, SPS, BLOCK_SAMPLES,
-                                &start, &end);
+                                &start, &end, &idle);
     CHECK(start == 600u * SPS - RECEIVER_RSSI_PRETRIGGER_SAMPLES,
           "start %u, expected %u", start,
           600u * SPS - RECEIVER_RSSI_PRETRIGGER_SAMPLES);
     CHECK(end == 1336u, "end %u, expected 1336", end);
+    CHECK(idle == 600u * SPS, "idle %u, expected %u", idle, 600u * SPS);
 
     /* Block-relative, not absolute: same packet, block starting at bit 1000. */
     receiver_rssi_packet_window(1000u, 1600u, 1336u - SPS, SPS, BLOCK_SAMPLES,
-                                &start, &end);
+                                &start, &end, &idle);
     CHECK(start == 600u * SPS - RECEIVER_RSSI_PRETRIGGER_SAMPLES,
           "block-relative start %u, expected %u", start,
           600u * SPS - RECEIVER_RSSI_PRETRIGGER_SAMPLES);
 
     /* Packet that began in an earlier block: average what is present. */
     receiver_rssi_packet_window(1000u, 900u, 200u, SPS, BLOCK_SAMPLES,
-                                &start, &end);
+                                &start, &end, &idle);
     CHECK(start == 0u, "straddling start %u, expected 0", start);
     CHECK(end == 202u, "straddling end %u, expected 202", end);
 
     /* A start at or past the end must not produce an inverted window. */
     receiver_rssi_packet_window(0u, 9000u, 200u, SPS, BLOCK_SAMPLES,
-                                &start, &end);
+                                &start, &end, &idle);
     CHECK(start < end, "degenerate window [%u,%u)", start, end);
 
     /* end is clamped to what the buffer actually holds. */
     receiver_rssi_packet_window(0u, 10u, BLOCK_SAMPLES + 500u, SPS,
-                                BLOCK_SAMPLES, &start, &end);
+                                BLOCK_SAMPLES, &start, &end, &idle);
     CHECK(end == BLOCK_SAMPLES, "clamped end %u, expected %u", end,
           BLOCK_SAMPLES);
 }
@@ -105,9 +106,9 @@ static void test_rssi_independent_of_block_position(void)
         for (unsigned int k = 0u; k < BLOCK_SAMPLES; k++)
             buf[k] = (k >= s_lo && k < s_hi) ? 1.0f : 0.01f;
 
-        unsigned int start = 0u, end = 0u;
+        unsigned int start = 0u, end = 0u, idle = 0u;
         receiver_rssi_packet_window(0u, b0, s_hi - SPS, SPS, BLOCK_SAMPLES,
-                                    &start, &end);
+                                    &start, &end, &idle);
 
         float rssi = receiver_rssi_from_mean_power_range(buf, start, end,
                                                          RECEIVER_RSSI_INVALID);
@@ -226,11 +227,65 @@ static void test_bank_gain_uniformity(void)
     free(in);
 }
 
+/* --------------------------------------------------------------------------
+ * Removing the noise floor: a per-channel estimate taken from the idle prefix
+ * before a packet must be subtracted so the reported RSSI reflects signal
+ * power alone, not signal + noise + interference.
+ * -------------------------------------------------------------------------- */
+static void test_noise_floor_subtraction(void)
+{
+    const unsigned int N = 256u;
+    float complex *buf = malloc(N * sizeof(float complex));
+    if (!buf)
+    {
+        printf("FAIL out of memory\n");
+        g_failures++;
+        return;
+    }
+
+    /* Idle prefix (64 samples) is noise/floor at amplitude 0.1 (~ -20 dB);
+     * the signal window is amplitude 0.4 (~ -8 dB).  Without subtraction the
+     * window mean would be dominated by the signal but still include nothing
+     * extra; the point is the floor subtracted must equal the idle mean. */
+    const float floor_amp = 0.1f;
+    const float sig_amp   = 0.4f;
+    for (unsigned int k = 0u; k < N; k++)
+        buf[k] = (k < 64u) ? floor_amp : sig_amp;
+
+    float floor_lin = 0.0f;
+    unsigned int floor_init = 0u;
+
+    /* Idle prefix [0,64) -> floor estimate ~ floor_amp^2. */
+    float rssi = receiver_rssi_signal_dbr(buf, 64u, N, 64u,
+                                          &floor_lin, &floor_init,
+                                          RECEIVER_RSSI_INVALID);
+    CHECK(floor_init == 1u, "floor should be initialised after a long idle", 0);
+    CHECK(fabsf(floor_lin - floor_amp * floor_amp) < 1e-4f,
+          "floor %.6f, expected %.6f", floor_lin, floor_amp * floor_amp);
+
+    /* Reported power should be sig_amp^2 - floor_amp^2. */
+    float sig_power = sig_amp * sig_amp - floor_amp * floor_amp;
+    float expected = receiver_rssi_from_linear_power(sig_power,
+                                                     RECEIVER_RSSI_INVALID);
+    CHECK(fabsf(rssi - expected) < 0.01f,
+          "signal RSSI %.3f dB, expected %.3f dB", rssi, expected);
+
+    /* EMA fallback: a tiny idle prefix must not refresh the floor, so the
+     * previously seeded value is reused. */
+    float before = floor_lin;
+    receiver_rssi_signal_dbr(buf, 64u, N, 4u, &floor_lin, &floor_init,
+                             RECEIVER_RSSI_INVALID);
+    CHECK(floor_lin == before, "short idle must not refresh the floor", 0);
+
+    free(buf);
+}
+
 int main(void)
 {
     test_window_indices();
     test_rssi_independent_of_block_position();
     test_bank_gain_uniformity();
+    test_noise_floor_subtraction();
 
     if (g_failures == 0)
         printf("test_rssi_window: all checks passed\n");

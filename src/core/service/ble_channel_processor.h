@@ -48,6 +48,12 @@ typedef struct {
     long pkt_start_decim_sample;
     ble_status_t prev_state;
 
+    /* Per-channel noise/interference floor estimate (linear mean power), used to
+     * remove the floor from each packet's RSSI.  Seeded from the idle prefix
+     * that precedes a packet and smoothed across packets via an EMA. */
+    float noise_floor_linear;
+    unsigned int noise_floor_initialized;
+
     unsigned long valid_packets;
     unsigned int dbg_blocks_seen;
 
