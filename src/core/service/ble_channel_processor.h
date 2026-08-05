@@ -34,6 +34,7 @@ typedef struct {
 
     unsigned int bin;
     unsigned int bank_M;
+    unsigned int frame_stride;   /**< frames to skip per output sample (grid/1MHz) */
     float rssi_cal_db;
 
     float complex *decimated;
@@ -63,6 +64,7 @@ int ble_channel_processor_init(ble_channel_processor_t *proc,
                                unsigned int chan_bin,
                                unsigned int bank_M,
                                unsigned int bank_M2,
+                               unsigned int frame_stride,
                                float rssi_cal_db,
                                struct ble_piconet_store *store);
 

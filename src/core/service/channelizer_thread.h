@@ -1,16 +1,17 @@
 /**
  * @file service/channelizer_thread.h
- * @brief BR/EDR polyphase channelizer worker.
+ * @brief Polyphase channelizer worker (shared by BR/EDR and BLE).
  *
  * Reads wideband RF blocks from the radio's sample dispatcher, runs them
  * through a single `channelizer_bank_t`, and writes frame-major blocks
  * (layout `out[frame * M + bin]`, see channelizer_bank.h) into a second
- * dispatcher.  Each BR/EDR channel processor is a reader of that second
- * dispatcher and pulls its own bin with a uniform stride of M.
+ * dispatcher.  Each channel processor (BR/EDR or BLE) is a reader of that
+ * second dispatcher and pulls its own bin with a uniform stride of M.
  *
- * This is the BR/EDR side of the hybrid runtime: BLE (when enabled) keeps
- * reading raw RF blocks from the radio dispatcher on the legacy per-channel
- * NCO + firdecim path.
+ * BR/EDR and BLE instances are the same object configured with different
+ * grids: BR/EDR uses the 1 MHz raster (CHANNELIZER_BANK_GRID_BR_EDR_HZ), BLE
+ * uses the 2 MHz raster (CHANNELIZER_BANK_GRID_BLE_HZ).  Each session owns two
+ * of these — one per protocol — driven by the same worker entry point.
  */
 
 #ifndef CHANNELIZER_THREAD_H
@@ -34,27 +35,29 @@ typedef struct
     const _Atomic unsigned int *shutdown;
     int debug;
     int active;
-} bredr_channelizer_t;
+} channelizer_t;
 
 /**
  * Build the channelizer.  Registers @p rf_reader on the radio dispatcher so
  * RF blocks are delivered here.  The channelized output is pushed to @p out,
- * whose readers are the BR/EDR channel processors.
+ * whose readers are the channel processors.
  *
- * @return 0 on success, -1 on failure (caller should fall back to legacy).
+ * @param grid_hz  channel raster: CHANNELIZER_BANK_GRID_BR_EDR_HZ (1 MHz) for
+ *                  BR/EDR or CHANNELIZER_BANK_GRID_BLE_HZ (2 MHz) for BLE.
+ * @return 0 on success, -1 on failure (caller should treat as fatal).
  */
-int bredr_channelizer_init(bredr_channelizer_t *c,
-                           sample_dispatcher_t *rf,
-                           sample_dispatcher_t *out,
-                           unsigned int sample_rate_hz,
-                           uint32_t lo_hz,
-                           uint32_t grid_hz,
-                           int debug);
+int channelizer_init(channelizer_t *c,
+                     sample_dispatcher_t *rf,
+                     sample_dispatcher_t *out,
+                     unsigned int sample_rate_hz,
+                     uint32_t lo_hz,
+                     uint32_t grid_hz,
+                     int debug);
 
-void bredr_channelizer_destroy(bredr_channelizer_t *c);
+void channelizer_destroy(channelizer_t *c);
 
 /** Worker entry point (run on its own thread by the session). */
-void *bredr_channelizer_worker(void *arg);
+void *channelizer_worker(void *arg);
 
 #ifdef __cplusplus
 }

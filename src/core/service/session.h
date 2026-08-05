@@ -9,7 +9,6 @@
 #include <liquid/liquid.h>
 
 #include "ble_channel_processor.h"
-#include "ble_channelizer.h"
 #include "bredr_channel_processor.h"
 #include "channelizer_thread.h"
 #include "ble_piconet.h"
@@ -92,13 +91,13 @@ typedef struct session {
 
     /** Frame-major channelizer output (BLE channel processors read here). */
     sample_dispatcher_t *ble_chan_dispatcher;
-    ble_channelizer_t    ble_channelizer;
+    channelizer_t        ble_channelizer;
     pthread_t            ble_channelizer_thread;
     int                  ble_channelizer_running;
 
     /** Frame-major channelizer output (BR/EDR channel processors read here). */
     sample_dispatcher_t *bredr_chan_dispatcher;
-    bredr_channelizer_t  bredr_channelizer;
+    channelizer_t        bredr_channelizer;
     pthread_t            bredr_channelizer_thread;
     int                  bredr_channelizer_running;
 

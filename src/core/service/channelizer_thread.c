@@ -7,13 +7,13 @@
 
 #include <string.h>
 
-int bredr_channelizer_init(bredr_channelizer_t *c,
-                           sample_dispatcher_t *rf,
-                           sample_dispatcher_t *out,
-                           unsigned int sample_rate_hz,
-                           uint32_t lo_hz,
-                           uint32_t grid_hz,
-                           int debug)
+int channelizer_init(channelizer_t *c,
+                     sample_dispatcher_t *rf,
+                     sample_dispatcher_t *out,
+                     unsigned int sample_rate_hz,
+                     uint32_t lo_hz,
+                     uint32_t grid_hz,
+                     int debug)
 {
     if (!c || !rf || !out)
         return -1;
@@ -37,7 +37,7 @@ int bredr_channelizer_init(bredr_channelizer_t *c,
     return 0;
 }
 
-void bredr_channelizer_destroy(bredr_channelizer_t *c)
+void channelizer_destroy(channelizer_t *c)
 {
     if (!c)
         return;
@@ -46,9 +46,9 @@ void bredr_channelizer_destroy(bredr_channelizer_t *c)
     memset(c, 0, sizeof(*c));
 }
 
-void *bredr_channelizer_worker(void *arg)
+void *channelizer_worker(void *arg)
 {
-    bredr_channelizer_t *c = (bredr_channelizer_t *)arg;
+    channelizer_t *c = (channelizer_t *)arg;
     if (!c || !c->active)
         return NULL;
 
@@ -56,8 +56,6 @@ void *bredr_channelizer_worker(void *arg)
     const unsigned int M2 = c->bank.M2;
     const size_t CAP = SAMPLE_BLOCK_SAMPLE_CAPACITY;
 
-    /* Cap each frame-major block so M*frames stays within the output block
-     * capacity (leave headroom for the carried tail across executes). */
     size_t max_frames = (CAP / (size_t)M);
     if (max_frames > 2u)
         max_frames -= 2u;

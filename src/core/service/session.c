@@ -169,13 +169,21 @@ static int session_create_channels(session_t *session)
         session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT, sizeof(ble_channel_processor_t));
         if (!session->ble_channels) return -1;
 
-        if (ble_channelizer_init(&session->ble_channelizer,
-                                 session->dispatcher,
-                                 session->ble_chan_dispatcher,
-                                 session->sample_rate_hz,
-                                 session->lo_frequency_hz,
-                                 CHANNELIZER_BANK_GRID_BLE_HZ,
-                                 debug) != 0)
+        /* Prefer the 2 MHz BLE raster (one bin per BLE channel => efficient),
+         * but firpfbch2 needs an even bin count, so fall back to the 1 MHz
+         * raster when 2 MHz would yield an odd M (e.g. a 10 MHz window). */
+        uint32_t ble_grid = CHANNELIZER_BANK_GRID_BLE_HZ;
+        if (channelizer_bank_bins_for_rate(session->sample_rate_hz, ble_grid) == 0u)
+            ble_grid = CHANNELIZER_BANK_GRID_BR_EDR_HZ;
+        unsigned int ble_frame_stride = ble_grid / 1000000u;
+
+        if (channelizer_init(&session->ble_channelizer,
+                              session->dispatcher,
+                              session->ble_chan_dispatcher,
+                              session->sample_rate_hz,
+                              session->lo_frequency_hz,
+                              ble_grid,
+                              debug) != 0)
         {
             if (debug)
                 fprintf(stderr, "[session] BLE channelizer init failed\n");
@@ -190,21 +198,26 @@ static int session_create_channels(session_t *session)
                 continue;
 
             ble_channel_processor_t *proc = &session->ble_channels[session->ble_channel_count];
-            int bin = channelizer_bank_bin_for_center_ble(
-                session->ble_channelizer.bank.M,
-                session->ble_channelizer.bank.lo_eff_hz,
-                center);
+            int bin = (ble_grid == CHANNELIZER_BANK_GRID_BLE_HZ)
+                ? channelizer_bank_bin_for_center_ble(
+                      session->ble_channelizer.bank.M,
+                      session->ble_channelizer.bank.lo_eff_hz, center)
+                : (int)channelizer_bank_bin_for_center(
+                      session->ble_channelizer.bank.M,
+                      session->ble_channelizer.bank.lo_eff_hz,
+                      center, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
             if (bin < 0)
                 continue;
-            
+
             int ok = ble_channel_processor_init(
                 proc, session->ble_chan_dispatcher, rf, center,
                 session->sample_rate_hz, (unsigned int)bin,
                 session->ble_channelizer.bank.M,
                 session->ble_channelizer.bank.M2,
+                ble_frame_stride,
                 CHANNELIZER_BANK_RSSI_CAL_DB,
                 &session->ble_piconet_store);
-            
+
             if (ok != 0)
                 continue;
             proc->session = session;
@@ -213,7 +226,7 @@ static int session_create_channels(session_t *session)
 
         if (session->ble_channel_count == 0u)
         {
-            ble_channelizer_destroy(&session->ble_channelizer);
+            channelizer_destroy(&session->ble_channelizer);
             return -1;
         }
         session->ble_channelizer.active = 1;
@@ -225,13 +238,13 @@ static int session_create_channels(session_t *session)
         session->bredr_channels = calloc(BREDR_SESSION_MAX_CHANNELS, sizeof(bredr_channel_processor_t));
         if (!session->bredr_channels) return -1;
 
-        if (bredr_channelizer_init(&session->bredr_channelizer,
-                                   session->dispatcher,
-                                   session->bredr_chan_dispatcher,
-                                   session->sample_rate_hz,
-                                   session->lo_frequency_hz,
-                                   CHANNELIZER_BANK_GRID_BR_EDR_HZ,
-                                   debug) != 0)
+        if (channelizer_init(&session->bredr_channelizer,
+                              session->dispatcher,
+                              session->bredr_chan_dispatcher,
+                              session->sample_rate_hz,
+                              session->lo_frequency_hz,
+                              CHANNELIZER_BANK_GRID_BR_EDR_HZ,
+                              debug) != 0)
         {
             if (debug)
                 fprintf(stderr, "[session] channelizer init failed\n");
@@ -268,7 +281,7 @@ static int session_create_channels(session_t *session)
 
         if (session->bredr_channel_count == 0u)
         {
-            bredr_channelizer_destroy(&session->bredr_channelizer);
+            channelizer_destroy(&session->bredr_channelizer);
             return -1;
         }
         session->bredr_channelizer.active = 1;
@@ -337,7 +350,7 @@ int session_run(session_t *session)
     {
         session->ble_channelizer.shutdown = &session->shutdown_requested;
         if (pthread_create(&session->worker_threads[started], NULL,
-                           ble_channelizer_worker, &session->ble_channelizer) != 0)
+                           channelizer_worker, &session->ble_channelizer) != 0)
         {
             session_destroy(session);
             return -1;
@@ -351,7 +364,7 @@ int session_run(session_t *session)
     {
         session->bredr_channelizer.shutdown = &session->shutdown_requested;
         if (pthread_create(&session->worker_threads[started], NULL,
-                           bredr_channelizer_worker, &session->bredr_channelizer) != 0)
+                            channelizer_worker, &session->bredr_channelizer) != 0)
         {
             /* Channelizer thread failed to start: keep BR/EDR workers but they
              * would starve, so treat it as a hard failure. */
@@ -493,7 +506,7 @@ int session_destroy(session_t *session)
     bredr_piconet_store_free(&session->bredr_piconet_store);
     pthread_mutex_destroy(&session->bredr_mutex);
     
-    ble_channelizer_destroy(&session->ble_channelizer);
+    channelizer_destroy(&session->ble_channelizer);
     if (session->ble_chan_dispatcher)
     {
         sample_dispatcher_destroy(session->ble_chan_dispatcher);
@@ -501,7 +514,7 @@ int session_destroy(session_t *session)
         session->ble_chan_dispatcher = NULL;
     }
     
-    bredr_channelizer_destroy(&session->bredr_channelizer);
+    channelizer_destroy(&session->bredr_channelizer);
     if (session->bredr_chan_dispatcher)
     {
         sample_dispatcher_destroy(session->bredr_chan_dispatcher);

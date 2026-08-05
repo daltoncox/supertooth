@@ -158,7 +158,6 @@ add_library(supertooth_core STATIC
     radio/sample_dispatcher.c radio/sample_dispatcher.h
     radio/hackrf.c radio/hackrf.h
     service/ble_channel_processor.c service/ble_channel_processor.h
-    service/ble_channelizer.c service/ble_channelizer.h
     service/bredr_channel_processor.c service/bredr_channel_processor.h
     service/channelizer_thread.c service/channelizer_thread.h
     service/session.c service/session.h

@@ -17,6 +17,7 @@ int ble_channel_processor_init(ble_channel_processor_t *proc,
                                unsigned int chan_bin,
                                unsigned int bank_M,
                                unsigned int bank_M2,
+                               unsigned int frame_stride,
                                float rssi_cal_db,
                                struct ble_piconet_store *store)
 {
@@ -28,11 +29,12 @@ int ble_channel_processor_init(ble_channel_processor_t *proc,
     proc->center_frequency_hz = center_frequency_hz;
     proc->samples_per_symbol  = BLE_SESSION_SAMPLES_PER_SYMBOL;
 
-    proc->bin              = chan_bin;
-    proc->bank_M           = bank_M;
-    /* Bank outputs 2*grid = 4 Msps per bin; stride-by-2 decimates to 2 Msps,
-     * so the overall decimation from RF rate to demod rate is M2*2. */
-    proc->input_decimation = bank_M2 * 2u;
+    proc->bin           = chan_bin;
+    proc->bank_M        = bank_M;
+    proc->frame_stride  = frame_stride;
+    /* Bank output is 2*grid Msps per bin; the reader strides by grid/1MHz to
+     * reach 2 Msps, so overall RF->demod decimation is M2 * frame_stride. */
+    proc->input_decimation = bank_M2 * frame_stride;
     proc->rssi_cal_db      = rssi_cal_db;
 
     if (sample_reader_init(&proc->reader, dispatcher) != 0) { ble_channel_processor_destroy(proc); return -1; }
@@ -43,8 +45,8 @@ int ble_channel_processor_init(ble_channel_processor_t *proc,
     if (!proc->demodulator) { ble_channel_processor_destroy(proc); return -1; }
 
     /* Decimated (post stride) buffer is at 2 Msps: block holds at most
-     * (SAMPLE_BLOCK_SAMPLE_CAPACITY / bank_M / 2) samples. */
-    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / ((size_t)bank_M * 2u) + 16u;
+     * (SAMPLE_BLOCK_SAMPLE_CAPACITY / bank_M / frame_stride) samples. */
+    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / ((size_t)bank_M * frame_stride) + 16u;
     proc->decimated       = malloc(sizeof(float complex) * proc->buf_cap_samples);
     if (!proc->decimated) { ble_channel_processor_destroy(proc); return -1; }
 
@@ -126,11 +128,11 @@ int ble_channel_processor_process_block(ble_channel_processor_t *proc, sample_bl
 
     unsigned int decim_out;
 
-    /* Frame-major block: out[frame*M + bin]. The bank runs at 2*grid = 4 Msps,
-     * so decimate to 2 Msps by reading every other frame (stride k += 2). */
+    /* Frame-major block: out[frame*M + bin]. The bank runs at 2*grid Msps, decimated
+     * to 2 Msps by striding frame_stride frames (2 for a 2 MHz grid, 1 for 1 MHz). */
     unsigned int frames = blk->num_samples / proc->bank_M;
     decim_out = 0u;
-    for (unsigned int k = 0u; k < frames && decim_out < proc->buf_cap_samples; k += 2u)
+    for (unsigned int k = 0u; k < frames && decim_out < proc->buf_cap_samples; k += proc->frame_stride)
         proc->decimated[decim_out++] = blk->samples[proc->bin + (size_t)k * proc->bank_M];
     proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
 
