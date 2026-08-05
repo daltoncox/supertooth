@@ -49,11 +49,6 @@ typedef struct {
     radio_device_type_t device_type;
     const char *device_id;
     int debug;
-
-    /** Route BR/EDR through the polyphase channelizer (frame-major fan-out)
-     *  instead of the legacy per-channel NCO + firdecim chain.  BLE is
-     *  unaffected and keeps the legacy path (hybrid runtime). */
-    int use_bredr_channelizer;
 } session_config_t;
 
 typedef struct {

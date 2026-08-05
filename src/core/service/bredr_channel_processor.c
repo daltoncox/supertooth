@@ -33,67 +33,12 @@ static rx_metadata_t bredr_make_metadata(uint64_t radio_start_sample_index,
 int bredr_channel_processor_init(bredr_channel_processor_t *proc,
                                  sample_dispatcher_t *dispatcher,
                                  uint16_t rf_channel_index,
-                                 int32_t frequency_offset_hz,
                                  uint32_t center_frequency_hz,
-                                 unsigned int sample_rate_hz)
-{
-    if (!proc || !dispatcher) return -1;
-    memset(proc, 0, sizeof(*proc));
-
-    proc->rf_channel_index    = rf_channel_index;
-    proc->frequency_offset_hz = frequency_offset_hz;
-    proc->center_frequency_hz  = center_frequency_hz;
-    proc->samps_per_symbol     = BREDR_SESSION_SAMPLES_PER_SYMBOL;
-
-    if (sample_reader_init(&proc->reader, dispatcher) != 0)
-    {
-        bredr_channel_processor_destroy(proc);
-        return -1;
-    }
-
-    double rate_d   = (double)sample_rate_hz;
-    int decimation  = (int)(rate_d / (2.0 * 1e6));
-    if (decimation < 1) decimation = 1;
-    proc->input_decimation = (unsigned int)decimation;
-
-    proc->nco = nco_crcf_create(LIQUID_NCO);
-    if (!proc->nco) { bredr_channel_processor_destroy(proc); return -1; }
-    double omega_nco = ((double)frequency_offset_hz / rate_d) * 2.0 * M_PI;
-    nco_crcf_set_frequency(proc->nco, (float)omega_nco);
-
-    proc->decimator = firdecim_crcf_create_kaiser((unsigned int)decimation, 7u, 60.0f);
-    if (!proc->decimator) { bredr_channel_processor_destroy(proc); return -1; }
-
-    unsigned int m_taps   = 3u;
-    proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samps_per_symbol,
-                                        m_taps, 0.5f, LIQUID_CPFSK_GMSK);
-    if (!proc->demodulator) { bredr_channel_processor_destroy(proc); return -1; }
-
-    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY;
-    proc->mixed_buf       = malloc(sizeof(float complex) * proc->buf_cap_samples);
-    size_t decim_out_cap  = proc->buf_cap_samples / (size_t)decimation + 16u;
-    proc->decimated       = malloc(sizeof(float complex) * decim_out_cap);
-    if (!proc->mixed_buf || !proc->decimated) { bredr_channel_processor_destroy(proc); return -1; }
-
-    bredr_bitstream_decoder_init(&proc->decoder, BREDR_AC_ERRORS_DEFAULT);
-
-    proc->prev_state                = BREDR_SEARCHING;
-    proc->pkt_start_decim_sample    = 0u;
-    proc->block_start_decim_sample  = 0u;
-    proc->block_start_bit_index     = 0u;
-    proc->active                    = 1;
-    return 0;
-}
-
-int bredr_channel_processor_init_channelizer(bredr_channel_processor_t *proc,
-                                             sample_dispatcher_t *dispatcher,
-                                             uint16_t rf_channel_index,
-                                             uint32_t center_frequency_hz,
-                                             unsigned int sample_rate_hz,
-                                             unsigned int chan_bin,
-                                             unsigned int bank_M,
-                                             unsigned int bank_M2,
-                                             float rssi_cal_db)
+                                 unsigned int sample_rate_hz,
+                                 unsigned int chan_bin,
+                                 unsigned int bank_M,
+                                 unsigned int bank_M2,
+                                 float rssi_cal_db)
 {
     if (!proc || !dispatcher) return -1;
     memset(proc, 0, sizeof(*proc));
@@ -103,7 +48,6 @@ int bredr_channel_processor_init_channelizer(bredr_channel_processor_t *proc,
     proc->center_frequency_hz  = center_frequency_hz;
     proc->samps_per_symbol     = BREDR_SESSION_SAMPLES_PER_SYMBOL;
 
-    proc->uses_channelizer = 1;
     proc->bin              = chan_bin;
     proc->bank_M           = bank_M;
     proc->input_decimation = bank_M2;
@@ -138,9 +82,6 @@ void bredr_channel_processor_destroy(bredr_channel_processor_t *proc)
 {
     if (!proc) return;
     if (proc->demodulator) cpfskdem_destroy(proc->demodulator);
-    if (proc->decimator)   firdecim_crcf_destroy(proc->decimator);
-    if (proc->nco)         nco_crcf_destroy(proc->nco);
-    free(proc->mixed_buf);
     free(proc->decimated);
     sample_reader_destroy(&proc->reader);
     memset(proc, 0, sizeof(*proc));
@@ -184,9 +125,8 @@ static int emit_frame(bredr_channel_processor_t *proc,
     if (proc->session && proc->session->config.debug)
     {
         uint32_t rxclk = (uint32_t)((abs_radio * 1600u + 10000000u) / 20000000u);
-        fprintf(stderr, "[timing ch=%u %s] abs_radio=%llu rxclk=%u\n",
+        fprintf(stderr, "[timing ch=%u] abs_radio=%llu rxclk=%u\n",
                 proc->rf_channel_index,
-                proc->uses_channelizer ? "chan" : "leg",
                 (unsigned long long)abs_radio, rxclk);
     }
 
@@ -212,38 +152,20 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
 
     unsigned int decim_out;
 
-    if (proc->uses_channelizer)
-    {
-        /* Frame-major channelizer block: layout out[frame*M + bin].  Read this
-         * channel's bin with a uniform stride of M. */
-        unsigned int frames = blk->num_samples / proc->bank_M;
-        if (frames > proc->buf_cap_samples)
-            frames = (unsigned int)proc->buf_cap_samples;
-        for (unsigned int k = 0u; k < frames; k++)
-            proc->decimated[k] = blk->samples[proc->bin + (size_t)k * proc->bank_M];
-        decim_out = frames;
-        proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
-    }
-    else
-    {
-        unsigned int input_count = blk->num_samples;
-        unsigned int decim_count = input_count / proc->input_decimation;
-
-        nco_crcf_mix_block_down(proc->nco, blk->samples, proc->mixed_buf, input_count);
-
-        firdecim_crcf_execute_block(proc->decimator, proc->mixed_buf,
-                                    decim_count, proc->decimated);
-        decim_out = decim_count;
-        proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
-    }
+    unsigned int frames = blk->num_samples / proc->bank_M;
+    if (frames > proc->buf_cap_samples)
+        frames = (unsigned int)proc->buf_cap_samples;
+    for (unsigned int k = 0u; k < frames; k++)
+        proc->decimated[k] = blk->samples[proc->bin + (size_t)k * proc->bank_M];
+    decim_out = frames;
+    proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
 
     int dbg = proc->session ? proc->session->config.debug : 0;
     if (dbg && proc->dbg_blocks_seen < 4u)
         fprintf(stderr,
-                "[bredr_proc ch=%u] block #%u: num_samples=%u decim_out=%u%s\n",
+                "[bredr_proc ch=%u] block #%u: num_samples=%u decim_out=%u\n",
                 proc->rf_channel_index, proc->dbg_blocks_seen,
-                blk->num_samples, decim_out,
-                proc->uses_channelizer ? " (channelizer)" : "");
+                blk->num_samples, decim_out);
     proc->dbg_blocks_seen++;
 
     unsigned int num_bits = decim_out / proc->samps_per_symbol;

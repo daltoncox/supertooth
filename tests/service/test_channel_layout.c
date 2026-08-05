@@ -132,8 +132,7 @@ static void test_processor_counts(void)
         session_destroy(&s);
     }
 
-    /* Hybrid BLE-ref: BR/EDR fans out inside the BLE capture window
-     * (channels 9..29 -> 21 BR/EDR processors). */
+    /* Hybrid BLE-ref: BR/EDR fans out inside the BLE capture window. */
     {
         session_t s;
         memset(&s, 0, sizeof(s));
@@ -142,9 +141,11 @@ static void test_processor_counts(void)
         CHECK_U64("hybrid ble-ref setup",
                   session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
         CHECK_U64("hybrid ble-ref ble count", ble_n, 10u);
-        /* The 20 MHz BLE window spans 2401..2421 MHz; BR/EDR channels with
-         * centers inside that (ch9..ch28) are 20 processors. */
-        CHECK_U64("hybrid ble-ref bredr count", bredr_n, 20u);
+        /* The 20 MHz BLE window spans 2402..2420 MHz; BR/EDR channels with
+         * centers strictly inside that (ch0..ch18) are 19 processors.
+         * Channel 19 at 2421 MHz is at the Nyquist edge and excluded by the
+         * channelizer's asymmetric bin range [-M/2, +M/2-1]. */
+        CHECK_U64("hybrid ble-ref bredr count", bredr_n, 19u);
         session_destroy(&s);
     }
 

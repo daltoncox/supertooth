@@ -180,72 +180,53 @@ static int session_create_channels(session_t *session)
         session->bredr_channels = calloc(BREDR_SESSION_MAX_CHANNELS, sizeof(bredr_channel_processor_t));
         if (!session->bredr_channels) return -1;
 
-        /* Decide whether to route BR/EDR through the polyphase channelizer.
-         * The bank is built once up front; if that fails we transparently
-         * fall back to the legacy per-channel NCO + firdecim path. */
-        int use_chan = session->config.use_bredr_channelizer;
-        if (use_chan)
+        if (bredr_channelizer_init(&session->bredr_channelizer,
+                                   session->dispatcher,
+                                   session->bredr_chan_dispatcher,
+                                   session->sample_rate_hz,
+                                   session->lo_frequency_hz,
+                                   CHANNELIZER_BANK_GRID_BR_EDR_HZ,
+                                   debug) != 0)
         {
-            if (bredr_channelizer_init(&session->bredr_channelizer,
-                                       session->dispatcher,
-                                       session->bredr_chan_dispatcher,
-                                       session->sample_rate_hz,
-                                       session->lo_frequency_hz,
-                                       CHANNELIZER_BANK_GRID_BR_EDR_HZ,
-                                       debug) != 0)
-            {
-                if (debug)
-                    fprintf(stderr, "[session] channelizer init failed; using legacy BR/EDR\n");
-                use_chan = 0;
-            }
+            if (debug)
+                fprintf(stderr, "[session] channelizer init failed\n");
+            return -1;
         }
 
         for (unsigned int c = 0u; c < BREDR_SESSION_MAX_CHANNELS; c++)
         {
             uint32_t center = (uint32_t)(2402000000ull + (uint64_t)c * 1000000ull);
             int32_t offset  = (int32_t)center - (int32_t)session->lo_frequency_hz;
-            if (labs((long)offset) > (int32_t)(session->sample_rate_hz / 2u))
+            if (labs((long)offset) >= (int32_t)(session->sample_rate_hz / 2u))
                 continue;
 
             bredr_channel_processor_t *proc = &session->bredr_channels[session->bredr_channel_count];
-            int ok;
-            if (use_chan)
-            {
-                int bin = channelizer_bank_bin_for_center(
-                    session->bredr_channelizer.bank.M,
-                    session->bredr_channelizer.bank.lo_eff_hz,
-                    center, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
-                if (bin < 0)
-                    continue; /* outside the channelized span */
-                ok = bredr_channel_processor_init_channelizer(
-                    proc, session->bredr_chan_dispatcher, (uint16_t)c, center,
-                    session->sample_rate_hz, (unsigned int)bin,
-                    session->bredr_channelizer.bank.M,
-                    session->bredr_channelizer.bank.M2,
-                    CHANNELIZER_BANK_RSSI_CAL_DB);
-            }
-            else
-            {
-                ok = bredr_channel_processor_init(proc, session->dispatcher, (uint16_t)c,
-                                                 offset, center, session->sample_rate_hz);
-            }
+            int bin = channelizer_bank_bin_for_center(
+                session->bredr_channelizer.bank.M,
+                session->bredr_channelizer.bank.lo_eff_hz,
+                center, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
+            if (bin < 0)
+                continue;
+            
+            int ok = bredr_channel_processor_init(
+                proc, session->bredr_chan_dispatcher, (uint16_t)c, center,
+                session->sample_rate_hz, (unsigned int)bin,
+                session->bredr_channelizer.bank.M,
+                session->bredr_channelizer.bank.M2,
+                CHANNELIZER_BANK_RSSI_CAL_DB);
+            
             if (ok != 0)
                 continue;
             proc->session = session;
             session->bredr_channel_count++;
         }
 
-        if (use_chan && session->bredr_channel_count == 0u)
+        if (session->bredr_channel_count == 0u)
         {
-            /* No BR/EDR channels landed in the span: tear the bank down and
-             * fall back to legacy so the session is still usable. */
             bredr_channelizer_destroy(&session->bredr_channelizer);
-            use_chan = 0;
+            return -1;
         }
-        session->bredr_channelizer.active = use_chan;
-        if (debug)
-            fprintf(stderr, "[session] BR/EDR channelizer: %s\n",
-                    use_chan ? "enabled" : "disabled (legacy)");
+        session->bredr_channelizer.active = 1;
     }
 
     total = session->ble_channel_count + session->bredr_channel_count +
