@@ -48,7 +48,14 @@ void sample_dispatcher_reset(sample_dispatcher_t *dispatcher);
 void sample_dispatcher_note_drop(sample_dispatcher_t *dispatcher, int debug_enabled);
 sample_block_t *sample_dispatcher_acquire_block(sample_dispatcher_t *dispatcher);
 unsigned int sample_dispatcher_push_block(sample_dispatcher_t *dispatcher,
-                                          sample_block_t *block);
+                                           sample_block_t *block);
+
+/**
+ * Total dropped blocks across this dispatcher: blocks the pool could not
+ * acquire plus blocks every reader's queue rejected because it was full.
+ * Both are real drops the capture loop could not keep up with.
+ */
+unsigned long sample_dispatcher_total_dropped(const sample_dispatcher_t *dispatcher);
 
 int sample_reader_init(sample_reader_t *reader,
                        sample_dispatcher_t *dispatcher);

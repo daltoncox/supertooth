@@ -32,6 +32,7 @@ static unsigned int g_rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGI
 static unsigned int g_num_bredr_channels = BREDR_SESSION_MAX_CHANNELS;
 static unsigned int g_bottom_bredr_channel = 0u;
 static int g_bottom_channel_explicit = 0;
+static int g_use_channelizer = 0;
 
 /* Counters. */
 static unsigned long g_total_packets = 0UL;
@@ -267,6 +268,7 @@ int main(int argc, char *argv[])
         {"device",         optional_argument, NULL, 'd'},
         {"version",        no_argument,       NULL, 'V'},
         {"debug",          no_argument,       NULL, APP_OPT_DEBUG},
+        {"channelizer",    no_argument,       NULL, 'z'},
         {"help",           no_argument,       NULL, 'h'},
         {NULL,             0,                 NULL,  0 }
     };
@@ -289,7 +291,7 @@ int main(int argc, char *argv[])
     }
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::Vh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::Vhz", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -350,6 +352,9 @@ int main(int argc, char *argv[])
                 break;
             case APP_OPT_DEBUG:
                 g_debug = 1;
+                break;
+            case 'z':
+                g_use_channelizer = 1;
                 break;
             case 'V':
                 printf("supertooth-bredr %s\n", supertooth_get_version());
@@ -431,12 +436,14 @@ int main(int argc, char *argv[])
     else
         printf("Device      : (default)\n");
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
+    printf("Channelizer : %s\n", g_use_channelizer ? "enabled (polyphase bank)" : "disabled (legacy)");
     printf("Press Ctrl+C to stop.\n\n");
 
     session_config_t config = {
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
+        .use_bredr_channelizer = g_use_channelizer,
     };
     g_session = (session_t *)calloc(1, sizeof(*g_session));
     if (!g_session)

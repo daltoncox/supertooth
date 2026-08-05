@@ -7,6 +7,7 @@
 
 #include "ble_piconet.h"
 #include "bredr_piconet.h"
+#include "channelizer_bank.h"
 #include "radio_common.h"
 
 static void session_signal_readers(session_t *session)
@@ -16,6 +17,8 @@ static void session_signal_readers(session_t *session)
         sample_reader_signal(&session->ble_channels[w].reader);
     for (size_t w = 0u; w < session->bredr_channel_count; w++)
         sample_reader_signal(&session->bredr_channels[w].reader);
+    if (session->bredr_channelizer_running)
+        sample_reader_signal(&session->bredr_channelizer.rf_reader);
 }
 
 int session_init(session_t *session, const session_config_t *cfg)
@@ -38,6 +41,17 @@ int session_init(session_t *session, const session_config_t *cfg)
         session->dispatcher = NULL;
         return -1;
     }
+
+    session->bredr_chan_dispatcher = (sample_dispatcher_t *)calloc(1, sizeof(*session->bredr_chan_dispatcher));
+    if (!session->bredr_chan_dispatcher) return -1;
+    if (sample_dispatcher_init(session->bredr_chan_dispatcher) != 0)
+    {
+        free(session->bredr_chan_dispatcher);
+        session->bredr_chan_dispatcher = NULL;
+        return -1;
+    }
+    memset(&session->bredr_channelizer, 0, sizeof(session->bredr_channelizer));
+    session->bredr_channelizer_running = 0;
 
     ble_piconet_store_init(&session->ble_piconet_store);
     bredr_piconet_store_init(&session->bredr_piconet_store);
@@ -166,6 +180,26 @@ static int session_create_channels(session_t *session)
         session->bredr_channels = calloc(BREDR_SESSION_MAX_CHANNELS, sizeof(bredr_channel_processor_t));
         if (!session->bredr_channels) return -1;
 
+        /* Decide whether to route BR/EDR through the polyphase channelizer.
+         * The bank is built once up front; if that fails we transparently
+         * fall back to the legacy per-channel NCO + firdecim path. */
+        int use_chan = session->config.use_bredr_channelizer;
+        if (use_chan)
+        {
+            if (bredr_channelizer_init(&session->bredr_channelizer,
+                                       session->dispatcher,
+                                       session->bredr_chan_dispatcher,
+                                       session->sample_rate_hz,
+                                       session->lo_frequency_hz,
+                                       CHANNELIZER_BANK_GRID_BR_EDR_HZ,
+                                       debug) != 0)
+            {
+                if (debug)
+                    fprintf(stderr, "[session] channelizer init failed; using legacy BR/EDR\n");
+                use_chan = 0;
+            }
+        }
+
         for (unsigned int c = 0u; c < BREDR_SESSION_MAX_CHANNELS; c++)
         {
             uint32_t center = (uint32_t)(2402000000ull + (uint64_t)c * 1000000ull);
@@ -174,15 +208,48 @@ static int session_create_channels(session_t *session)
                 continue;
 
             bredr_channel_processor_t *proc = &session->bredr_channels[session->bredr_channel_count];
-            if (bredr_channel_processor_init(proc, session->dispatcher, (uint16_t)c, offset, center,
-                                            session->sample_rate_hz) != 0)
+            int ok;
+            if (use_chan)
+            {
+                int bin = channelizer_bank_bin_for_center(
+                    session->bredr_channelizer.bank.M,
+                    session->bredr_channelizer.bank.lo_eff_hz,
+                    center, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
+                if (bin < 0)
+                    continue; /* outside the channelized span */
+                ok = bredr_channel_processor_init_channelizer(
+                    proc, session->bredr_chan_dispatcher, (uint16_t)c, center,
+                    session->sample_rate_hz, (unsigned int)bin,
+                    session->bredr_channelizer.bank.M,
+                    session->bredr_channelizer.bank.M2,
+                    CHANNELIZER_BANK_RSSI_CAL_DB);
+            }
+            else
+            {
+                ok = bredr_channel_processor_init(proc, session->dispatcher, (uint16_t)c,
+                                                 offset, center, session->sample_rate_hz);
+            }
+            if (ok != 0)
                 continue;
             proc->session = session;
             session->bredr_channel_count++;
         }
+
+        if (use_chan && session->bredr_channel_count == 0u)
+        {
+            /* No BR/EDR channels landed in the span: tear the bank down and
+             * fall back to legacy so the session is still usable. */
+            bredr_channelizer_destroy(&session->bredr_channelizer);
+            use_chan = 0;
+        }
+        session->bredr_channelizer.active = use_chan;
+        if (debug)
+            fprintf(stderr, "[session] BR/EDR channelizer: %s\n",
+                    use_chan ? "enabled" : "disabled (legacy)");
     }
 
-    total = session->ble_channel_count + session->bredr_channel_count;
+    total = session->ble_channel_count + session->bredr_channel_count +
+            (session->bredr_channelizer.active ? 1u : 0u);
     if (debug)
     {
         fprintf(stderr,
@@ -214,7 +281,8 @@ int session_run(session_t *session)
         return -1;
     }
 
-    size_t total = session->ble_channel_count + session->bredr_channel_count;
+    size_t total = session->ble_channel_count + session->bredr_channel_count +
+                   (session->bredr_channelizer.active ? 1u : 0u);
     session->worker_threads = calloc(total, sizeof(pthread_t));
     if (!session->worker_threads)
     {
@@ -235,6 +303,22 @@ int session_run(session_t *session)
         if (pthread_create(&session->worker_threads[started], NULL,
                            session_bredr_worker_shim, &session->bredr_channels[w]) != 0)
             break;
+        started++;
+    }
+
+    if (session->bredr_channelizer.active)
+    {
+        session->bredr_channelizer.shutdown = &session->shutdown_requested;
+        if (pthread_create(&session->worker_threads[started], NULL,
+                           bredr_channelizer_worker, &session->bredr_channelizer) != 0)
+        {
+            /* Channelizer thread failed to start: keep BR/EDR workers but they
+             * would starve, so treat it as a hard failure. */
+            session_destroy(session);
+            return -1;
+        }
+        session->bredr_channelizer_thread = session->worker_threads[started];
+        session->bredr_channelizer_running = 1;
         started++;
     }
 
@@ -312,6 +396,14 @@ int session_destroy(session_t *session)
 
     session->torn_down = 1;
 
+    /* Snapshot the drop counters now: the dispatcher resets below zero them,
+     * and session_run() calls session_destroy() before returning, so any
+     * post-run query must read this snapshot rather than the live (now-zero)
+     * counters. */
+    session->dropped_blocks_total = sample_dispatcher_total_dropped(session->dispatcher);
+    if (session->bredr_chan_dispatcher)
+        session->dropped_blocks_total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
+
     if (session->workers_running)
         session_request_stop(session);
 
@@ -350,11 +442,19 @@ int session_destroy(session_t *session)
 
     session->worker_count    = 0u;
     session->workers_running = 0;
+    session->bredr_channelizer_running = 0;
     atomic_store_explicit(&session->shutdown_requested, 0u, memory_order_release);
 
     ble_piconet_store_free(&session->ble_piconet_store);
     bredr_piconet_store_free(&session->bredr_piconet_store);
     pthread_mutex_destroy(&session->bredr_mutex);
+    bredr_channelizer_destroy(&session->bredr_channelizer);
+    if (session->bredr_chan_dispatcher)
+    {
+        sample_dispatcher_destroy(session->bredr_chan_dispatcher);
+        free(session->bredr_chan_dispatcher);
+        session->bredr_chan_dispatcher = NULL;
+    }
     sample_dispatcher_destroy(session->dispatcher);
     return 0;
 }
@@ -436,7 +536,14 @@ int session_bredr_piconet_snapshot(const session_t *session,
 unsigned long session_dropped_blocks(const session_t *session)
 {
     if (!session) return 0ul;
-    return session->dispatcher->dropped_blocks;
+    /* After teardown the live counters have been reset to zero, so report the
+     * snapshot taken just before reset (see session_destroy). */
+    if (session->torn_down)
+        return session->dropped_blocks_total;
+    unsigned long total = sample_dispatcher_total_dropped(session->dispatcher);
+    if (session->bredr_chan_dispatcher)
+        total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
+    return total;
 }
 
 int session_create_channels_for_test(session_t *session,

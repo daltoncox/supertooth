@@ -201,7 +201,7 @@ sample_block_t *sample_dispatcher_acquire_block(sample_dispatcher_t *dispatcher)
 }
 
 unsigned int sample_dispatcher_push_block(sample_dispatcher_t *dispatcher,
-                                           sample_block_t *block)
+                                            sample_block_t *block)
 {
     unsigned int delivered = 0u;
 
@@ -228,4 +228,15 @@ unsigned int sample_dispatcher_push_block(sample_dispatcher_t *dispatcher,
     }
 
     return delivered;
+}
+
+unsigned long sample_dispatcher_total_dropped(const sample_dispatcher_t *dispatcher)
+{
+    if (!dispatcher)
+        return 0ul;
+
+    unsigned long total = dispatcher->dropped_blocks;
+    for (unsigned int i = 0u; i < dispatcher->reader_count; i++)
+        total += dispatcher->readers[i]->dropped_blocks;
+    return total;
 }

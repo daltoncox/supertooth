@@ -10,6 +10,7 @@
 
 #include "ble_channel_processor.h"
 #include "bredr_channel_processor.h"
+#include "channelizer_thread.h"
 #include "ble_piconet.h"
 #include "bredr_piconet.h"
 #include "bredr_display.h"
@@ -48,6 +49,11 @@ typedef struct {
     radio_device_type_t device_type;
     const char *device_id;
     int debug;
+
+    /** Route BR/EDR through the polyphase channelizer (frame-major fan-out)
+     *  instead of the legacy per-channel NCO + firdecim chain.  BLE is
+     *  unaffected and keeps the legacy path (hybrid runtime). */
+    int use_bredr_channelizer;
 } session_config_t;
 
 typedef struct {
@@ -88,6 +94,12 @@ typedef struct session {
 
     sample_dispatcher_t *dispatcher;
 
+    /** Frame-major channelizer output (BR/EDR channel processors read here). */
+    sample_dispatcher_t *bredr_chan_dispatcher;
+    bredr_channelizer_t  bredr_channelizer;
+    pthread_t            bredr_channelizer_thread;
+    int                  bredr_channelizer_running;
+
     ble_piconet_store_t   ble_piconet_store;
     bredr_piconet_store_t bredr_piconet_store;
     pthread_mutex_t       bredr_mutex;
@@ -114,6 +126,11 @@ typedef struct session {
     /* Set once teardown has run so session_destroy() is idempotent (it may be
      * called both from within session_run() and by the owner afterwards). */
     int torn_down;
+
+    /* Snapshot of the total dropped-block count, taken just before the
+     * dispatchers are reset during session_destroy().  The live counters are
+     * zeroed by the reset, so this is what callers must read after a run. */
+    unsigned long dropped_blocks_total;
 } session_t;
 
 int  session_init(session_t *session, const session_config_t *cfg);

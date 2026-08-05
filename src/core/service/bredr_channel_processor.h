@@ -33,6 +33,13 @@ typedef struct {
     unsigned int input_decimation;
     unsigned int samps_per_symbol;
 
+    /** When non-zero, `process_block` reads its bin from a frame-major
+     *  channelizer block (stride `bank_M`) instead of mix+decimating RF. */
+    int uses_channelizer;
+    unsigned int bin;        /**< channelizer bin index for this channel */
+    unsigned int bank_M;     /**< number of bins in the channelizer bank */
+    float rssi_cal_db;       /**< added to RSSI to match the legacy chain */
+
     float complex *mixed_buf;
     float complex *decimated;
     size_t buf_cap_samples;
@@ -62,6 +69,25 @@ int  bredr_channel_processor_init(bredr_channel_processor_t *proc,
                                  unsigned int sample_rate_hz);
 
 void bredr_channel_processor_destroy(bredr_channel_processor_t *proc);
+
+/**
+ * Initialise a processor that consumes frame-major channelizer output.
+ *
+ * @param dispatcher      the frame-major dispatcher (channelizer output)
+ * @param chan_bin        this channel's bin index in the bank
+ * @param bank_M          number of bins in the bank (the strided read stride)
+ * @param bank_M2         bank decimation (input samples per output frame)
+ * @param rssi_cal_db     RSSI calibration to add (CHANNELIZER_BANK_RSSI_CAL_DB)
+ */
+int  bredr_channel_processor_init_channelizer(bredr_channel_processor_t *proc,
+                                              sample_dispatcher_t *dispatcher,
+                                              uint16_t rf_channel_index,
+                                              uint32_t center_frequency_hz,
+                                              unsigned int sample_rate_hz,
+                                              unsigned int chan_bin,
+                                              unsigned int bank_M,
+                                              unsigned int bank_M2,
+                                              float rssi_cal_db);
 
 void *bredr_channel_worker(void *arg);
 

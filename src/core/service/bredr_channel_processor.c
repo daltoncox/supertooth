@@ -6,6 +6,7 @@
 
 #include "radio_common.h"
 #include "rssi_measurements.h"
+#include "channelizer_bank.h"
 #include "session.h"
 
 #ifndef RECEIVER_SOURCE_ID_DEFAULT
@@ -84,6 +85,55 @@ int bredr_channel_processor_init(bredr_channel_processor_t *proc,
     return 0;
 }
 
+int bredr_channel_processor_init_channelizer(bredr_channel_processor_t *proc,
+                                             sample_dispatcher_t *dispatcher,
+                                             uint16_t rf_channel_index,
+                                             uint32_t center_frequency_hz,
+                                             unsigned int sample_rate_hz,
+                                             unsigned int chan_bin,
+                                             unsigned int bank_M,
+                                             unsigned int bank_M2,
+                                             float rssi_cal_db)
+{
+    if (!proc || !dispatcher) return -1;
+    memset(proc, 0, sizeof(*proc));
+
+    proc->rf_channel_index    = rf_channel_index;
+    proc->frequency_offset_hz = 0;
+    proc->center_frequency_hz  = center_frequency_hz;
+    proc->samps_per_symbol     = BREDR_SESSION_SAMPLES_PER_SYMBOL;
+
+    proc->uses_channelizer = 1;
+    proc->bin              = chan_bin;
+    proc->bank_M           = bank_M;
+    proc->input_decimation = bank_M2;
+    proc->rssi_cal_db      = rssi_cal_db;
+
+    if (sample_reader_init(&proc->reader, dispatcher) != 0)
+    {
+        bredr_channel_processor_destroy(proc);
+        return -1;
+    }
+
+    proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samps_per_symbol,
+                                        3u, 0.5f, LIQUID_CPFSK_GMSK);
+    if (!proc->demodulator) { bredr_channel_processor_destroy(proc); return -1; }
+
+    /* Frame-major block holds at most SAMPLE_BLOCK_SAMPLE_CAPACITY / M frames. */
+    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / (size_t)bank_M + 16u;
+    proc->decimated = malloc(sizeof(float complex) * proc->buf_cap_samples);
+    if (!proc->decimated) { bredr_channel_processor_destroy(proc); return -1; }
+
+    bredr_bitstream_decoder_init(&proc->decoder, BREDR_AC_ERRORS_DEFAULT);
+
+    proc->prev_state               = BREDR_SEARCHING;
+    proc->pkt_start_decim_sample   = 0u;
+    proc->block_start_decim_sample = 0u;
+    proc->block_start_bit_index    = 0u;
+    proc->active                   = 1;
+    return 0;
+}
+
 void bredr_channel_processor_destroy(bredr_channel_processor_t *proc)
 {
     if (!proc) return;
@@ -117,6 +167,7 @@ static int emit_frame(bredr_channel_processor_t *proc,
 
     float rssi_dbr = receiver_rssi_from_mean_power_range(
         proc->decimated, i_start, i_end, RECEIVER_RSSI_INVALID);
+    rssi_dbr += proc->rssi_cal_db;
 
     /* Radio sample index = block base (input samples) + decimated offset
      * scaled back up to the input rate by input_decimation. */
@@ -129,6 +180,15 @@ static int emit_frame(bredr_channel_processor_t *proc,
         proc->center_frequency_hz,
         proc->rf_channel_index,
         rssi_dbr);
+
+    if (proc->session && proc->session->config.debug)
+    {
+        uint32_t rxclk = (uint32_t)((abs_radio * 1600u + 10000000u) / 20000000u);
+        fprintf(stderr, "[timing ch=%u %s] abs_radio=%llu rxclk=%u\n",
+                proc->rf_channel_index,
+                proc->uses_channelizer ? "chan" : "leg",
+                (unsigned long long)abs_radio, rxclk);
+    }
 
     bredr_event_t event = { .meta = meta, .frame = frame };
 
@@ -150,24 +210,40 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
 
     proc->block_start_bit_index = proc->decoder.total_bits_seen;
 
-    unsigned int input_count = blk->num_samples;
-    unsigned int decim_count = input_count / proc->input_decimation;
+    unsigned int decim_out;
 
-    nco_crcf_mix_block_down(proc->nco, blk->samples, proc->mixed_buf, input_count);
+    if (proc->uses_channelizer)
+    {
+        /* Frame-major channelizer block: layout out[frame*M + bin].  Read this
+         * channel's bin with a uniform stride of M. */
+        unsigned int frames = blk->num_samples / proc->bank_M;
+        if (frames > proc->buf_cap_samples)
+            frames = (unsigned int)proc->buf_cap_samples;
+        for (unsigned int k = 0u; k < frames; k++)
+            proc->decimated[k] = blk->samples[proc->bin + (size_t)k * proc->bank_M];
+        decim_out = frames;
+        proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
+    }
+    else
+    {
+        unsigned int input_count = blk->num_samples;
+        unsigned int decim_count = input_count / proc->input_decimation;
 
-    firdecim_crcf_execute_block(proc->decimator, proc->mixed_buf,
-                               decim_count, proc->decimated);
-    unsigned int decim_out = decim_count;
+        nco_crcf_mix_block_down(proc->nco, blk->samples, proc->mixed_buf, input_count);
 
-    proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
+        firdecim_crcf_execute_block(proc->decimator, proc->mixed_buf,
+                                    decim_count, proc->decimated);
+        decim_out = decim_count;
+        proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
+    }
 
     int dbg = proc->session ? proc->session->config.debug : 0;
     if (dbg && proc->dbg_blocks_seen < 4u)
         fprintf(stderr,
-                "[bredr_proc ch=%u] block #%u: num_samples=%u decim_count=%u "
-                "decim_out=%u\n",
+                "[bredr_proc ch=%u] block #%u: num_samples=%u decim_out=%u%s\n",
                 proc->rf_channel_index, proc->dbg_blocks_seen,
-                input_count, decim_count, decim_out);
+                blk->num_samples, decim_out,
+                proc->uses_channelizer ? " (channelizer)" : "");
     proc->dbg_blocks_seen++;
 
     unsigned int num_bits = decim_out / proc->samps_per_symbol;
@@ -208,8 +284,7 @@ void *bredr_channel_worker(void *arg)
 
     for (;;)
     {
-        if (sample_reader_wait_pop(&proc->reader,
-                                   (const unsigned int *)shutdown, &block) != 0)
+        if (sample_reader_wait_pop(&proc->reader, shutdown, &block) != 0)
             break;
 
         if (block)
