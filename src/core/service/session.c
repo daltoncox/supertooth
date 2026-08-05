@@ -17,6 +17,8 @@ static void session_signal_readers(session_t *session)
         sample_reader_signal(&session->ble_channels[w].reader);
     for (size_t w = 0u; w < session->bredr_channel_count; w++)
         sample_reader_signal(&session->bredr_channels[w].reader);
+    if (session->ble_channelizer_running)
+        sample_reader_signal(&session->ble_channelizer.rf_reader);
     if (session->bredr_channelizer_running)
         sample_reader_signal(&session->bredr_channelizer.rf_reader);
 }
@@ -52,6 +54,17 @@ int session_init(session_t *session, const session_config_t *cfg)
     }
     memset(&session->bredr_channelizer, 0, sizeof(session->bredr_channelizer));
     session->bredr_channelizer_running = 0;
+
+    session->ble_chan_dispatcher = (sample_dispatcher_t *)calloc(1, sizeof(*session->ble_chan_dispatcher));
+    if (!session->ble_chan_dispatcher) return -1;
+    if (sample_dispatcher_init(session->ble_chan_dispatcher) != 0)
+    {
+        free(session->ble_chan_dispatcher);
+        session->ble_chan_dispatcher = NULL;
+        return -1;
+    }
+    memset(&session->ble_channelizer, 0, sizeof(session->ble_channelizer));
+    session->ble_channelizer_running = 0;
 
     ble_piconet_store_init(&session->ble_piconet_store);
     bredr_piconet_store_init(&session->bredr_piconet_store);
@@ -156,22 +169,54 @@ static int session_create_channels(session_t *session)
         session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT, sizeof(ble_channel_processor_t));
         if (!session->ble_channels) return -1;
 
+        if (ble_channelizer_init(&session->ble_channelizer,
+                                 session->dispatcher,
+                                 session->ble_chan_dispatcher,
+                                 session->sample_rate_hz,
+                                 session->lo_frequency_hz,
+                                 CHANNELIZER_BANK_GRID_BLE_HZ,
+                                 debug) != 0)
+        {
+            if (debug)
+                fprintf(stderr, "[session] BLE channelizer init failed\n");
+            return -1;
+        }
+
         for (unsigned int rf = 0u; rf < BLE_RF_CHANNEL_COUNT; rf++)
         {
             uint32_t center = ble_rf_channel_freq_hz(rf);
             int32_t offset  = (int32_t)center - (int32_t)session->lo_frequency_hz;
-            /* BLE processor is only meaningful inside the capture span. */
-            if (labs((long)offset) > (int32_t)(session->sample_rate_hz / 2u))
+            if (labs((long)offset) >= (int32_t)(session->sample_rate_hz / 2u))
                 continue;
 
             ble_channel_processor_t *proc = &session->ble_channels[session->ble_channel_count];
-            if (ble_channel_processor_init(proc, session->dispatcher, rf, offset, center,
-                                           session->sample_rate_hz,
-                                           &session->ble_piconet_store) != 0)
+            int bin = channelizer_bank_bin_for_center_ble(
+                session->ble_channelizer.bank.M,
+                session->ble_channelizer.bank.lo_eff_hz,
+                center);
+            if (bin < 0)
+                continue;
+            
+            int ok = ble_channel_processor_init(
+                proc, session->ble_chan_dispatcher, rf, center,
+                session->sample_rate_hz, (unsigned int)bin,
+                session->ble_channelizer.bank.M,
+                session->ble_channelizer.bank.M2,
+                CHANNELIZER_BANK_RSSI_CAL_DB,
+                &session->ble_piconet_store);
+            
+            if (ok != 0)
                 continue;
             proc->session = session;
             session->ble_channel_count++;
         }
+
+        if (session->ble_channel_count == 0u)
+        {
+            ble_channelizer_destroy(&session->ble_channelizer);
+            return -1;
+        }
+        session->ble_channelizer.active = 1;
     }
 
     if (session->bredr_enabled)
@@ -263,6 +308,7 @@ int session_run(session_t *session)
     }
 
     size_t total = session->ble_channel_count + session->bredr_channel_count +
+                   (session->ble_channelizer.active ? 1u : 0u) +
                    (session->bredr_channelizer.active ? 1u : 0u);
     session->worker_threads = calloc(total, sizeof(pthread_t));
     if (!session->worker_threads)
@@ -284,6 +330,20 @@ int session_run(session_t *session)
         if (pthread_create(&session->worker_threads[started], NULL,
                            session_bredr_worker_shim, &session->bredr_channels[w]) != 0)
             break;
+        started++;
+    }
+
+    if (session->ble_channelizer.active)
+    {
+        session->ble_channelizer.shutdown = &session->shutdown_requested;
+        if (pthread_create(&session->worker_threads[started], NULL,
+                           ble_channelizer_worker, &session->ble_channelizer) != 0)
+        {
+            session_destroy(session);
+            return -1;
+        }
+        session->ble_channelizer_thread = session->worker_threads[started];
+        session->ble_channelizer_running = 1;
         started++;
     }
 
@@ -382,6 +442,8 @@ int session_destroy(session_t *session)
      * post-run query must read this snapshot rather than the live (now-zero)
      * counters. */
     session->dropped_blocks_total = sample_dispatcher_total_dropped(session->dispatcher);
+    if (session->ble_chan_dispatcher)
+        session->dropped_blocks_total += sample_dispatcher_total_dropped(session->ble_chan_dispatcher);
     if (session->bredr_chan_dispatcher)
         session->dropped_blocks_total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
 
@@ -423,12 +485,22 @@ int session_destroy(session_t *session)
 
     session->worker_count    = 0u;
     session->workers_running = 0;
+    session->ble_channelizer_running = 0;
     session->bredr_channelizer_running = 0;
     atomic_store_explicit(&session->shutdown_requested, 0u, memory_order_release);
 
     ble_piconet_store_free(&session->ble_piconet_store);
     bredr_piconet_store_free(&session->bredr_piconet_store);
     pthread_mutex_destroy(&session->bredr_mutex);
+    
+    ble_channelizer_destroy(&session->ble_channelizer);
+    if (session->ble_chan_dispatcher)
+    {
+        sample_dispatcher_destroy(session->ble_chan_dispatcher);
+        free(session->ble_chan_dispatcher);
+        session->ble_chan_dispatcher = NULL;
+    }
+    
     bredr_channelizer_destroy(&session->bredr_channelizer);
     if (session->bredr_chan_dispatcher)
     {
@@ -522,6 +594,8 @@ unsigned long session_dropped_blocks(const session_t *session)
     if (session->torn_down)
         return session->dropped_blocks_total;
     unsigned long total = sample_dispatcher_total_dropped(session->dispatcher);
+    if (session->ble_chan_dispatcher)
+        total += sample_dispatcher_total_dropped(session->ble_chan_dispatcher);
     if (session->bredr_chan_dispatcher)
         total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
     return total;

@@ -12,44 +12,41 @@
 int ble_channel_processor_init(ble_channel_processor_t *proc,
                                sample_dispatcher_t *dispatcher,
                                uint16_t rf_channel_index,
-                               int32_t frequency_offset_hz,
                                uint32_t center_frequency_hz,
                                unsigned int sample_rate_hz,
+                               unsigned int chan_bin,
+                               unsigned int bank_M,
+                               unsigned int bank_M2,
+                               float rssi_cal_db,
                                struct ble_piconet_store *store)
 {
     if (!proc || !dispatcher || rf_channel_index >= BLE_RF_CHANNEL_COUNT) return -1;
     memset(proc, 0, sizeof(*proc));
 
     proc->rf_channel_index    = rf_channel_index;
-    proc->frequency_offset_hz = frequency_offset_hz;
+    proc->frequency_offset_hz = 0;
     proc->center_frequency_hz = center_frequency_hz;
     proc->samples_per_symbol  = BLE_SESSION_SAMPLES_PER_SYMBOL;
 
+    proc->bin              = chan_bin;
+    proc->bank_M           = bank_M;
+    /* Bank outputs 2*grid = 4 Msps per bin; stride-by-2 decimates to 2 Msps,
+     * so the overall decimation from RF rate to demod rate is M2*2. */
+    proc->input_decimation = bank_M2 * 2u;
+    proc->rssi_cal_db      = rssi_cal_db;
+
     if (sample_reader_init(&proc->reader, dispatcher) != 0) { ble_channel_processor_destroy(proc); return -1; }
-
-    double rate_d   = (double)sample_rate_hz;
-    int decimation  = (int)(rate_d / (2.0 * 1e6));
-    if (decimation < 1) decimation = 1;
-    proc->input_decimation = (unsigned int)decimation;
-
-    proc->nco                 = nco_crcf_create(LIQUID_NCO);
-    if (!proc->nco) { ble_channel_processor_destroy(proc); return -1; }
-    double omega_nco          = ((double)frequency_offset_hz / rate_d) * 2.0 * M_PI;
-    nco_crcf_set_frequency(proc->nco, (float)omega_nco);
-
-    proc->decimator = firdecim_crcf_create_kaiser((unsigned int)decimation, 7u, 60.0f);
-    if (!proc->decimator) { ble_channel_processor_destroy(proc); return -1; }
 
     unsigned int m_taps   = 3u;
     proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samples_per_symbol,
                                         m_taps, 0.5f, LIQUID_CPFSK_GMSK);
     if (!proc->demodulator) { ble_channel_processor_destroy(proc); return -1; }
 
-    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY;
-    proc->mixed_buf       = malloc(sizeof(float complex) * proc->buf_cap_samples);
-    size_t decim_out_cap  = proc->buf_cap_samples / (size_t)decimation + 16u;
-    proc->decimated       = malloc(sizeof(float complex) * decim_out_cap);
-    if (!proc->mixed_buf || !proc->decimated) { ble_channel_processor_destroy(proc); return -1; }
+    /* Decimated (post stride) buffer is at 2 Msps: block holds at most
+     * (SAMPLE_BLOCK_SAMPLE_CAPACITY / bank_M / 2) samples. */
+    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / ((size_t)bank_M * 2u) + 16u;
+    proc->decimated       = malloc(sizeof(float complex) * proc->buf_cap_samples);
+    if (!proc->decimated) { ble_channel_processor_destroy(proc); return -1; }
 
     proc->abs_sample_scale = (sample_rate_hz > 0u)
                              ? (uint64_t)(1000000000ull / sample_rate_hz)
@@ -68,9 +65,6 @@ void ble_channel_processor_destroy(ble_channel_processor_t *proc)
 {
     if (!proc) return;
     if (proc->demodulator) cpfskdem_destroy(proc->demodulator);
-    if (proc->decimator)   firdecim_crcf_destroy(proc->decimator);
-    if (proc->nco)         nco_crcf_destroy(proc->nco);
-    free(proc->mixed_buf);
     free(proc->decimated);
     sample_reader_destroy(&proc->reader);
     memset(proc, 0, sizeof(*proc));
@@ -102,6 +96,7 @@ static int emit_frame(ble_channel_processor_t *proc,
 
     float rssi_dbr = receiver_rssi_from_mean_power_range(
         proc->decimated, i_start_ui, i_end, RECEIVER_RSSI_INVALID);
+    rssi_dbr += proc->rssi_cal_db;
 
     /* Radio sample index = block base (input samples) + decimated-sample offset
      * scaled back up to the input rate by input_decimation. Mirrors the old
@@ -128,33 +123,27 @@ static int emit_frame(ble_channel_processor_t *proc,
 int ble_channel_processor_process_block(ble_channel_processor_t *proc, sample_block_t *blk)
 {
     if (!proc || !proc->active || !blk) return -1;
-    unsigned int input_count = blk->num_samples;
-    unsigned int decim_count = input_count / proc->input_decimation;
 
-    nco_crcf_mix_block_down(proc->nco, blk->samples, proc->mixed_buf, input_count);
+    unsigned int decim_out;
 
-    firdecim_crcf_execute_block(proc->decimator, proc->mixed_buf,
-                                decim_count, proc->decimated);
-    /* firdecim_crcf_execute_block(q, x, _n, y) takes _n = number of OUTPUT
-     * samples and reads _n*_M inputs; in this liquid build it returns 0 (not
-     * the count). So the produced sample count is exactly the _n we passed,
-     * which is decim_count (= input_count / input_decimation). */
-    unsigned int decim_out = decim_count;
-
-    unsigned long block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
+    /* Frame-major block: out[frame*M + bin]. The bank runs at 2*grid = 4 Msps,
+     * so decimate to 2 Msps by reading every other frame (stride k += 2). */
+    unsigned int frames = blk->num_samples / proc->bank_M;
+    decim_out = 0u;
+    for (unsigned int k = 0u; k < frames && decim_out < proc->buf_cap_samples; k += 2u)
+        proc->decimated[decim_out++] = blk->samples[proc->bin + (size_t)k * proc->bank_M];
+    proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
 
     int dbg = proc->session ? proc->session->config.debug : 0;
     if (dbg && proc->dbg_blocks_seen < 4u)
         fprintf(stderr,
-                "[ble_proc rf=%u] block #%u: num_samples=%u decim_count=%u "
-                "decim_out=%u num_bits=%u\n",
+                "[ble_proc rf=%u] block #%u: num_samples=%u decim_out=%u\n",
                 proc->rf_channel_index, proc->dbg_blocks_seen,
-                input_count, decim_count, decim_out, decim_out / proc->samples_per_symbol);
+                blk->num_samples, decim_out);
     proc->dbg_blocks_seen++;
 
-    /* liquid's cpfskdem_demodulate consumes exactly _k samples per call
-     * (samples_per_symbol) and returns one symbol; it carries phase/state
-     * across calls, so the window must advance by _k each iteration. */
+    unsigned long block_start_decim_sample = proc->block_start_decim_sample;
+
     unsigned int num_bits = decim_out / proc->samples_per_symbol;
     for (unsigned int s = 0u; s < num_bits; s++)
     {

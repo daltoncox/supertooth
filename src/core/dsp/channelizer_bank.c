@@ -28,6 +28,16 @@ uint32_t channelizer_bank_grid_align(uint32_t lo_hz, uint32_t grid_hz)
     return ((lo_hz + half) / grid_hz) * grid_hz;
 }
 
+uint32_t channelizer_bank_grid_align_ble(uint32_t lo_hz)
+{
+    const uint32_t ble_base = 2402000000u;
+    const uint32_t grid = 2000000u;
+    const uint32_t half = grid / 2u;
+    if (lo_hz < ble_base)
+        return ble_base;
+    return ((lo_hz - ble_base + half) / grid) * grid + ble_base;
+}
+
 int32_t channelizer_bank_grid_shift(uint32_t lo_hz, uint32_t grid_hz)
 {
     return (int32_t)channelizer_bank_grid_align(lo_hz, grid_hz) - (int32_t)lo_hz;
@@ -47,6 +57,28 @@ int channelizer_bank_bin_for_center(unsigned int M, uint32_t lo_eff_hz,
 
     /* Reject anything outside the Nyquist span. The bank covers bins
      * -M/2 .. +M/2-1; bin -M/2 (== +M/2) is the usable wrap-around bin. */
+    if (k < -(int64_t)(M / 2u) || k > (int64_t)(M / 2u) - 1)
+        return -1;
+
+    int64_t bin = k % (int64_t)M;
+    if (bin < 0)
+        bin += (int64_t)M;
+    return (int)bin;
+}
+
+int channelizer_bank_bin_for_center_ble(unsigned int M, uint32_t lo_eff_hz,
+                                        uint32_t center_hz)
+{
+    if (M == 0u)
+        return -1;
+
+    const uint32_t grid = 2000000u;
+    int64_t delta = (int64_t)center_hz - (int64_t)lo_eff_hz;
+    if (delta % (int64_t)grid != 0)
+        return -1;
+
+    int64_t k = delta / (int64_t)grid;
+
     if (k < -(int64_t)(M / 2u) || k > (int64_t)(M / 2u) - 1)
         return -1;
 
@@ -85,7 +117,9 @@ int channelizer_bank_init(channelizer_bank_t *q,
     q->sample_rate_hz = sample_rate_hz;
     q->grid_hz        = grid_hz;
     q->lo_hz          = lo_hz;
-    q->lo_eff_hz      = channelizer_bank_grid_align(lo_hz, grid_hz);
+    q->lo_eff_hz      = (grid_hz == CHANNELIZER_BANK_GRID_BLE_HZ)
+                        ? channelizer_bank_grid_align_ble(lo_hz)
+                        : channelizer_bank_grid_align(lo_hz, grid_hz);
     q->shift_hz       = (int32_t)q->lo_eff_hz - (int32_t)lo_hz;
 
     if (q->shift_hz != 0)

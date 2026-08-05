@@ -48,8 +48,13 @@
 extern "C" {
 #endif
 
-/** BR/EDR channel raster (1 MHz). BLE would use 2 MHz. */
+/** Channel raster (1 MHz). BR/EDR channels sit at 2402+k MHz. */
 #define CHANNELIZER_BANK_GRID_BR_EDR_HZ 1000000u
+
+/** BLE channel raster (2 MHz). BLE channels sit at 2402+2k MHz. A 2 MHz bank
+ *  yields one bin per BLE channel; the 4 Msps per-bin output is decimated to
+ *  2 Msps by striding the readers by 2 (see ble_channel_processor.c). */
+#define CHANNELIZER_BANK_GRID_BLE_HZ 2000000u
 
 /** Per-bin output rate produced by the 2x-oversampled bank. */
 #define CHANNELIZER_BANK_OUTPUT_RATE_HZ 2000000u
@@ -62,10 +67,15 @@ extern "C" {
 
 /**
  * RSSI calibration to ADD to the channelized chain's RSSI so it matches the
- * legacy `firdecim` chain.  Measured in 01_probe_semantics as
- * +20*log10(M/2) = +20.0036 dB: the legacy firdecim has gain ~10.004 while the
- * firpfbch2 bank has unity gain, so the bank's raw power is ~20 dB lower for
- * the same signal and must be lifted to preserve reported RSSI.
+ * legacy `firdecim` chain.  The firpfbch2 bank has unity passband gain while
+ * the legacy firdecim has gain ~10.004 (= sample_rate / 2 Msps), so the bank's
+ * raw power is ~20 dB lower for the same signal and must be lifted to preserve
+ * reported RSSI.  Measured in 01_probe_semantics as +20.0036 dB.
+ *
+ * This holds for BOTH grids: BR/EDR (1 MHz grid, M=20 -> M/2=10 RF->2 Msps
+ * decimation) and BLE (2 MHz grid, M=10 -> M/2=5, then stride/2 = 10 RF->2 Msps
+ * decimation).  The effective RF->demod decimation is 10 in each case, so the
+ * same constant applies.
  */
 #define CHANNELIZER_BANK_RSSI_CAL_DB 20.0036f
 
@@ -114,6 +124,9 @@ unsigned int channelizer_bank_bins_for_rate(unsigned int sample_rate_hz,
 /** Round an LO onto the channel raster (ties round up). */
 uint32_t channelizer_bank_grid_align(uint32_t lo_hz, uint32_t grid_hz);
 
+/** Round an LO onto the BLE 2 MHz raster (channels at 2402 + 2k MHz), nearest. */
+uint32_t channelizer_bank_grid_align_ble(uint32_t lo_hz);
+
 /** Mix-down applied to the input so the channel grid lands on bin centres. */
 int32_t channelizer_bank_grid_shift(uint32_t lo_hz, uint32_t grid_hz);
 
@@ -123,6 +136,10 @@ int32_t channelizer_bank_grid_shift(uint32_t lo_hz, uint32_t grid_hz);
  */
 int channelizer_bank_bin_for_center(unsigned int M, uint32_t lo_eff_hz,
                                     uint32_t center_hz, uint32_t grid_hz);
+
+/** BLE bin (2 MHz raster) carrying @p center_hz, or -1 when outside the span. */
+int channelizer_bank_bin_for_center_ble(unsigned int M, uint32_t lo_eff_hz,
+                                        uint32_t center_hz);
 
 /** Centre frequency of bin @p bin. */
 uint32_t channelizer_bank_center_for_bin(unsigned int M, uint32_t lo_eff_hz,

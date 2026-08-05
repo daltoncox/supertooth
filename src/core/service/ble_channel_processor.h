@@ -28,13 +28,14 @@ typedef struct {
 
     sample_reader_t reader;
 
-    nco_crcf nco;
-    firdecim_crcf decimator;
     cpfskdem demodulator;
     unsigned int samples_per_symbol;
     unsigned int input_decimation;
 
-    float complex *mixed_buf;
+    unsigned int bin;
+    unsigned int bank_M;
+    float rssi_cal_db;
+
     float complex *decimated;
     size_t buf_cap_samples;
 
@@ -42,6 +43,7 @@ typedef struct {
 
     ble_bitstream_decoder_t decoder;
 
+    uint64_t block_start_decim_sample;
     long pkt_start_decim_sample;
     ble_status_t prev_state;
 
@@ -56,9 +58,12 @@ typedef struct {
 int ble_channel_processor_init(ble_channel_processor_t *proc,
                                sample_dispatcher_t *dispatcher,
                                uint16_t rf_index,
-                               int32_t frequency_offset_hz,
                                uint32_t center_frequency_hz,
                                unsigned int sample_rate_hz,
+                               unsigned int chan_bin,
+                               unsigned int bank_M,
+                               unsigned int bank_M2,
+                               float rssi_cal_db,
                                struct ble_piconet_store *store);
 
 void ble_channel_processor_destroy(ble_channel_processor_t *proc);
