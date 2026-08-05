@@ -33,6 +33,28 @@ int channelizer_init(channelizer_t *c,
         return -1;
     }
 
+    const unsigned int M  = c->bank.M;
+    const size_t CAP = SAMPLE_BLOCK_SAMPLE_CAPACITY;
+    size_t max_frames = (CAP / (size_t)M);
+    if (max_frames > 2u)
+        max_frames -= 2u;
+    else
+        max_frames = 1u;
+    max_frames = (max_frames / 4u) * 4u;
+    if (max_frames < 4u)
+        max_frames = 4u;
+    c->max_rf = max_frames * (size_t)c->bank.M2;
+
+    c->rf_carry = malloc(c->max_rf * sizeof(float complex));
+    c->scratch  = malloc((CAP + c->max_rf) * sizeof(float complex));
+    if (!c->rf_carry || !c->scratch)
+    {
+        channelizer_destroy(c);
+        return -1;
+    }
+    c->rf_carry_len  = 0u;
+    c->rf_carry_base = 0u;
+
     c->active = 1;
     return 0;
 }
@@ -43,6 +65,8 @@ void channelizer_destroy(channelizer_t *c)
         return;
     sample_reader_destroy(&c->rf_reader);
     channelizer_bank_destroy(&c->bank);
+    free(c->rf_carry);
+    free(c->scratch);
     memset(c, 0, sizeof(*c));
 }
 
@@ -52,16 +76,8 @@ void *channelizer_worker(void *arg)
     if (!c || !c->active)
         return NULL;
 
-    const unsigned int M  = c->bank.M;
-    const unsigned int M2 = c->bank.M2;
-    const size_t CAP = SAMPLE_BLOCK_SAMPLE_CAPACITY;
-
-    size_t max_frames = (CAP / (size_t)M);
-    if (max_frames > 2u)
-        max_frames -= 2u;
-    else
-        max_frames = 1u;
-    size_t max_rf = max_frames * (size_t)M2;
+    const unsigned int M = c->bank.M;
+    const size_t max_rf = c->max_rf;
 
     sample_block_t *rf = NULL;
 
@@ -72,31 +88,53 @@ void *channelizer_worker(void *arg)
         if (!rf)
             continue;
 
-        size_t off = 0u;
-        while (off < rf->num_samples)
-        {
-            size_t n = rf->num_samples - off;
-            if (n > max_rf)
-                n = max_rf;
+        size_t combined_len = c->rf_carry_len + (size_t)rf->num_samples;
+        uint64_t combined_base = c->rf_carry_len ? c->rf_carry_base
+                                                 : rf->block_base_sample;
 
+        if (c->rf_carry_len)
+            memcpy(c->scratch, c->rf_carry,
+                   c->rf_carry_len * sizeof(float complex));
+        memcpy(c->scratch + c->rf_carry_len, rf->samples,
+               (size_t)rf->num_samples * sizeof(float complex));
+
+        size_t off = 0u;
+        while (combined_len - off >= max_rf)
+        {
             sample_block_t *fm = sample_dispatcher_acquire_block(c->out);
             if (!fm)
             {
                 sample_dispatcher_note_drop(c->out, c->debug);
-                break; /* output pool exhausted: drop the rest of this RF block */
+                c->rf_carry_len = 0u; /* backpressure: drop the unprocessed
+                                        tail rather than let the carry grow
+                                        without bound and overflow. */
+                break;
             }
 
             unsigned int frames_out = 0u;
-            channelizer_bank_execute(&c->bank, &rf->samples[off], n,
+            channelizer_bank_execute(&c->bank, &c->scratch[off], max_rf,
                                      fm->samples, &frames_out, NULL);
             fm->num_samples        = (unsigned int)((size_t)M * frames_out);
-            fm->block_base_sample  = rf->block_base_sample + (uint64_t)off;
+            fm->block_base_sample  = combined_base + (uint64_t)off;
 
             sample_dispatcher_push_block(c->out, fm);
             sample_block_release(fm);
             fm = NULL;
 
-            off += n;
+            off += max_rf;
+        }
+
+        size_t remainder = combined_len - off;
+        if (remainder > 0u)
+        {
+            memcpy(c->rf_carry, &c->scratch[off],
+                   remainder * sizeof(float complex));
+            c->rf_carry_len  = remainder;
+            c->rf_carry_base = combined_base + (uint64_t)off;
+        }
+        else
+        {
+            c->rf_carry_len = 0u;
         }
 
         sample_block_release(rf);

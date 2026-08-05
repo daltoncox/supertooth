@@ -17,8 +17,10 @@
 #ifndef CHANNELIZER_THREAD_H
 #define CHANNELIZER_THREAD_H
 
+#include <complex.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "channelizer_bank.h"
 #include "sample_dispatcher.h"
@@ -35,6 +37,18 @@ typedef struct
     const _Atomic unsigned int *shutdown;
     int debug;
     int active;
+
+    /* RF carry state: a raw HackRF block may not be an exact multiple of the
+     * frame-aligned chunk size, so the leftover tail is preserved here and
+     * prepended to the next raw block.  This keeps the RF stream handed to the
+     * bank continuous (no samples dropped) while every bank call still consumes
+     * a whole, frame-aligned amount, which is what keeps the demodulator's
+     * sample grid phase-locked across block boundaries. */
+    float complex *rf_carry;        /**< leftover RF tail carried forward */
+    size_t rf_carry_len;
+    uint64_t rf_carry_base;         /**< absolute RF index of rf_carry[0] */
+    float complex *scratch;         /**< rf_carry ++ current block buffer */
+    size_t max_rf;                  /**< frame-aligned RF chunk size */
 } channelizer_t;
 
 /**

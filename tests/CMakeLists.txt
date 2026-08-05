@@ -6,6 +6,7 @@
 
 add_subdirectory(bredr)
 add_subdirectory(ble)
+add_subdirectory(dsp)
 add_subdirectory(radio)
 add_subdirectory(service)
 
@@ -17,6 +18,7 @@ set(_supertooth_test_targets
     test_ble_bitstream_decoder
     test_radio_list_devices
     test_channel_layout
+    test_rssi_window
 )
 
 add_custom_target(tests)

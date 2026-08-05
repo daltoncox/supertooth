@@ -98,13 +98,13 @@ static int emit_frame(bredr_channel_processor_t *proc,
     /* RSSI is averaged over the packet span in the decimated buffer: from the
      * packet start sample (derived from the decoder's absolute bit index) to
      * the end of the current symbol, with a small pre-trigger guard. */
-    unsigned long rel_start = 0u;
-    if (frame.start_bit_index > proc->block_start_bit_index)
-        rel_start = (unsigned long)(frame.start_bit_index - proc->block_start_bit_index);
-    unsigned int i_start = (unsigned int)(rel_start / proc->samps_per_symbol);
-    if (i_start > 4u) i_start -= 4u;
-    unsigned int i_end = end_decim_sample + proc->samps_per_symbol;
-    if (i_end > decim_out) i_end = decim_out;
+    unsigned int i_start = 0u, i_end = 0u;
+    receiver_rssi_packet_window(proc->block_start_bit_index,
+                                frame.start_bit_index,
+                                end_decim_sample,
+                                proc->samps_per_symbol,
+                                decim_out,
+                                &i_start, &i_end);
 
     float rssi_dbr = receiver_rssi_from_mean_power_range(
         proc->decimated, i_start, i_end, RECEIVER_RSSI_INVALID);

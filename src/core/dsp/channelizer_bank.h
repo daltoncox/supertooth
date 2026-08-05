@@ -66,16 +66,23 @@ extern "C" {
 #define CHANNELIZER_BANK_DEFAULT_AS 60.0f
 
 /**
- * RSSI calibration to ADD to the channelized chain's RSSI so it matches the
- * legacy `firdecim` chain.  The firpfbch2 bank has unity passband gain while
- * the legacy firdecim has gain ~10.004 (= sample_rate / 2 Msps), so the bank's
- * raw power is ~20 dB lower for the same signal and must be lifted to preserve
- * reported RSSI.  Measured in 01_probe_semantics as +20.0036 dB.
+ * Fixed dBr reference offset added to every channelized RSSI measurement.
  *
- * This holds for BOTH grids: BR/EDR (1 MHz grid, M=20 -> M/2=10 RF->2 Msps
- * decimation) and BLE (2 MHz grid, M=10 -> M/2=5, then stride/2 = 10 RF->2 Msps
- * decimation).  The effective RF->demod decimation is 10 in each case, so the
- * same constant applies.
+ * `firpfbch2` normalises its analysis bank to unity passband gain for ANY bin
+ * count, which 05_rssi_stability confirms: the raw per-bin power is 0.000 dB
+ * at spans from 4 to 20 MHz, and identical across all 20 bins to within
+ * 0.0000 dB.  Reported RSSI is therefore already independent of the capture
+ * span and of which channel a packet landed on -- the property we want.
+ *
+ * The legacy per-channel `firdecim` chain did NOT have that property: its
+ * passband gain was the decimation factor D = sample_rate / 2 Msps, so its
+ * RSSI moved by 20*log10(D) as the span changed.  This constant is
+ * 20*log10(10), i.e. the legacy gain at the default 20 Msps / 20-channel
+ * capture, so previously recorded values still line up for that configuration.
+ *
+ * It is deliberately NOT recomputed per span: doing so would re-introduce the
+ * legacy chain's span dependence.  Treat it purely as the zero point of the
+ * "dBr" scale.
  */
 #define CHANNELIZER_BANK_RSSI_CAL_DB 20.0036f
 
