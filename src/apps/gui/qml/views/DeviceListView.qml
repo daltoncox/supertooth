@@ -193,6 +193,36 @@ Item {
         return deviceModel.rowForDeviceId(selectedDeviceId)
     }
 
+    // The model emits layoutChanged / insert-rows / remove-rows as it
+    // re-sorts live (up to once per second), and QQuickListView re-anchors
+    // the viewport (contentY) to follow the re-sorted/current rows when it
+    // processes those structural changes — this is what snaps the scroll bar
+    // around "semi-randomly". Pin the user's scroll offset for a short window
+    // around our model-driven re-selection so the list never jumps.
+    property real scrollGuardY: -1
+
+    function beginScrollGuard(savedY) {
+        scrollGuardY = savedY
+        scrollGuardTimer.restart()
+    }
+
+    function reanchorSelection() {
+        var savedY = deviceListView.contentY
+        root.reselectDevice()
+        // Re-apply the saved offset on the next frame's layout pass and keep
+        // re-applying for a short window in case the view re-anchors after
+        // the delegate rebuild settles.
+        Qt.callLater(function () { deviceListView.contentY = savedY })
+        root.beginScrollGuard(savedY)
+    }
+
+    Timer {
+        id: scrollGuardTimer
+        interval: 250
+        repeat: false
+        onTriggered: root.scrollGuardY = -1
+    }
+
     function reselectDevice() {
         var row = selectedRow()
         if (row < 0) {
@@ -427,6 +457,25 @@ ListModel {
                     clip: true
                     model: root.deviceModel
 
+                    // Selection highlight must NOT drive scrolling. reselectDevice()
+                    // reassigns currentIndex on every model re-sort/insert/remove,
+                    // and with the default highlightFollowsCurrentItem=true Qt would
+                    // snap the viewport to whichever row the selected device moved to
+                    // — a frequent, semi-random "jump to top" under the 1 Hz live
+                    // re-sort. Keeping the two decoupled lets the highlight track the
+                    // selected device while the user's scroll position is left alone.
+                    highlightFollowsCurrentItem: false
+
+                    // Pin the user's scroll offset for a short window around
+                    // model-driven re-selection. Without this, QQuickListView
+                    // re-anchors contentY to follow re-sorted rows when it
+                    // processes layoutChanged/insert/remove, yanking the view
+                    // around under a live capture.
+                    onContentYChanged: {
+                        if (root.scrollGuardY >= 0 && contentY !== root.scrollGuardY)
+                            contentY = root.scrollGuardY
+                    }
+
                     ScrollBar.vertical: ScrollBar {
                         policy: ScrollBar.AsNeeded
                     }
@@ -439,10 +488,10 @@ ListModel {
                     // on its next tick.
                     Connections {
                         target: root.deviceModel
-                        function onLayoutChanged() { root.reselectDevice() }
-                        function onRowsInserted() { root.reselectDevice() }
-                        function onRowsRemoved() { root.reselectDevice() }
-                        function onModelReset() { root.reselectDevice() }
+                        function onLayoutChanged() { root.reanchorSelection() }
+                        function onRowsInserted() { root.reanchorSelection() }
+                        function onRowsRemoved() { root.reanchorSelection() }
+                        function onModelReset() { root.reanchorSelection() }
                     }
 
                     Label {
