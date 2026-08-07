@@ -98,10 +98,9 @@ static int emit_frame(ble_channel_processor_t *proc,
             i_end = decim_out;
     }
 
-    /* The idle prefix [0, i_start_ui) before the packet seeds a per-channel
-     * noise-floor estimate that is subtracted so the reported RSSI reflects
-     * signal alone.  Skip the demodulator group-delay region at the packet
-     * head. */
+    /* The idle prefix [0, i_start_ui) before the packet seeds the per-channel
+     * noise-floor estimate (tracked for diagnostics, not subtracted).  Skip
+     * the demodulator group-delay region at the packet head. */
     unsigned int sig_start = i_start_ui;
     if (i_end > sig_start + RECEIVER_RSSI_DEMOD_DELAY_SAMPLES)
         sig_start += RECEIVER_RSSI_DEMOD_DELAY_SAMPLES;

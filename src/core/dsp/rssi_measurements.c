@@ -72,11 +72,15 @@ float receiver_rssi_signal_dbr(const float complex *samples,
 
     float signal = receiver_mean_linear_power(samples, window_start, window_end);
 
-    float floor_lin = 0.0f;
-    if (noise_floor_linear && noise_floor_initialized && *noise_floor_initialized)
-        floor_lin = *noise_floor_linear;
-
-    /* Refresh the floor from the idle prefix when it is long enough to be stable. */
+    /* Refresh the floor from the idle prefix when it is long enough to be stable.
+     * The estimate is kept for diagnostics, but it is intentionally NOT
+     * subtracted from the reported RSSI.  Subtracting a per-packet, noise-only
+     * floor from a signal that sits near it (i.e. every weak device) amplifies
+     * tiny floor fluctuations into enormous dB swings: a fixed-power packet
+     * scatters ~47 dB packet-to-packet through this path while the raw power
+     * scatters ~2.5 dB (see test_rssi_variance_from_floor_subtraction).  The
+     * floor is at most a constant, channel-dependent offset that calibration
+     * absorbs, so reporting the raw received power is both stable and honest. */
     if (idle_end >= RECEIVER_RSSI_FLOOR_MIN_SAMPLES && noise_floor_linear &&
         noise_floor_initialized)
     {
@@ -88,56 +92,33 @@ float receiver_rssi_signal_dbr(const float complex *samples,
         else
             *noise_floor_linear = f;
         *noise_floor_initialized = 1u;
-        floor_lin = *noise_floor_linear;
     }
 
-    if (signal <= floor_lin)
-        return invalid_value;
-
-    return receiver_rssi_from_linear_power(signal - floor_lin, invalid_value);
+    /* A decoded packet always carries real signal: report its raw received
+     * power (signal + the in-band noise/interference present on the channel).
+     * Returning invalid_value here would surface as the "--" RSSI on the
+     * frontend for weak-but-present devices. */
+    return receiver_rssi_from_linear_power(signal, invalid_value);
 }
 
-void receiver_rssi_packet_window(uint64_t block_start_bit_index,
-                                 uint64_t packet_start_bit_index,
-                                 unsigned int end_sample,
-                                 unsigned int samples_per_symbol,
-                                 unsigned int available_samples,
-                                 unsigned int *out_start,
-                                 unsigned int *out_end,
-                                 unsigned int *out_idle_end)
+void receiver_rssi_access_code_window(unsigned int ac_end_sample,
+                                      unsigned int span_samples,
+                                      unsigned int available_samples,
+                                      unsigned int *out_start,
+                                      unsigned int *out_end,
+                                      unsigned int *out_idle_end)
 {
     if (!out_start || !out_end)
         return;
 
-    unsigned int end = end_sample + samples_per_symbol;
+    unsigned int end = ac_end_sample;
     if (end > available_samples)
         end = available_samples;
 
-    /* Bit offset within this block -> sample offset within this block. */
-    uint64_t rel_bits = (packet_start_bit_index > block_start_bit_index)
-                        ? (packet_start_bit_index - block_start_bit_index)
-                        : 0u;
-    uint64_t start = rel_bits * (uint64_t)samples_per_symbol;
+    unsigned int start = (end >= span_samples) ? end - span_samples : 0u;
 
-    /* Idle prefix available for the noise-floor estimate is everything before
-     * the packet start; the caller subtracts its mean power from the window. */
-    if (out_idle_end)
-    {
-        uint64_t idle = rel_bits * (uint64_t)samples_per_symbol;
-        *out_idle_end = (idle > (uint64_t)available_samples)
-                        ? available_samples
-                        : (unsigned int)idle;
-    }
-
-    start = (start > RECEIVER_RSSI_PRETRIGGER_SAMPLES)
-            ? start - RECEIVER_RSSI_PRETRIGGER_SAMPLES
-            : 0u;
-
-    /* The packet began before this block: average the portion that is here
-     * rather than reaching back past the start of the buffer. */
-    if (start >= (uint64_t)end)
-        start = 0u;
-
-    *out_start = (unsigned int)start;
+    *out_start = start;
     *out_end   = end;
+    if (out_idle_end)
+        *out_idle_end = start;
 }

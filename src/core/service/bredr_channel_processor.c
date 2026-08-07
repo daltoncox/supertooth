@@ -71,11 +71,10 @@ int bredr_channel_processor_init(bredr_channel_processor_t *proc,
     bredr_bitstream_decoder_init(&proc->decoder, BREDR_AC_ERRORS_DEFAULT);
 
     proc->prev_state               = BREDR_SEARCHING;
-    proc->pkt_start_decim_sample   = 0u;
-    proc->block_start_decim_sample = 0u;
-    proc->block_start_bit_index    = 0u;
     proc->noise_floor_linear       = 0.0f;
     proc->noise_floor_initialized  = 0u;
+    proc->pending_rssi_dbr         = RECEIVER_RSSI_INVALID;
+    proc->pending_rssi_valid       = 0;
     proc->active                   = 1;
     return 0;
 }
@@ -97,33 +96,27 @@ static int emit_frame(bredr_channel_processor_t *proc,
     bredr_frame_t frame;
     if (bredr_bitstream_decoder_get_frame(&proc->decoder, &frame) != 0) return -1;
 
-    /* RSSI is averaged over the packet span in the decimated buffer: from the
-     * packet start sample (derived from the decoder's absolute bit index) to
-     * the end of the current symbol, with a small pre-trigger guard.  The idle
-     * prefix before the packet seeds a per-channel noise-floor estimate that is
-     * subtracted so the reported value reflects signal alone. */
-    unsigned int i_start = 0u, i_end = 0u, i_idle = 0u;
-    receiver_rssi_packet_window(proc->block_start_bit_index,
-                                frame.start_bit_index,
-                                end_decim_sample,
-                                proc->samps_per_symbol,
-                                decim_out,
-                                &i_start, &i_end, &i_idle);
-
-    /* Skip the demodulator group-delay region at the head of the packet. */
-    if (i_end > i_start + RECEIVER_RSSI_DEMOD_DELAY_SAMPLES)
-        i_start += RECEIVER_RSSI_DEMOD_DELAY_SAMPLES;
-
-    float rssi_dbr = receiver_rssi_signal_dbr(
-        proc->decimated, i_start, i_end, i_idle,
-        &proc->noise_floor_linear, &proc->noise_floor_initialized,
-        RECEIVER_RSSI_INVALID);
+    /* RSSI was measured over the access code when it was detected (see
+     * process_block): a fixed-length, signal-only window on constant-envelope
+     * GFSK, identical for every packet type.  Measuring here at completion
+     * instead would span the decoder's fixed maximum-length collection body
+     * (5 slots) and dilute the average with whatever post-packet content
+     * (idle floor, interference, block-end clamping) filled the rest of the
+     * window -- measured at ~30 dB of packet-to-packet scatter for one
+     * stationary device. */
+    float rssi_dbr = proc->pending_rssi_valid ? proc->pending_rssi_dbr
+                                              : RECEIVER_RSSI_INVALID;
+    proc->pending_rssi_dbr   = RECEIVER_RSSI_INVALID;
+    proc->pending_rssi_valid = 0;
     rssi_dbr += proc->rssi_cal_db;
 
     /* Radio sample index = block base (input samples) + decimated offset
      * scaled back up to the input rate by input_decimation. */
+    unsigned int end_sample = end_decim_sample + proc->samps_per_symbol;
+    if (end_sample > decim_out)
+        end_sample = decim_out;
     uint64_t abs_radio = abs_block_base_radio +
-        (uint64_t)i_end * (uint64_t)proc->input_decimation;
+        (uint64_t)end_sample * (uint64_t)proc->input_decimation;
 
     rx_metadata_t meta = bredr_make_metadata(
         abs_radio,
@@ -158,8 +151,6 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
 {
     if (!proc || !proc->active || !blk) return -1;
 
-    proc->block_start_bit_index = proc->decoder.total_bits_seen;
-
     unsigned int decim_out;
 
     unsigned int frames = blk->num_samples / proc->bank_M;
@@ -168,7 +159,6 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
     for (unsigned int k = 0u; k < frames; k++)
         proc->decimated[k] = blk->samples[proc->bin + (size_t)k * proc->bank_M];
     decim_out = frames;
-    proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
 
     int dbg = proc->session ? proc->session->config.debug : 0;
     if (dbg && proc->dbg_blocks_seen < 4u)
@@ -189,7 +179,29 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
         bredr_status_t status = bredr_bitstream_decoder_push_bit(&proc->decoder, bit);
 
         if (proc->prev_state == BREDR_SEARCHING && status != BREDR_SEARCHING)
-            proc->pkt_start_decim_sample = proc->block_start_decim_sample + sample_index;
+        {
+            /* Access-code detection completed on this bit: the AC occupies
+             * the BREDR_AC_DETECT_SAMPLES samples ending one symbol past
+             * sample_index.  Measure RSSI now, over that fixed signal-only
+             * window; emit_frame reports this pending value when the packet
+             * completes. */
+            unsigned int ac_end = sample_index + proc->samps_per_symbol;
+            unsigned int i_start = 0u, i_end = 0u, i_idle = 0u;
+            receiver_rssi_access_code_window(ac_end, BREDR_AC_DETECT_SAMPLES,
+                                             decim_out,
+                                             &i_start, &i_end, &i_idle);
+            proc->pending_rssi_dbr = receiver_rssi_signal_dbr(
+                proc->decimated, i_start, i_end, i_idle,
+                &proc->noise_floor_linear, &proc->noise_floor_initialized,
+                RECEIVER_RSSI_INVALID);
+            proc->pending_rssi_valid = !isnan(proc->pending_rssi_dbr);
+        }
+
+        if (status == BREDR_ERROR)
+        {
+            proc->pending_rssi_dbr   = RECEIVER_RSSI_INVALID;
+            proc->pending_rssi_valid = 0;
+        }
 
         proc->prev_state = status;
 

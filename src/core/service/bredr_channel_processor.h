@@ -41,15 +41,22 @@ typedef struct {
     /* Per-channel BR/EDR bitstream decoder (owns its own packet state). */
     bredr_bitstream_decoder_t decoder;
 
-    /* Decimated-sample indices tracking for RSSI + metadata. */
-    uint64_t block_start_decim_sample;
-    uint64_t block_start_bit_index;
-    uint64_t pkt_start_decim_sample;
     bredr_status_t prev_state;
 
-    /* Per-channel noise/interference floor estimate (linear mean power) used to
-     * remove the floor from each packet's RSSI.  Seeded from the idle prefix
-     * that precedes a packet and smoothed across packets via an EMA. */
+    /* RSSI measured over the access code at detection time, consumed when the
+     * packet completes.  The decoder cannot know the true packet length (the
+     * header is whitened until CLK1-6 is recovered) and only completes after
+     * a fixed maximum-length body, so averaging at completion time would
+     * dilute short packets with up to 5 slots of post-packet channel content.
+     * The access code is constant-envelope GFSK for every packet type, so an
+     * AC-span window at detect time measures the same quantity per packet. */
+    float pending_rssi_dbr;
+    _Bool pending_rssi_valid;
+
+    /* Per-channel noise/interference floor estimate (linear mean power),
+     * tracked for diagnostics only -- NOT subtracted from reported RSSI (see
+     * receiver_rssi_signal_dbr).  Seeded from the idle prefix that precedes a
+     * packet and smoothed across packets via an EMA. */
     float noise_floor_linear;
     unsigned int noise_floor_initialized;
 
