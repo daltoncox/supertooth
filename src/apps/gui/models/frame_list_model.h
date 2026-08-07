@@ -52,6 +52,10 @@ public:
     /// Clear all rows.
     Q_INVOKABLE void clear();
 
+    /// Current row index for a frame number, or -1 if it has been evicted.
+    /// Frame numbers are stable across ring-buffer evictions; indices are not.
+    Q_INVOKABLE int indexForNo(qulonglong no) const;
+
     /// Detail key/value pairs for the selected row (Frame Info pane).
     Q_INVOKABLE QVariantList detailFor(int index) const;
     /// Hex-dump rows {offset, hex, ascii} for the selected row, built from raw bytes.

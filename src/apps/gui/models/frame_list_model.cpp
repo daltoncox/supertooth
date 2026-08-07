@@ -102,6 +102,14 @@ void FrameListModel::clear()
     emit countChanged();
 }
 
+int FrameListModel::indexForNo(qulonglong no) const
+{
+    for (int i = 0; i < m_rows.size(); i++)
+        if (m_rows.at(i).no == no)
+            return i;
+    return -1;
+}
+
 QVariantList FrameListModel::detailFor(int index) const
 {
     if (index < 0 || index >= m_rows.size())

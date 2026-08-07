@@ -6,7 +6,10 @@ Item {
     id: root
 
     property var frameModel: null
-    property int currentFrameIndex: -1
+    // Selection is keyed by the stable frame number, not the view index:
+    // ring-buffer eviction at capacity renumbers all view indices.
+    // (double: frame numbers are unbounded and exceed 32-bit int range)
+    property double currentFrameNo: -1
 
     property real tableWidth: 0
     readonly property int minColWidth: 20
@@ -29,8 +32,14 @@ Item {
         return x
     }
 
-    function loadDetail(idx) {
-        if (!frameModel || idx < 0) {
+    function loadDetail(no) {
+        if (!frameModel || no < 0) {
+            frameInfoView.model = []
+            hexView.model = []
+            return
+        }
+        var idx = frameModel.indexForNo(no)
+        if (idx < 0) {
             frameInfoView.model = []
             hexView.model = []
             return
@@ -39,13 +48,73 @@ Item {
         hexView.model = frameModel.hexFor(idx)
     }
 
-    function updateAutoFollow() {
-        // Considered "at the bottom" when within one row height of the tail.
-        var maxContentY = frameListView.contentHeight - frameListView.height
-        if (maxContentY < 0)
-            maxContentY = 0
-        frameListView.autoFollow =
-            (frameListView.contentY >= maxContentY - 22)
+    // Current floor: contentY value that shows the newest row.
+    // originY must be included: ring-buffer eviction at capacity drifts it
+    // while the contentHeight estimate stays fixed.
+    function liveFloor() {
+        var m = frameListView.originY + frameListView.contentHeight
+              - frameListView.height
+        return m > 0 ? m : 0
+    }
+
+    // Follow-state transitions during user scrolling, direction-aware:
+    // - scrolling up: disengage once clearly (1 row) off the floor.
+    // - scrolling down: liberal rejoin within 12 rows of the floor AS IT WAS
+    //   WHEN THE GESTURE BEGAN. At high frame rates the live tail recedes
+    //   during the gesture (and the Flickable's drag clamps near the floor
+    //   captured at gesture start), so comparing against the live floor
+    //   alone makes rejoining by wheel/trackpad nearly impossible while
+    //   streaming fast.
+    function updateAutoFollow(down) {
+        var target = Math.min(liveFloor(), frameListView.gestureFloor)
+        if (down) {
+            if (frameListView.contentY >= target - 264)
+                frameListView.autoFollow = true
+        } else if (frameListView.contentY < target - 22) {
+            frameListView.autoFollow = false
+        }
+    }
+
+    // Whether pinning is allowed right now. While the user is actively
+    // scrolling we must not yank the view — except when they are heading
+    // toward the tail (scrolling down) or resting at the floor: trackpad
+    // users commonly keep their fingers on the pad after reaching the
+    // bottom (movement stays active until liftoff), and the stream must
+    // keep following in those cases.
+    function mayPin() {
+        if (!frameListView.autoFollow || frameListView.count === 0)
+            return false
+        if (!frameListView.userScrolling)
+            return true
+        return frameListView.lastScrollDown
+               || frameListView.contentY >= liveFloor() - 22
+    }
+
+    function pinToEnd() {
+        // Keep the tail pinned while following. Triggered per append by the
+        // model's rowsInserted, and re-asserted on rendered frames by the
+        // FrameAnimation below (the view's geometry signals go silent at
+        // capacity: net count change is zero, and eviction compensation
+        // shifts originY without emitting originYChanged).
+        //
+        // positionViewAtEnd() targets the true (originY-aware) end, unlike
+        // contentHeight-derived math. The pinning/repinNeeded flags break the
+        // signal cascade: pinning triggers refills that re-fire the very
+        // handlers that called us, which without reentrancy protection never
+        // terminates (stack overflow).
+        if (!root.mayPin())
+            return
+        if (frameListView.pinning) {
+            frameListView.repinNeeded = true
+            return
+        }
+        var guard = 0
+        do {
+            frameListView.repinNeeded = false
+            frameListView.pinning = true
+            frameListView.positionViewAtEnd()
+            frameListView.pinning = false
+        } while (frameListView.repinNeeded && ++guard < 10)
     }
 
     ListModel {
@@ -201,31 +270,131 @@ Item {
 
                     ScrollBar.vertical: ScrollBar {
                         policy: ScrollBar.AsNeeded
+
+                        // ScrollBar drags move contentY without Flickable
+                        // movement signals; treat them as user scrolls too.
+                        onPressedChanged: {
+                            if (pressed) {
+                                frameListView.userScrolling = true
+                                frameListView.gestureFloor = root.liveFloor()
+                                frameListView.lastScrollContentY = frameListView.contentY
+                                frameListView.lastScrollDown = false
+                            } else {
+                                frameListView.userScrolling = false
+                                root.updateAutoFollow(frameListView.lastScrollDown)
+                            }
+                        }
                     }
 
                     // Wireshark-style live follow: stick to the newest frame
                     // unless the user has scrolled away from the live tail.
                     property bool autoFollow: true
 
-                    // Recompute "at bottom" on any scroll (user or programmatic).
-                    onContentYChanged: root.updateAutoFollow()
-                    onContentHeightChanged: root.updateAutoFollow()
+                    // True while the user is actively scrolling (drag, flick,
+                    // wheel/trackpad, or scrollbar). Only user-driven movement
+                    // may change the follow state; programmatic scrolls and
+                    // model-driven geometry shifts (e.g. ring-buffer eviction
+                    // at capacity re-shifting contentY) must never latch
+                    // autoFollow off.
+                    property bool userScrolling: false
 
-                    onCountChanged: {
-                        if (frameListView.autoFollow && frameListView.count > 0)
-                            Qt.callLater(frameListView.positionViewAtEnd)
+                    // Reentrancy guards for pinToEnd(); see its comment.
+                    property bool pinning: false
+                    property bool repinNeeded: false
+
+                    Connections {
+                        target: root.frameModel
+                        function onModelReset() {
+                            // Fresh capture: resume following, drop selection.
+                            frameListView.autoFollow = true
+                            root.currentFrameNo = -1
+                            root.loadDetail(-1)
+                        }
+                        // The reliable per-append trigger: at capacity the
+                        // view's geometry signals go silent (net count change
+                        // is zero; eviction compensation shifts originY
+                        // without emitting originYChanged), so only the model
+                        // signal can drive the follow pin.
+                        function onRowsInserted(parent, first, last) {
+                            frameListView.framesArrived = true
+                            frameIdleTimer.restart()
+                            root.pinToEnd()
+                        }
                     }
 
-                    onCurrentIndexChanged: {
-                        root.currentFrameIndex = currentIndex
-                        root.loadDetail(currentIndex)
+                    // True while frames are streaming (decays 250ms after the
+                    // last append), so the re-assert animation below only runs
+                    // while there is actually something new to pin.
+                    property bool framesArrived: false
+
+                    Timer {
+                        id: frameIdleTimer
+                        interval: 250
+                        onTriggered: frameListView.framesArrived = false
+                    }
+
+                    // Floor (live max contentY) captured when the current
+                    // scroll gesture began; basis for the liberal rejoin (see
+                    // updateAutoFollow).
+                    property real gestureFloor: 0
+
+                    // Direction tracking for updateAutoFollow(down).
+                    property real lastScrollContentY: 0
+                    property bool lastScrollDown: false
+
+                    // Flickable movement covers drag, flick, and wheel/trackpad
+                    // scrolling (QQuickFlickable::wheelEvent starts movement).
+                    onMovementStarted: {
+                        frameListView.userScrolling = true
+                        frameListView.gestureFloor = root.liveFloor()
+                        frameListView.lastScrollContentY = frameListView.contentY
+                        frameListView.lastScrollDown = false
+                    }
+                    onMovementEnded: {
+                        frameListView.userScrolling = false
+                        root.updateAutoFollow(frameListView.lastScrollDown)
+                    }
+
+                    onContentYChanged: {
+                        if (frameListView.userScrolling) {
+                            frameListView.lastScrollDown =
+                                frameListView.contentY >= frameListView.lastScrollContentY
+                            frameListView.lastScrollContentY = frameListView.contentY
+                            root.updateAutoFollow(frameListView.lastScrollDown)
+                        }
+                    }
+
+                    // Rejoin follow when the user scrolls all the way down to
+                    // the scrollable floor. A pure pixel-tolerance check is
+                    // unreliable here: the live tail recedes at 22px/frame
+                    // while the scroll gesture animates, so the gesture can
+                    // end "behind" an end that already moved on. Hitting the
+                    // floor is unambiguous intent to rejoin.
+                    onAtYEndChanged: {
+                        if (frameListView.atYEnd && frameListView.userScrolling)
+                            frameListView.autoFollow = true
+                    }
+
+                    // Re-assert the pin on every rendered frame while frames
+                    // are streaming. This is the convergence guarantee:
+                    // rowsInserted pins with whatever geometry is current at
+                    // append time, but layout settles during the render;
+                    // re-pinning around the render with fresh geometry keeps
+                    // the tail pinned no matter how appends, evictions, and
+                    // renders interleave. Gate logic (follow state, user
+                    // scrolling vs resting at the floor) lives in mayPin(); a
+                    // no-op pin is cheap (contentY unchanged -> no signals).
+                    FrameAnimation {
+                        running: frameListView.framesArrived
+                                 && root.mayPin()
+                        onTriggered: root.pinToEnd()
                     }
 
                     delegate: Rectangle {
                         id: rowDelegate
                         width: frameListView.width
                         height: 22
-                        color: frameListView.currentIndex === index ? "#094771" : (model.no % 2 === 0 ? "#1e1e1e" : "#252525")
+                        color: model.no === root.currentFrameNo ? "#094771" : (model.no % 2 === 0 ? "#1e1e1e" : "#252525")
                         clip: true
 
                         property var cells: [no, time, rssi, proto, chIdx, addr, src, dst, type, info]
@@ -233,8 +402,8 @@ Item {
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
-                                frameListView.currentIndex = index
-                                root.currentFrameIndex = index
+                                root.currentFrameNo = model.no
+                                root.loadDetail(model.no)
                             }
                         }
 
