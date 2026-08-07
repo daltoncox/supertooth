@@ -74,6 +74,11 @@ static int hackrf_rx_cb(hackrf_transfer *transfer)
     sample_dispatcher_push_block(radio->dispatcher, block);
     sample_block_release(block);
 
+    static unsigned long rx_dbg = 0;
+    if (radio->debug_enabled && (rx_dbg++ % 500u) == 0u)
+        fprintf(stderr, "[hackrf_rx_cb] transfers=%lu samples_received=%llu\n",
+                rx_dbg, (unsigned long long)radio->samples_received);
+
     return 0;
 }
 
@@ -212,6 +217,16 @@ void hackrf_radio_close(void *device)
         hackrf_close(radio->device);
     hackrf_exit();
     free(radio);
+}
+
+int hackrf_radio_get_max_sample_rate(void *device, uint32_t *out_rate_hz)
+{
+    (void)device;
+    if (!out_rate_hz)
+        return -1;
+
+    *out_rate_hz = 20000000u;
+    return HACKRF_SUCCESS;
 }
 
 int hackrf_list_devices(char ***out_identifiers, size_t *out_count)

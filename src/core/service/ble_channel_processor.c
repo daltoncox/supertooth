@@ -1,271 +1,211 @@
 #include "ble_channel_processor.h"
-#include "rssi_measurements.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
-static void receiver_ble_emit_event(ble_channel_processor_t *ble,
-                                    const ble_event_t *event)
+#include "ble_codec.h"
+#include "ble_piconet.h"
+#include "session.h"
+#include "rssi_measurements.h"
+
+int ble_channel_processor_init(ble_channel_processor_t *proc,
+                               sample_dispatcher_t *dispatcher,
+                               uint16_t rf_channel_index,
+                               uint32_t center_frequency_hz,
+                               unsigned int sample_rate_hz,
+                               unsigned int chan_bin,
+                               unsigned int bank_M,
+                               unsigned int bank_M2,
+                               unsigned int frame_stride,
+                               float rssi_cal_db,
+                               struct ble_piconet_store *store)
 {
-    receiver_session_t *session = ble->session;
+    if (!proc || !dispatcher || rf_channel_index >= BLE_RF_CHANNEL_COUNT) return -1;
+    memset(proc, 0, sizeof(*proc));
 
-    if (ble->pipeline == RECEIVER_BLE_PIPELINE_HYBRID)
+    proc->rf_channel_index    = rf_channel_index;
+    proc->frequency_offset_hz = 0;
+    proc->center_frequency_hz = center_frequency_hz;
+    proc->samples_per_symbol  = BLE_SESSION_SAMPLES_PER_SYMBOL;
+
+    proc->bin           = chan_bin;
+    proc->bank_M        = bank_M;
+    proc->frame_stride  = frame_stride;
+    /* Bank output is 2*grid Msps per bin; the reader strides by grid/1MHz to
+     * reach 2 Msps, so overall RF->demod decimation is M2 * frame_stride. */
+    proc->input_decimation = bank_M2 * frame_stride;
+    proc->rssi_cal_db      = rssi_cal_db;
+
+    if (sample_reader_init(&proc->reader, dispatcher) != 0) { ble_channel_processor_destroy(proc); return -1; }
+
+    unsigned int m_taps   = 3u;
+    proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samples_per_symbol,
+                                        m_taps, 0.5f, LIQUID_CPFSK_GMSK);
+    if (!proc->demodulator) { ble_channel_processor_destroy(proc); return -1; }
+
+    /* Decimated (post stride) buffer is at 2 Msps: block holds at most
+     * (SAMPLE_BLOCK_SAMPLE_CAPACITY / bank_M / frame_stride) samples. */
+    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / ((size_t)bank_M * frame_stride) + 16u;
+    proc->decimated       = malloc(sizeof(float complex) * proc->buf_cap_samples);
+    if (!proc->decimated) { ble_channel_processor_destroy(proc); return -1; }
+
+    proc->abs_sample_scale = (sample_rate_hz > 0u)
+                             ? (uint64_t)(1000000000ull / sample_rate_hz)
+                             : 1u;
+
+    uint8_t le_ch = ble_rf_to_le_channel(rf_channel_index);
+    ble_bitstream_decoder_init(&proc->decoder, le_ch, store);
+
+    proc->prev_state       = BLE_SEARCHING;
+    proc->pkt_start_decim_sample = -1L;
+    proc->noise_floor_linear     = 0.0f;
+    proc->noise_floor_initialized = 0u;
+    proc->active           = 1;
+    return 0;
+}
+
+void ble_channel_processor_destroy(ble_channel_processor_t *proc)
+{
+    if (!proc) return;
+    if (proc->demodulator) cpfskdem_destroy(proc->demodulator);
+    free(proc->decimated);
+    sample_reader_destroy(&proc->reader);
+    memset(proc, 0, sizeof(*proc));
+}
+
+static int emit_frame(ble_channel_processor_t *proc,
+                      unsigned long block_start_decim_sample,
+                      unsigned int end_decim_sample,
+                      unsigned int decim_out,
+                      unsigned long abs_block_base_radio)
+{
+    ble_frame_t frame;
+    if (ble_bitstream_decoder_get_frame(&proc->decoder, &frame) != 0) return -1;
+
+    /* RSSI is averaged over the packet symbols in the decimated buffer: from
+     * the detected packet start (in decimated samples) to the end of the
+     * current symbol. Indices bound by decim_out (the actual returned count). */
+    unsigned int i_start_ui = 0u;
+    unsigned int i_end = 0u;
+    if (proc->pkt_start_decim_sample >= 0)
     {
-        receiver_hybrid_callbacks_t callbacks;
-
-        pthread_mutex_lock(&session->decoded_packet_mutex);
-        session->hybrid_total_packets++;
-        callbacks = session->hybrid_callbacks;
-        pthread_mutex_unlock(&session->decoded_packet_mutex);
-
-        if (callbacks.on_ble_packet)
-            callbacks.on_ble_packet(event, callbacks.user);
-        return;
+        long rel_start_l = (long)proc->pkt_start_decim_sample
+                           - (long)block_start_decim_sample;
+        i_start_ui = (rel_start_l > 0) ? (unsigned)rel_start_l : 0u;
+        i_end = end_decim_sample + proc->samples_per_symbol;
+        if (i_end > decim_out)
+            i_end = decim_out;
     }
 
-    if (session->ble_callbacks.on_packet)
-        session->ble_callbacks.on_packet(event, session->ble_callbacks.user);
-}
+    /* The idle prefix [0, i_start_ui) before the packet seeds the per-channel
+     * noise-floor estimate (tracked for diagnostics, not subtracted).  Skip
+     * the demodulator group-delay region at the packet head. */
+    unsigned int sig_start = i_start_ui;
+    if (i_end > sig_start + RECEIVER_RSSI_DEMOD_DELAY_SAMPLES)
+        sig_start += RECEIVER_RSSI_DEMOD_DELAY_SAMPLES;
 
-void receiver_ble_update_layout(receiver_session_t *session)
-{
-    unsigned int count = session->ble_config.le_channel_count;
-    /* The capture span is the LE window width: 2 MHz per channel. */
-    unsigned int span_mhz = 2u * count;
-    session->ble_sample_rate = span_mhz * 1000000u;
-    if (span_mhz == 2u)
-        session->ble_sample_rate = 4000000u;
-    session->ble_decim_factor = session->ble_sample_rate / 2000000u;
-    /* LO = window center = 2401 + 2*bottom + count MHz (a whole MHz). LE
-     * channels then sit at odd-MHz offsets +/-1, +/-3, ... around it. */
-    session->ble_lo_freq_hz =
-        (uint64_t)(2401u + 2u * session->ble_config.bottom_le_channel + count) *
-        1000000ULL;
-}
+    float rssi_dbr = receiver_rssi_signal_dbr(
+        proc->decimated, sig_start, i_end, i_start_ui,
+        &proc->noise_floor_linear, &proc->noise_floor_initialized,
+        RECEIVER_RSSI_INVALID);
+    rssi_dbr += proc->rssi_cal_db;
 
-/* Full DSP setup for one channel: NCO mix from offset_hz down to baseband,
- * decimate to 2 Msps, demodulate, decode. */
-static int receiver_ble_setup_channel_dsp(ble_channel_processor_t *ble,
-                                          double offset_hz,
-                                          unsigned int input_sample_rate,
-                                          unsigned int decimation)
-{
-    /* The channel must be fully inside the capture span: |offset| + half
-     * the channel width <= Nyquist. */
-    double nyquist_hz = (double)input_sample_rate / 2.0;
-    if (fabs(offset_hz) + 500000.0 > nyquist_hz)
-        return -1;
+    /* Radio sample index = block base (input samples) + decimated-sample offset
+     * scaled back up to the input rate by input_decimation. Mirrors the old
+     * path: (decim_buf_start + sample_index) * sample_scale. */
+    rx_metadata_t meta;
+    memset(&meta, 0, sizeof(meta));
+    meta.source_id                = 0u;
+    meta.radio_start_sample_index = abs_block_base_radio
+                                   + (unsigned long)end_decim_sample
+                                     * (unsigned long)proc->input_decimation;
+    meta.radio_sample_rate_hz     = proc->input_decimation * 2000000u;
+    meta.center_frequency_hz      = proc->center_frequency_hz;
+    meta.channel_index            = ble_rf_to_le_channel(proc->rf_channel_index);
+    meta.rssi_dbr                 = rssi_dbr;
 
-    ble->nco = nco_crcf_create(LIQUID_NCO);
-    ble->firdec = firdecim_crcf_create_kaiser(decimation, 7, 60.0f);
-    if (!ble->nco || !ble->firdec)
-        return -1;
-    ble->input_decimation = decimation;
-    ble->sample_scale = decimation;
-    ble->input_sample_rate_hz = input_sample_rate;
-    ble->active = 1u;
-    nco_crcf_set_frequency(ble->nco,
-                           2.0f * (float)M_PI * (float)offset_hz /
-                               (float)input_sample_rate);
+    ble_event_t event = { .meta = meta, .frame = frame };
 
-    ble->demod = cpfskdem_create(1u, 0.5f, RECEIVER_BLE_SAMPLES_PER_SYMBOL, 3u, 0.5f,
-                                 LIQUID_CPFSK_GMSK);
-    if (!ble->demod)
-        return -1;
-
-    ble_bitstream_decoder_init(&ble->proc, (uint8_t)ble->channel_index);
-    ble->prev_status = BLE_SEARCHING;
-    ble->pkt_start_sample = -1;
-    if (sample_reader_init(&ble->reader, &ble->session->sample_dispatcher) != 0)
-        return -1;
-    ble->reader_initialized = 1u;
+    if (proc->session)
+        session_process_ble_event(proc->session, &event);
 
     return 0;
 }
 
-static int receiver_ble_setup_hybrid_channel(receiver_session_t *session)
+int ble_channel_processor_process_block(ble_channel_processor_t *proc, sample_block_t *blk)
 {
-    ble_channel_processor_t *ble = &session->ble_ctx[0];
-    memset(ble, 0, sizeof(*ble));
-    ble->session = session;
-    ble->pipeline = RECEIVER_BLE_PIPELINE_HYBRID;
-    session->ble_ctx_count = 1u;
+    if (!proc || !proc->active || !blk) return -1;
 
-    /* Derive everything from the bredr layout (LO + sample rate) and the
-     * configured advertising channel instead of fixed constants, so the
-     * worker follows the movable capture window. */
-    uint8_t ble_channel = session->hybrid_config.ble_channel;
-    uint32_t adv_freq_hz = BLE_CH37_FREQ_HZ;
-    if (ble_channel == BLE_CH38_INDEX)
-        adv_freq_hz = BLE_CH38_FREQ_HZ;
-    else if (ble_channel == BLE_CH39_INDEX)
-        adv_freq_hz = BLE_CH39_FREQ_HZ;
+    unsigned int decim_out;
 
-    unsigned int decimation = session->bredr_decim_factor;
-    if (decimation == 0u)
-        return -1;
+    /* Frame-major block: out[frame*M + bin]. The bank runs at 2*grid Msps, decimated
+     * to 2 Msps by striding frame_stride frames (2 for a 2 MHz grid, 1 for 1 MHz). */
+    unsigned int frames = blk->num_samples / proc->bank_M;
+    decim_out = 0u;
+    for (unsigned int k = 0u; k < frames && decim_out < proc->buf_cap_samples; k += proc->frame_stride)
+        proc->decimated[decim_out++] = blk->samples[proc->bin + (size_t)k * proc->bank_M];
+    proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
 
-    double offset_hz = (double)adv_freq_hz - (double)session->bredr_lo_freq_hz;
-    ble->center_frequency_hz = adv_freq_hz;
-    ble->channel_index = (uint16_t)ble_channel;
-    return receiver_ble_setup_channel_dsp(ble, offset_hz,
-                                          session->bredr_sample_rate,
-                                          decimation);
-}
+    int dbg = proc->session ? proc->session->config.debug : 0;
+    if (dbg && proc->dbg_blocks_seen < 4u)
+        fprintf(stderr,
+                "[ble_proc rf=%u] block #%u: num_samples=%u decim_out=%u\n",
+                proc->rf_channel_index, proc->dbg_blocks_seen,
+                blk->num_samples, decim_out);
+    proc->dbg_blocks_seen++;
 
-static int receiver_ble_setup_session_channels(receiver_session_t *session)
-{
-    unsigned int count = session->ble_config.le_channel_count;
-    unsigned int bottom = session->ble_config.bottom_le_channel;
-    if (count < 1u || count > RECEIVER_BLE_MAX_CHANNELS)
-        return -1;
-    if (bottom >= BLE_RF_CHANNEL_COUNT || bottom + count > BLE_RF_CHANNEL_COUNT)
-        return -1;
+    unsigned long block_start_decim_sample = proc->block_start_decim_sample;
 
-    receiver_ble_update_layout(session);
-
-    session->ble_ctx_count = 0u;
-    for (unsigned int i = 0; i < count; i++)
+    unsigned int num_bits = decim_out / proc->samples_per_symbol;
+    for (unsigned int s = 0u; s < num_bits; s++)
     {
-        unsigned int rf = bottom + i;
-        ble_channel_processor_t *ble = &session->ble_ctx[i];
-        memset(ble, 0, sizeof(*ble));
-        ble->session = session;
-        ble->pipeline = RECEIVER_BLE_PIPELINE_SESSION;
-        ble->channel_index = ble_channel_number_for_rf(rf);
-        ble->center_frequency_hz = ble_rf_channel_freq_hz(rf);
+        unsigned int sample_index = s * proc->samples_per_symbol;
+        uint32_t raw_sym_val = cpfskdem_demodulate(proc->demodulator,
+                                                    &proc->decimated[sample_index]);
+        uint8_t bit = (uint8_t)(raw_sym_val & 0x1u);
 
-        if (!ble_rf_is_advertising(rf))
+        ble_status_t status = ble_bitstream_decoder_push_bit(&proc->decoder, bit);
+
+        if (proc->prev_state == BLE_SEARCHING && status != BLE_SEARCHING)
+            proc->pkt_start_decim_sample = (long)(block_start_decim_sample + sample_index);
+
+        proc->prev_state = status;
+
+        if (status == BLE_VALID_PACKET)
         {
-            /* Data channel: no DSP work for now. It still gets a reader so
-             * its worker can drain and release blocks. */
-            ble->active = 0u;
-            if (sample_reader_init(&ble->reader, &session->sample_dispatcher) != 0)
-                return -1;
-            ble->reader_initialized = 1u;
-            session->ble_ctx_count++;
-            continue;
+            proc->valid_packets++;
+            if (dbg)
+                fprintf(stderr,
+                        "[ble_proc rf=%u] VALID_PACKET #%lu (decim_out=%u)\n",
+                        proc->rf_channel_index, proc->valid_packets, decim_out);
+            emit_frame(proc, block_start_decim_sample, sample_index,
+                       decim_out, blk->block_base_sample);
         }
-
-        double offset_hz =
-            (double)ble->center_frequency_hz - (double)session->ble_lo_freq_hz;
-        if (receiver_ble_setup_channel_dsp(ble, offset_hz,
-                                           session->ble_sample_rate,
-                                           session->ble_decim_factor) != 0)
-            return -1;
-        session->ble_ctx_count++;
     }
-
     return 0;
 }
 
-int receiver_ble_channel_processor_setup(receiver_session_t *session,
-                                         receiver_ble_pipeline_t pipeline)
+void *ble_channel_worker(void *arg)
 {
-    if (!session || !session->ble_ctx)
-        return -1;
+    ble_channel_processor_t *proc = (ble_channel_processor_t *)arg;
+    if (!proc || !proc->session) return NULL;
 
-    if (pipeline == RECEIVER_BLE_PIPELINE_HYBRID)
-        return receiver_ble_setup_hybrid_channel(session);
+    const _Atomic unsigned int *shutdown = &proc->session->shutdown_requested;
+    sample_block_t *block = NULL;
 
-    return receiver_ble_setup_session_channels(session);
-}
-
-void receiver_ble_channel_processor_destroy(receiver_session_t *session)
-{
-    if (!session || !session->ble_ctx)
-        return;
-
-    for (unsigned int i = 0; i < session->ble_ctx_count; i++)
+    for (;;)
     {
-        ble_channel_processor_t *ble = &session->ble_ctx[i];
-        if (ble->demod)
+        if (sample_reader_wait_pop(&proc->reader, shutdown, &block) != 0)
+            break;
+
+        if (block)
         {
-            cpfskdem_destroy(ble->demod);
-            ble->demod = NULL;
+            ble_channel_processor_process_block(proc, block);
+            sample_block_release(block);
+            block = NULL;
         }
-        if (ble->firdec)
-        {
-            firdecim_crcf_destroy(ble->firdec);
-            ble->firdec = NULL;
-        }
-        if (ble->nco)
-        {
-            nco_crcf_destroy(ble->nco);
-            ble->nco = NULL;
-        }
-        if (ble->reader_initialized)
-            sample_reader_destroy(&ble->reader);
     }
-    memset(session->ble_ctx, 0,
-           RECEIVER_BLE_MAX_CHANNELS * sizeof(*session->ble_ctx));
-    session->ble_ctx_count = 0u;
-}
 
-void receiver_ble_channel_processor_process(ble_channel_processor_t *ble,
-                                            sample_block_t *blk)
-{
-    /* Data channels do no work: their worker just drains and releases. */
-    if (!ble->active)
-        return;
-
-    float complex *samples = blk->samples;
-    unsigned int sample_count = blk->num_samples;
-    unsigned long long buf_start = blk->block_base_sample;
-
-    /* SESSION and HYBRID are both wideband channelized pipelines: mix the
-     * channel to baseband and decimate to 2 Msps. */
-    nco_crcf_mix_block_down(ble->nco, blk->samples, ble->mixed, blk->num_samples);
-    sample_count = blk->num_samples / ble->input_decimation;
-    firdecim_crcf_execute_block(ble->firdec, ble->mixed, sample_count, ble->decimated);
-    samples = ble->decimated;
-    buf_start /= ble->input_decimation;
-
-    unsigned int num_bits = sample_count / RECEIVER_BLE_SAMPLES_PER_SYMBOL;
-    for (unsigned int s = 0; s < num_bits; s++)
-    {
-        unsigned int sample_index = s * RECEIVER_BLE_SAMPLES_PER_SYMBOL;
-        unsigned int sym = cpfskdem_demodulate(ble->demod, &samples[sample_index]);
-        uint8_t bit = (uint8_t)(sym & 0x01u);
-        ble_status_t status = ble_bitstream_decoder_push_bit(&ble->proc, bit);
-
-        if (ble->prev_status == BLE_SEARCHING && status == BLE_COLLECTING)
-            ble->pkt_start_sample = (long long)(buf_start + sample_index);
-        ble->prev_status = status;
-
-        if (status != BLE_VALID_PACKET)
-            continue;
-
-        unsigned int i_start = 0u;
-        unsigned int i_end = 0u;
-        if (ble->pkt_start_sample >= 0)
-        {
-            long long rel_start = ble->pkt_start_sample - (long long)buf_start;
-            i_start = (rel_start < 0) ? 0u : (unsigned int)rel_start;
-            i_end = (s + 1u) * RECEIVER_BLE_SAMPLES_PER_SYMBOL;
-            if (i_end > sample_count)
-                i_end = sample_count;
-        }
-
-        ble_frame_t frame;
-        if (ble_bitstream_decoder_get_frame(&ble->proc, &frame) != 0)
-            continue;
-
-        float rssi_dbr =
-            receiver_rssi_from_mean_power_range(samples, i_start, i_end,
-                                                RECEIVER_RSSI_INVALID);
-        unsigned long long abs_sample_index =
-            (buf_start + sample_index) * (unsigned long long)ble->sample_scale;
-        rx_metadata_t meta =
-            receiver_make_metadata(abs_sample_index,
-                                   ble->input_sample_rate_hz,
-                                   ble->center_frequency_hz,
-                                   ble->channel_index,
-                                   rssi_dbr);
-        ble_event_t event = {
-            .meta = meta,
-            .frame = frame,
-        };
-        receiver_ble_emit_event(ble, &event);
-    }
+    return NULL;
 }

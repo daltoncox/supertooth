@@ -50,11 +50,16 @@ class DeviceListModel : public QAbstractListModel
     Q_OBJECT
     QML_ELEMENT
     Q_PROPERTY(int count READ count NOTIFY countChanged)
+    Q_PROPERTY(QString sortRoleName READ sortRoleName WRITE setSortRoleName
+                   NOTIFY sortRoleNameChanged)
+    Q_PROPERTY(Qt::SortOrder sortOrder READ sortOrder WRITE setSortOrder
+                   NOTIFY sortOrderChanged)
 
 public:
     enum Roles {
         RssiRole = Qt::UserRole + 1,
         ProtoRole,
+        TypeRole,
         AddrRole,
         DeviceRole,
         IdentifierRole,
@@ -75,10 +80,28 @@ public:
 
     int count() const { return m_rows.size(); }
 
-    /// Sentinel exposed via RssiRole for "no RSSI yet". Public so the sort
-    /// proxy can pin it to the bottom without duplicating the literal (the
-    /// two must never drift). Far below any real HackRF reading in either
-    /// sort direction.
+    /// Current sort state. The model keeps its rows physically ordered by
+    /// these and re-sorts in place whenever a sort-affecting value changes
+    /// (see maybeResort), so the QML-facing index IS the display row — no
+    /// proxy model, no second index space.
+    QString sortRoleName() const { return m_sortRoleName; }
+    void setSortRoleName(const QString &name);
+
+    Qt::SortOrder sortOrder() const { return m_sortOrder; }
+    void setSortOrder(Qt::SortOrder order);
+
+    /// Set both sort role and order in one call (one re-sort rather than
+    /// two). Unknown role names leave the previous sort state intact.
+    Q_INVOKABLE void sortBy(const QString &roleName, Qt::SortOrder order);
+
+    /// Resolve a stable device ID to its current display row. O(1) via
+    /// m_rowById. Returns -1 if the device is not present (removed/cleared).
+    /// The view uses this to keep a selection highlighted across re-sorts.
+    Q_INVOKABLE int rowForDeviceId(int id) const;
+
+    /// Sentinel exposed via RssiRole for "no RSSI yet". lessThan pins it to
+    /// the bottom of any RSSI sort without duplicating the literal. Far below
+    /// any real HackRF reading in either sort direction.
     static constexpr double kRssiSentinel = -999.0;
 
     /// Feed a decoded frame (proto/addr/src/dst/rssiDb/detail) into the
@@ -105,6 +128,8 @@ public:
 
 signals:
     void countChanged();
+    void sortRoleNameChanged();
+    void sortOrderChanged();
 
 private:
     struct Row
@@ -137,6 +162,7 @@ private:
                            const QString &device);
     static QString deviceLabelFor(const QString &proto, const QString &src,
                            const QString &dst);
+    static QString typeLabelFor(const QString &proto, const QString &device);
     static QString identifierLabelFor(const Row &r);
     static QString formatLastSeen(qint64 ms);
     void recomputeAverage(Row &r, qint64 now);
@@ -144,15 +170,38 @@ private:
     void evictChartHistory(Row &r, qint64 now);
     void removeRow(int index);
 
+    /// True when \a a should be displayed before \a b under the current
+    /// sort state. Mirrors the removed sort-proxy's ordering (RSSI sentinel
+    /// pinned to the bottom in both directions; identifier grouped by proto
+    /// then type), but reads Row fields directly instead of via data().
+    bool lessThan(const Row &a, const Row &b) const;
+
+    /// Comparable value of \a r under the current sort role, used to cheaply
+    /// decide whether a single-row update could have changed the order.
+    QVariant sortKey(const Row &r) const;
+
+    /// Stable-sort m_rows in place and emit layoutChanged only when the
+    /// order actually changed. The single re-sort path for insertions,
+    /// value updates and sort-state changes.
+    void maybeResort();
+
+    /// Rebuild m_indexByKey / m_rowById from the current m_rows. Call after
+    /// any physical reorder or removal.
+    void rebuildLookup();
+
     static constexpr int kWindowMs = 1000;
     static constexpr int kChartHistoryMs = 300 * 1000;   // 5 min (max range)
     static constexpr int kMaxSeriesPoints = 12000;       // backstop cap
 
     QVector<Row> m_rows;
     QHash<QString, int> m_indexByKey;
+    QHash<int, int> m_rowById;          // stable device id -> display row
     QSet<QString> m_brokenOutPiconets;   // LAP-keyed; "BR/EDR\x1F<lap>"
     QTimer m_tick;
     int m_nextId = 1;                    // monotonic device ID counter (0 = invalid)
+
+    QString m_sortRoleName = QStringLiteral("identifier");
+    Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
 };
 
 #endif // DEVICE_LIST_MODEL_H

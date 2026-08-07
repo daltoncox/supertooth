@@ -34,11 +34,12 @@ Item {
     readonly property int minColWidth: 20
     readonly property int handleHit: 6
 
-    // Sort state lives entirely in the proxy model (DeviceListSortProxyModel
-    // exposes sortRoleName/sortOrder as Q_PROPERTYs and owns the actual row
-    // ordering). The view is a pure reflector: it reads those properties to
-    // render the header indicator and forwards clicks via sortBy(). Keeping a
-    // single source of truth avoids the two-way-sync drift between QML and C++.
+    // Sort state lives in the DeviceListModel (sortRoleName/sortOrder
+    // Q_PROPERTYs; the model owns the physical row ordering and re-sorts in
+    // place via layoutChanged). The view is a pure reflector: it reads those
+    // properties to render the header indicator and forwards clicks via
+    // sortBy(). Keeping a single source of truth means the row index the view
+    // sees IS the display row — no proxy, no second index space to desync.
 
     // Sort policy for a header click: toggling direction when re-clicking the
     // active column, otherwise adopting the column's default order. Execution
@@ -178,13 +179,22 @@ Item {
         }
     }
 
-    // Re-resolve the selected device's ID to its current proxy row after any
+    // Re-resolve the selected device's ID to its current model row after any
     // model change that could have moved it (sort, insert, remove, reset).
     // Updates the highlight + chart-timer target; does NOT reload the detail
     // pane (the device hasn't changed, only its row position has).
+    //
+    // rowForDeviceId() is O(1) on the SAME model whose signals drive this,
+    // and the model keeps its row<->id lookup consistent before any signal
+    // is emitted, so -1 here genuinely means "removed or cleared" — there is
+    // no mid-reorder window to misread.
+    function selectedRow() {
+        if (!deviceModel || selectedDeviceId === 0) return -1
+        return deviceModel.rowForDeviceId(selectedDeviceId)
+    }
+
     function reselectDevice() {
-        if (!deviceModel || selectedDeviceId === 0) return
-        var row = deviceModel.rowForDeviceId(selectedDeviceId)
+        var row = selectedRow()
         if (row < 0) {
             // Device was removed or the model was cleared.
             selectedDeviceId = 0
@@ -200,13 +210,21 @@ Item {
 
     // Periodically re-read the chart series so newly-captured frames are
     // painted and the rolling window keeps sliding forward even when no
-    // frames arrive (so the trace visibly advances in time).
+    // frames arrive (so the trace visibly advances in time). Resolves the
+    // selection to a live row via rowForDeviceId() rather than trusting a
+    // possibly-stale ListView currentIndex, and refreshes the Device Info
+    // pane so its values (RSSI, rate, last seen) track the 1 Hz model tick.
     Timer {
         id: chartRefreshTimer
         interval: 500
         repeat: true
         running: root.selectedDeviceId > 0
-        onTriggered: root.loadChart(deviceListView.currentIndex)
+        onTriggered: {
+            var row = root.selectedRow()
+            root.loadChart(row)
+            if (row >= 0)
+                root.loadDetail(row)
+        }
     }
 
 ListModel {
@@ -214,7 +232,8 @@ ListModel {
         // defaultOrder: 0 = Qt.AscendingOrder, 1 = Qt.DescendingOrder.
         ListElement { title: "RSSI";         role: "rssi";        width: 70;  hAlign: 1; color: "#b5cea8"; sortable: true;  defaultOrder: 1 }
         ListElement { title: "Protocol";     role: "proto";       width: 80;  hAlign: 1; color: "#dcdcaa"; sortable: true;  defaultOrder: 0 }
-         ListElement { title: "Identifier";    role: "identifier";  width: 220; hAlign: 1; color: "#569cd6"; sortable: true; defaultOrder: 0 }
+        ListElement { title: "Type";         role: "type";        width: 100;  hAlign: 1; color: "#c586c0"; sortable: true; defaultOrder: 0 }
+        ListElement { title: "Identifier";    role: "identifier";  width: 200; hAlign: 1; color: "#569cd6"; sortable: true; defaultOrder: 0 }
          ListElement { title: "First Seen";    role: "firstSeen";   width: 120; hAlign: 1; color: "#cccccc"; sortable: true; defaultOrder: 0 }
          ListElement { title: "Last Seen";     role: "lastSeen";    width: 120; hAlign: 1; color: "#cccccc"; sortable: true; defaultOrder: 0 }
         ListElement { title: "Packet Rate";  role: "packetRate";  width: 100; hAlign: 1; color: "#9cdcfe"; sortable: true;  defaultOrder: 1 }
@@ -440,7 +459,13 @@ ListModel {
                         color: deviceListView.currentIndex === index ? "#094771" : (index % 2 === 0 ? "#1e1e1e" : "#252525")
                         clip: true
 
-                        property var cells: [rssi, proto, identifier, firstSeen, lastSeen, packetRate]
+                        // Column cells read live role values. The delegate's
+                        // role properties (rssi, proto, ...) are exposed in the
+                        // delegate scope, and this array binding re-evaluates
+                        // whenever any of them changes — so a dataChanged (e.g.
+                        // a BLE local name landing in Identifier) repaints the
+                        // row instead of showing a stale snapshot.
+                        property var cells: [rssi, proto, type, identifier, firstSeen, lastSeen, packetRate]
 
                         MouseArea {
                             anchors.fill: parent
@@ -591,7 +616,7 @@ ListModel {
                                         onClicked: {
                                             root.chartRangeIndex = index
                                             root.chartRangeSec   = model.secs
-                                            root.loadChart(deviceListView.currentIndex)
+                                            root.loadChart(root.selectedRow())
                                             rangePicker.close()
                                         }
                                     }

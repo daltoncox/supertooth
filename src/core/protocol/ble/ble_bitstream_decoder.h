@@ -4,16 +4,35 @@
  *
  * Overview
  * --------
- * This module captures BLE advertising frames from a demodulated bitstream.
- * Framing state lives directly inside `ble_bitstream_decoder_t`, which keeps
- * ownership aligned with BR/EDR: the PHY owns capture and framing, while the
- * codec layer later turns a captured frame into a decoded packet model.
+ * This module captures BLE frames from a demodulated bitstream. One unified
+ * detector handles both advertising and data channel PDUs — there is no
+ * mode to toggle:
+ *
+ *  1. SEARCH: an 8-bit sliding window flags a preamble (0x55 or 0xAA).
+ *     The preamble alone is too common to accept a packet on, so every
+ *     candidate is proven later.
+ *  2. COLLECT_AA: the next 32 bits are the access address. If it is the
+ *     advertising address (0x8E89BED6) the candidate is an advertising
+ *     PDU; anything else is a possible data PDU. Classification is purely
+ *     on the access address, regardless of channel.
+ *  3. COLLECT_PDU: the dewhitened header length determines the candidate
+ *     size (2 + len + 3 CRC bytes).
+ *  4. Advertising candidates are emitted as captured (CRC enforcement is
+ *     left to the consumer, as before); a CRC-valid CONNECT_IND also seeds
+ *     a CRCInit candidate into the piconet store. Data candidates are
+ *     CRC-gated against the store: accepted only when a confirmed CRCInit
+ *     (or a candidate that thereby proves itself) verifies the packet.
+ *
+ * Rejection rule: a data candidate that fails the CRC gate does NOT drop
+ * its bits. Only the bits up to the next preamble found inside the
+ * buffered candidate are rejected; collection resumes there (avoiding
+ * false negatives when a false preamble swallowed bits of a real packet).
  *
  * Typical usage
  * -------------
  * @code
  *   ble_bitstream_decoder_t proc;
- *   ble_bitstream_decoder_init(&proc, 37);          // advertising channel 37
+ *   ble_bitstream_decoder_init(&proc, 37, &store);    // advertising ch 37
  *
  *   ble_status_t status = ble_bitstream_decoder_push_bit(&proc, bit);
  *   if (status == BLE_VALID_PACKET) {
@@ -27,6 +46,7 @@
 #ifndef BLE_BITSTREAM_DECODER_H
 #define BLE_BITSTREAM_DECODER_H
 
+#include <math.h>
 #include <stdint.h>
 
 #include "phy.h"
@@ -60,6 +80,13 @@ extern "C" {
 #define BLE_RF_ADV1_INDEX 12u   /* LE 38 */
 #define BLE_RF_ADV2_INDEX 39u   /* LE 39 */
 
+/* Candidate buffering: preamble (8) + access address (32) + max PDU+CRC. */
+#define BLE_PREAMBLE_BITS 8u
+#define BLE_AA_BITS 32u
+#define BLE_CANDIDATE_MAX_BITS \
+    (BLE_PREAMBLE_BITS + BLE_AA_BITS + (BLE_PDU_MAX_BYTES + BLE_CRC_BYTES) * 8u)
+#define BLE_CANDIDATE_MAX_BYTES ((BLE_CANDIDATE_MAX_BITS + 7u) / 8u + 6u)
+
 /** Center frequency of LE RF channel @p rf (0..39) in Hz. */
 static inline uint32_t ble_rf_channel_freq_hz(unsigned int rf)
 {
@@ -84,16 +111,53 @@ static inline uint8_t ble_channel_number_for_rf(unsigned int rf)
     return (uint8_t)(rf - 2u);
 }
 
+/** LE RF channel carrying LE channel number @p ch (inverse of
+ * ble_channel_number_for_rf). Returns 0xFF for out-of-range input. */
+static inline unsigned int ble_rf_for_channel_number(unsigned int ch)
+{
+    if (ch == BLE_CH37_INDEX) return BLE_RF_ADV0_INDEX;
+    if (ch == BLE_CH38_INDEX) return BLE_RF_ADV1_INDEX;
+    if (ch == BLE_CH39_INDEX) return BLE_RF_ADV2_INDEX;
+    if (ch <= 10u) return ch + 1u;
+    if (ch <= 36u) return ch + 2u;
+    return 0xFFu;
+}
+
+/** Nonzero when LE RF channel @p rf is fully inside a capture span of
+ * @p sample_rate Hz around @p lo_hz (the same rule the channelizer uses to
+ * place a processor). */
+static inline int ble_rf_in_capture_span(unsigned int rf, uint64_t lo_hz,
+                                         uint32_t sample_rate)
+{
+    double offset_hz = (double)ble_rf_channel_freq_hz(rf) - (double)lo_hz;
+    return fabs(offset_hz) + 500000.0 <= (double)sample_rate / 2.0;
+}
+
 /* ---------------------------------------------------------------------------
- * ble_frame_t — a captured BLE advertising frame
+ * ble_frame_t — a captured BLE frame (advertising or data)
  * ---------------------------------------------------------------------------*/
+
+/** Identifies which PDU family a captured frame carries. */
+typedef enum
+{
+    BLE_FRAME_ADVERTISING = 0,
+    BLE_FRAME_DATA = 1,
+} ble_frame_kind_t;
 
 typedef struct
 {
     /** Physical-layer modulation/coding of the captured packet. */
     receiver_phy_t phy;
+    /** Advertising-channel or data-channel PDU. */
+    ble_frame_kind_t kind;
     uint8_t preamble;
     uint32_t access_address;
+    /** CRCInit used for this frame: the confirmed per-connection value for
+     * data frames, BLE_CRC_INIT_ADV for advertising frames. */
+    uint32_t crc_init;
+    /** Stamped 1 by the framer for emitted data frames (they are CRC-gated);
+     * 0 for advertising frames (the codec computes crc_ok instead). */
+    uint8_t crc_ok;
     uint8_t raw_pdu[BLE_PDU_MAX_BYTES + BLE_CRC_BYTES];
     uint16_t raw_pdu_bytes;
 } ble_frame_t;
@@ -114,17 +178,36 @@ typedef enum
  * ble_bitstream_decoder_t — per-channel decoder state
  * ---------------------------------------------------------------------------*/
 
+struct ble_piconet_store;   /* forward declaration (avoids include cycle) */
+
+/** Internal framing states. */
+typedef enum
+{
+    BLE_DEC_SEARCH = 0,
+    BLE_DEC_COLLECT_AA = 1,
+    BLE_DEC_COLLECT_PDU = 2,
+} ble_dec_state_t;
+
 typedef struct
 {
     uint8_t channel_index;
-    uint64_t bit_window;
-    int collecting;
-    unsigned int bits_collected;
-    uint8_t raw_pdu[BLE_PDU_MAX_BYTES + BLE_CRC_BYTES];
-    int header_decoded;
-    unsigned int bits_to_collect;
-    unsigned int frame_bytes;
+    /** Shared per-session connection store (CRC gating + CRCInit recovery).
+     * NULL: advertising packets still emit; data candidates always reject. */
+    struct ble_piconet_store *store;
+
+    ble_dec_state_t state;
     uint8_t detected_preamble;
+    uint32_t access_address;   /* classified candidate AA */
+
+    /* Candidate bit buffer, LSB-first air order: preamble at bit 0, AA at
+     * bit 8, PDU at bit 40 (PDU bytes are byte-aligned at cand[5..]). */
+    uint8_t cand[BLE_CANDIDATE_MAX_BYTES];
+    unsigned int cand_bits;
+
+    int is_data_candidate;
+    int header_decoded;
+    unsigned int pdu_target_bits;   /* PDU+CRC bits once the header is known */
+
     ble_frame_t last_frame;
     int frame_ready;
 } ble_bitstream_decoder_t;
@@ -133,7 +216,9 @@ typedef struct
  * API
  * ---------------------------------------------------------------------------*/
 
-void ble_bitstream_decoder_init(ble_bitstream_decoder_t *proc, uint8_t channel_index);
+void ble_bitstream_decoder_init(ble_bitstream_decoder_t *proc,
+                                uint8_t channel_index,
+                                struct ble_piconet_store *store);
 ble_status_t ble_bitstream_decoder_push_bit(ble_bitstream_decoder_t *proc, uint8_t bit);
 int ble_bitstream_decoder_get_frame(ble_bitstream_decoder_t *proc, ble_frame_t *out);
 

@@ -54,7 +54,7 @@ int main(int argc, char *argv[])
     QGuiApplication app(argc, argv);
 
     app.setApplicationVersion(QString::fromUtf8(supertooth_get_version()));
-    app.setWindowIcon(QIcon(":/assets/icons/Supertooth_Spaced_512_2x.png"));
+    app.setWindowIcon(QIcon(":/assets/icons/Supertooth_Squircle_1024x1024.png"));
     QPalette darkPalette;
     darkPalette.setColor(QPalette::Window, QColor(45, 45, 45));
     darkPalette.setColor(QPalette::WindowText, Qt::white);

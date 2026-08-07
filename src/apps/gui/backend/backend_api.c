@@ -10,7 +10,7 @@
 #include <string.h>
 #include <inttypes.h>
 
-#include "receiver_session.h"
+#include "session.h"
 #include "receive_event_models.h"
 #include "ble_bitstream_decoder.h"
 #include "ble_codec.h"
@@ -23,9 +23,10 @@
 
 struct backend_session
 {
-    receiver_session_t *session;
+    session_t *session;
     backend_row_fn  on_row;
     void               *user;
+    backend_stopped_fn on_stopped;
     unsigned long       packet_count;
     int                 enforce_crc;   /* drop BLE frames whose CRC fails */
 };
@@ -59,37 +60,37 @@ static void fmt_addr_plain(char *out, size_t out_sz, const ble_address_t *addr)
     ble_format_addr(out, addr->addr); /* writes exactly 17 chars + NUL */
 }
 
-static void set_src_dst(backend_row_t *row, const ble_packet_t *pkt)
+static void set_src_dst(backend_row_t *row, const ble_adv_pdu_t *adv)
 {
-    const uint8_t t = (uint8_t)(pkt->pdu_type & 0x0Fu);
+    const uint8_t t = (uint8_t)(adv->pdu_type & 0x0Fu);
     switch (t)
     {
     case BLE_PDU_ADV_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.adv_ind.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_ind.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "Broadcast");
         break;
     case BLE_PDU_ADV_DIRECT_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.adv_direct_ind.adv_addr);
-        fmt_addr_plain(row->dst, sizeof(row->dst), &pkt->payload.adv_direct_ind.target_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_direct_ind.adv_addr);
+        fmt_addr_plain(row->dst, sizeof(row->dst), &adv->payload.adv_direct_ind.target_addr);
         break;
     case BLE_PDU_ADV_NONCONN_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.adv_nonconn_ind.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_nonconn_ind.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "Broadcast");
         break;
     case BLE_PDU_SCAN_REQ:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.scan_req.scanner_addr);
-        fmt_addr_plain(row->dst, sizeof(row->dst), &pkt->payload.scan_req.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.scan_req.scanner_addr);
+        fmt_addr_plain(row->dst, sizeof(row->dst), &adv->payload.scan_req.adv_addr);
         break;
     case BLE_PDU_SCAN_RSP:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.scan_rsp.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.scan_rsp.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "--");
         break;
     case BLE_PDU_CONNECT_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.connect_ind.init_addr);
-        fmt_addr_plain(row->dst, sizeof(row->dst), &pkt->payload.connect_ind.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.connect_ind.init_addr);
+        fmt_addr_plain(row->dst, sizeof(row->dst), &adv->payload.connect_ind.adv_addr);
         break;
     case BLE_PDU_ADV_SCAN_IND:
-        fmt_addr_plain(row->src, sizeof(row->src), &pkt->payload.adv_scan_ind.adv_addr);
+        fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_scan_ind.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "Broadcast");
         break;
     default:
@@ -99,26 +100,26 @@ static void set_src_dst(backend_row_t *row, const ble_packet_t *pkt)
     }
 }
 
-static const uint8_t *adv_data_for(const ble_packet_t *pkt, const uint8_t **out, unsigned int *len)
+static const uint8_t *adv_data_for(const ble_adv_pdu_t *adv, const uint8_t **out, unsigned int *len)
 {
-    const uint8_t t = (uint8_t)(pkt->pdu_type & 0x0Fu);
+    const uint8_t t = (uint8_t)(adv->pdu_type & 0x0Fu);
     switch (t)
     {
     case BLE_PDU_ADV_IND:
-        *out = pkt->payload.adv_ind.adv_data;
-        *len = pkt->payload.adv_ind.adv_data_len;
+        *out = adv->payload.adv_ind.adv_data;
+        *len = adv->payload.adv_ind.adv_data_len;
         return *out;
     case BLE_PDU_ADV_NONCONN_IND:
-        *out = pkt->payload.adv_nonconn_ind.adv_data;
-        *len = pkt->payload.adv_nonconn_ind.adv_data_len;
+        *out = adv->payload.adv_nonconn_ind.adv_data;
+        *len = adv->payload.adv_nonconn_ind.adv_data_len;
         return *out;
     case BLE_PDU_SCAN_RSP:
-        *out = pkt->payload.scan_rsp.adv_data;
-        *len = pkt->payload.scan_rsp.adv_data_len;
+        *out = adv->payload.scan_rsp.adv_data;
+        *len = adv->payload.scan_rsp.adv_data_len;
         return *out;
     case BLE_PDU_ADV_SCAN_IND:
-        *out = pkt->payload.adv_scan_ind.adv_data;
-        *len = pkt->payload.adv_scan_ind.adv_data_len;
+        *out = adv->payload.adv_scan_ind.adv_data;
+        *len = adv->payload.adv_scan_ind.adv_data_len;
         return *out;
     default:
         *out = NULL;
@@ -143,11 +144,12 @@ static void add_detail(backend_row_t *row, const char *key, const char *fmt, ...
 static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
                          const rx_metadata_t *meta, const ble_frame_t *frame)
 {
-    const uint8_t t = (uint8_t)(pkt->pdu_type & 0x0Fu);
+    const ble_adv_pdu_t *adv = &pkt->pdu.adv;
+    const uint8_t t = (uint8_t)(adv->pdu_type & 0x0Fu);
     char buf[64];
 
     add_detail(row, "PDU Type", "%s (%s)",
-               ble_pdu_type_name(pkt->pdu_type), ble_pdu_type_desc(pkt->pdu_type));
+               ble_pdu_type_name(adv->pdu_type), ble_pdu_type_desc(adv->pdu_type));
     snprintf(buf, sizeof(buf), "%u", meta->channel_index);
     add_detail(row, "Channel", "%s", buf);
     snprintf(buf, sizeof(buf), "0x%08" PRIX32, frame->access_address);
@@ -157,49 +159,49 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
     switch (t)
     {
     case BLE_PDU_ADV_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "TargetA", "--");
-        add_detail(row, "AdvData Length", "%u", pkt->payload.adv_ind.adv_data_len);
+        add_detail(row, "AdvData Length", "%u", adv->payload.adv_ind.adv_data_len);
         break;
     case BLE_PDU_ADV_DIRECT_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_direct_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_direct_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_direct_ind.target_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_direct_ind.target_addr);
         add_detail(row, "TargetA", "%s", buf);
         add_detail(row, "AdvData Length", "0");
         break;
     case BLE_PDU_ADV_NONCONN_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_nonconn_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_nonconn_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "TargetA", "--");
-        add_detail(row, "AdvData Length", "%u", pkt->payload.adv_nonconn_ind.adv_data_len);
+        add_detail(row, "AdvData Length", "%u", adv->payload.adv_nonconn_ind.adv_data_len);
         break;
     case BLE_PDU_SCAN_REQ:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.scan_req.scanner_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.scan_req.scanner_addr);
         add_detail(row, "ScanA", "%s", buf);
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.scan_req.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.scan_req.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "AdvData Length", "0");
         break;
     case BLE_PDU_SCAN_RSP:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.scan_rsp.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.scan_rsp.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "ScanA", "--");
-        add_detail(row, "AdvData Length", "%u", pkt->payload.scan_rsp.adv_data_len);
+        add_detail(row, "AdvData Length", "%u", adv->payload.scan_rsp.adv_data_len);
         break;
     case BLE_PDU_CONNECT_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.connect_ind.init_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.connect_ind.init_addr);
         add_detail(row, "InitA", "%s", buf);
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.connect_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.connect_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
-        add_detail(row, "LLData Length", "%u", pkt->payload.connect_ind.ll_data_len);
+        add_detail(row, "LLData Length", "%u", adv->payload.connect_ind.ll_data_len);
         break;
     case BLE_PDU_ADV_SCAN_IND:
-        fmt_addr_field(buf, sizeof(buf), &pkt->payload.adv_scan_ind.adv_addr);
+        fmt_addr_field(buf, sizeof(buf), &adv->payload.adv_scan_ind.adv_addr);
         add_detail(row, "AdvA", "%s", buf);
         add_detail(row, "TargetA", "--");
-        add_detail(row, "AdvData Length", "%u", pkt->payload.adv_scan_ind.adv_data_len);
+        add_detail(row, "AdvData Length", "%u", adv->payload.adv_scan_ind.adv_data_len);
         break;
     default:
         add_detail(row, "Payload", "(reserved/unknown)");
@@ -213,7 +215,7 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
     /* AdvData TLV breakdown. */
     const uint8_t *ad = NULL;
     unsigned int ad_len = 0u;
-    adv_data_for(pkt, &ad, &ad_len);
+    adv_data_for(adv, &ad, &ad_len);
     if (ad && ad_len)
     {
         unsigned int i = 0u;
@@ -260,6 +262,53 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
             i += 1u + ad_l;
         }
     }
+}
+
+static void build_data_detail(backend_row_t *row, const ble_packet_t *pkt,
+                              const rx_metadata_t *meta)
+{
+    const ble_data_pdu_t *data = &pkt->pdu.data;
+
+    add_detail(row, "Channel", "%u", meta->channel_index);
+    add_detail(row, "Access Address", "0x%08" PRIX32, pkt->access_address);
+    add_detail(row, "PHY", "%s", receiver_phy_name(pkt->phy));
+    add_detail(row, "CRCInit", "0x%06" PRIX32, pkt->crc_init);
+    add_detail(row, "LLID", "%u [%s]", (unsigned int)data->llid,
+               ble_llid_name(data->llid));
+    add_detail(row, "NESN", "%u", (unsigned int)data->nesn);
+    add_detail(row, "SN", "%u", (unsigned int)data->sn);
+    add_detail(row, "MD", "%u", (unsigned int)data->md);
+    add_detail(row, "Length", "%u", (unsigned int)data->payload_len);
+
+    /* Payload hex, capped so it stays inside the detail value buffer. */
+    if (data->payload_len == 0u)
+    {
+        add_detail(row, "Payload", "(empty)");
+    }
+    else
+    {
+        char hex[BACKEND_DETAIL_VAL_LEN];
+        size_t pos = 0u;
+        hex[0] = '\0';
+        unsigned int show = data->payload_len;
+        unsigned int max_bytes = (BACKEND_DETAIL_VAL_LEN - 24u) / 3u;
+        if (show > max_bytes)
+            show = max_bytes;
+        for (unsigned int i = 0u; i < show; i++)
+            pos += (size_t)snprintf(hex + pos, sizeof(hex) - pos, "%02X ",
+                                    data->payload[i]);
+        if (pos > 0u && hex[pos - 1u] == ' ')
+            hex[pos - 1u] = '\0';
+        if (show < data->payload_len)
+            add_detail(row, "Payload", "%s ... (+%u bytes)", hex,
+                       (unsigned int)(data->payload_len - show));
+        else
+            add_detail(row, "Payload", "%s", hex);
+    }
+
+    add_detail(row, "CRC", "0x%06" PRIX32 " (%s)", pkt->crc,
+               ble_verify_crc(pkt) ? "PASS" : "FAIL");
+    add_detail(row, "RSSI", "%.1f dBr", meta->rssi_dbr);
 }
 
 static void build_raw(backend_row_t *row, const ble_frame_t *frame)
@@ -336,12 +385,37 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
     snprintf(row.proto, sizeof(row.proto), "LE");
     row.ch_idx = m->channel_index;
     snprintf(row.addr, sizeof(row.addr), "0x%08" PRIX32, event->frame.access_address);
-    snprintf(row.type, sizeof(row.type), "%s", ble_pdu_type_name(pkt.pdu_type));
+
+    /* Data-channel (LL) PDUs carry no device addresses: the connection is
+     * identified by its random access address. The framer only emits these
+     * once the per-connection CRCInit is confirmed, so every row below is a
+     * recovered link-layer connection. */
+    if (!pkt.is_adv_pdu)
+    {
+        const ble_data_pdu_t *data = &pkt.pdu.data;
+        snprintf(row.type, sizeof(row.type), "LL_DATA");
+        snprintf(row.info, sizeof(row.info),
+                 "llid=%s sn=%u nesn=%u md=%u len=%u crc=%s",
+                 ble_llid_name(data->llid),
+                 (unsigned int)data->sn,
+                 (unsigned int)data->nesn,
+                 (unsigned int)data->md,
+                 (unsigned int)data->payload_len,
+                 ble_verify_crc(&pkt) ? "PASS" : "FAIL");
+        snprintf(row.src, sizeof(row.src), "--");
+        snprintf(row.dst, sizeof(row.dst), "--");
+        build_data_detail(&row, &pkt, m);
+        build_raw(&row, &event->frame);
+        bs->on_row(&row, bs->user);
+        return;
+    }
+
+    snprintf(row.type, sizeof(row.type), "%s", ble_pdu_type_name(pkt.pdu.adv.pdu_type));
     snprintf(row.info, sizeof(row.info), "%s, CRC %s",
-             ble_pdu_type_desc(pkt.pdu_type),
+             ble_pdu_type_desc(pkt.pdu.adv.pdu_type),
              ble_verify_crc(&pkt) ? "PASS" : "FAIL");
 
-    set_src_dst(&row, &pkt);
+    set_src_dst(&row, &pkt.pdu.adv);
     build_detail(&row, &pkt, m, &event->frame);
     build_raw(&row, &event->frame);
 
@@ -356,7 +430,7 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
  * bredr_build_decode_inputs() so the facade can attempt a header decode
  * without depending on static CLI helpers. Returns 1 when both UAP and
  * CLK1-6 are available, 0 otherwise. */
-static int bredr_gui_build_decode_inputs(const receiver_bredr_piconet_snapshot_t *pnet,
+static int bredr_gui_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
                                          const rx_metadata_t *meta,
                                          uint8_t *uap_out,
                                          uint8_t *clk1_6_out)
@@ -413,7 +487,7 @@ static void bredr_build_raw(backend_row_t *row, const bredr_frame_t *frame)
 }
 
 static void bredr_packet_trampoline(const bredr_event_t *event,
-                                    const receiver_bredr_piconet_snapshot_t *pnet,
+                                    const bredr_piconet_snapshot_t *pnet,
                                     void *user)
 {
     backend_session_t *bs = (backend_session_t *)user;
@@ -584,7 +658,7 @@ backend_session_t *backend_session_create(void)
     backend_session_t *bs = (backend_session_t *)calloc(1, sizeof(*bs));
     if (!bs)
         return NULL;
-    bs->session = receiver_session_create();
+    bs->session = (session_t *)calloc(1, sizeof(*bs->session));
     if (!bs->session)
     {
         free(bs);
@@ -593,12 +667,30 @@ backend_session_t *backend_session_create(void)
     return bs;
 }
 
+void backend_session_set_stopped_callback(backend_session_t *session,
+                                          backend_stopped_fn on_stopped,
+                                          void *user)
+{
+    if (!session)
+        return;
+    session->on_stopped = on_stopped;
+    session->user = user;
+}
+
+static void backend_session_stopped_trampoline(void *user)
+{
+    backend_session_t *bs = (backend_session_t *)user;
+    if (bs && bs->on_stopped)
+        bs->on_stopped(bs->user);
+}
+
 void backend_session_destroy(backend_session_t *session)
 {
     if (!session)
         return;
     if (session->session)
-        receiver_session_destroy(session->session);
+        session_destroy(session->session);
+    free(session->session);
     free(session);
 }
 
@@ -611,9 +703,10 @@ int backend_session_run_ble(backend_session_t *session,
                             backend_row_fn on_row,
                             void *user)
 {
-    if (!session)
+    if (!session || !session->session)
         return -1;
 
+    session_t *s = session->session;
     session->on_row = on_row;
     session->user = user;
     session->packet_count = 0ul;
@@ -623,31 +716,31 @@ int backend_session_run_ble(backend_session_t *session,
     (void)input_type; /* Only HackRF is supported by the backend today. */
 
     /* Defensive clamping of the LE window: 40 RF channels (0..39), up to
-     * RECEIVER_BLE_MAX_CHANNELS processors. */
+     * BLE_SESSION_MAX_CHANNELS processors. */
     if (le_channel_count < 1u)
         le_channel_count = 1u;
-    if (le_channel_count > RECEIVER_BLE_MAX_CHANNELS)
-        le_channel_count = RECEIVER_BLE_MAX_CHANNELS;
+    if (le_channel_count > BLE_SESSION_MAX_CHANNELS)
+        le_channel_count = BLE_SESSION_MAX_CHANNELS;
     if (bottom_le_rf >= BLE_RF_CHANNEL_COUNT)
         bottom_le_rf = BLE_RF_CHANNEL_COUNT - 1u;
     if (bottom_le_rf + le_channel_count > BLE_RF_CHANNEL_COUNT)
         le_channel_count = BLE_RF_CHANNEL_COUNT - bottom_le_rf;
 
-    receiver_ble_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.bottom_le_channel = bottom_le_rf;
-    cfg.le_channel_count = le_channel_count;
-    cfg.device_type = dev_type;
-    cfg.device_id = device_id;
-    cfg.debug = 0;
-    cfg.enforce_crc = session->enforce_crc;
+    session_config_t cfg = {
+        .device_type = dev_type,
+        .device_id = device_id,
+        .debug = 0,
+    };
+    if (session_init(s, &cfg) != 0)
+        return -1;
 
-    receiver_ble_callbacks_t cb;
-    memset(&cb, 0, sizeof(cb));
-    cb.on_packet = ble_packet_trampoline;
-    cb.user = session;
+    session_ble_config_t ble_cfg = { .enforce_crc = session->enforce_crc };
+    session_enable_ble(s, &ble_cfg, ble_packet_trampoline, session);
+    session_set_stopped_callback(s, backend_session_stopped_trampoline, session);
 
-    return receiver_session_run_ble(session->session, &cfg, &cb);
+    return session_tune(s, SESSION_REF_BLE, bottom_le_rf, le_channel_count) == 0
+                ? session_run(s)
+                : -1;
 }
 
 int backend_session_run_bredr(backend_session_t *session,
@@ -673,32 +766,29 @@ int backend_session_run_bredr(backend_session_t *session,
     channel_count &= ~1u;
     if (channel_count < 2u)
         channel_count = 2u;
-    if (channel_count > RECEIVER_BREDR_MAX_CHANNELS)
-        channel_count = RECEIVER_BREDR_MAX_CHANNELS;
+    if (channel_count > BREDR_SESSION_MAX_CHANNELS)
+        channel_count = BREDR_SESSION_MAX_CHANNELS;
     unsigned int max_bottom = 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;
 
-    receiver_bredr_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.channel_count = channel_count;
-    cfg.bottom_channel = bottom_channel;
-    cfg.le_grid = RECEIVER_BREDR_GRID_BREDR;
-    cfg.rssi_averaging_window = RECEIVER_BREDR_DEFAULT_RSSI_AVERAGING_WINDOW;
-    cfg.lap_filter = 0u;
-    cfg.lap_filter_enabled = 0;
-    cfg.device_type = dev_type;
-    cfg.device_id = device_id;
-    cfg.debug = 0;
+    session_config_t cfg = {
+        .device_type = dev_type,
+        .device_id = device_id,
+        .debug = 0,
+    };
+    if (session_init(session->session, &cfg) != 0)
+        return -1;
 
-    receiver_bredr_callbacks_t cb;
-    memset(&cb, 0, sizeof(cb));
-    cb.on_packet = bredr_packet_trampoline;
-    cb.user = session;
+    session_bredr_config_t bredr_cfg = {
+        .rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW,
+    };
+    session_enable_bredr(session->session, &bredr_cfg, bredr_packet_trampoline, session);
+    session_set_stopped_callback(session->session, backend_session_stopped_trampoline, session);
 
-    receiver_bredr_stats_t stats;
-    memset(&stats, 0, sizeof(stats));
-    return receiver_session_run_bredr(session->session, &cfg, &cb, &stats);
+    return session_tune(session->session, SESSION_REF_BREDR, bottom_channel, channel_count) == 0
+                ? session_run(session->session)
+                : -1;
 }
 
 int backend_session_run_hybrid(backend_session_t *session,
@@ -726,59 +816,72 @@ int backend_session_run_hybrid(backend_session_t *session,
     /* Defensive validation of the channel window. On the BR/EDR grid the
      * window is channel_count MHz (even count); on the LE grid it is
      * channel_count+1 MHz (odd count, even bottom). */
+    session_protocol_ref_t ref = SESSION_REF_BREDR;
     if (le_grid == BACKEND_GRID_LE)
     {
+        /* The GUI passes the window in BR/EDR-style MHz units (an odd
+         * channel_count spanning channel_count+1 MHz and an even
+         * bottom_channel). session_tune() expects LE RF units on the LE
+         * grid (one LE channel per 2 MHz), so halve both before tuning. */
         bottom_channel &= ~1u;
         if (channel_count < 1u)
             channel_count = 1u;
-        if (channel_count > RECEIVER_BREDR_MAX_CHANNELS - 1u)
-            channel_count = RECEIVER_BREDR_MAX_CHANNELS - 1u;
+        if (channel_count > 2u * BLE_SESSION_MAX_CHANNELS - 1u)
+            channel_count = 2u * BLE_SESSION_MAX_CHANNELS - 1u;
         if ((channel_count & 1u) == 0u)
             channel_count -= 1u;
-        if (channel_count < 1u)
-            return -1;
+
+        channel_count = (channel_count + 1u) / 2u;
+        if (channel_count > BLE_SESSION_MAX_CHANNELS)
+            channel_count = BLE_SESSION_MAX_CHANNELS;
+        bottom_channel /= 2u;
+        ref = SESSION_REF_BLE;
     }
     else
     {
-        le_grid = BACKEND_GRID_BREDR;
         channel_count &= ~1u;
         if (channel_count < 2u)
             channel_count = 2u;
-        if (channel_count > RECEIVER_BREDR_MAX_CHANNELS)
-            channel_count = RECEIVER_BREDR_MAX_CHANNELS;
+        if (channel_count > BREDR_SESSION_MAX_CHANNELS)
+            channel_count = BREDR_SESSION_MAX_CHANNELS;
     }
-    unsigned int max_bottom = 78u - (channel_count - 1u);
+    unsigned int max_bottom = (ref == SESSION_REF_BLE)
+                                  ? BLE_RF_CHANNEL_COUNT - channel_count
+                                  : 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;
 
-    receiver_hybrid_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.channel_count = channel_count;
-    cfg.bottom_channel = bottom_channel;
-    cfg.le_grid = (le_grid == BACKEND_GRID_LE) ? RECEIVER_BREDR_GRID_LE
-                                               : RECEIVER_BREDR_GRID_BREDR;
-    cfg.ble_channel = (ble_channel >= 37u && ble_channel <= 39u) ? ble_channel : 0u;
-    cfg.device_type = dev_type;
-    cfg.device_id = device_id;
-    cfg.debug = 0;
-    cfg.enforce_crc = session->enforce_crc;
+    session_config_t cfg = {
+        .device_type = dev_type,
+        .device_id = device_id,
+        .debug = 0,
+    };
+    if (session_init(session->session, &cfg) != 0)
+        return -1;
 
-    /* Both protocols route through the same on_row sink; the proto field in
-     * each row distinguishes "LE" from "BR/EDR". */
-    receiver_hybrid_callbacks_t cb;
-    memset(&cb, 0, sizeof(cb));
-    cb.on_bredr_packet = bredr_packet_trampoline;
-    cb.on_ble_packet = ble_packet_trampoline;
-    cb.user = session;
+    session_bredr_config_t bredr_cfg = {
+        .rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW,
+    };
+    session_enable_bredr(session->session, &bredr_cfg, bredr_packet_trampoline, session);
 
-    receiver_hybrid_stats_t stats;
-    memset(&stats, 0, sizeof(stats));
-    return receiver_session_run_hybrid(session->session, &cfg, &cb, &stats);
+    /* BLE is always available on the hybrid window; the picked advertising
+     * channel (if any) acts as a BLE on/off for the higher layers. */
+    if (ble_channel >= 37u && ble_channel <= 39u)
+    {
+        session_ble_config_t ble_cfg = { .enforce_crc = session->enforce_crc };
+        session_enable_ble(session->session, &ble_cfg, ble_packet_trampoline, session);
+    }
+
+    session_set_stopped_callback(session->session, backend_session_stopped_trampoline, session);
+
+    return session_tune(session->session, ref, bottom_channel, channel_count) == 0
+                ? session_run(session->session)
+                : -1;
 }
 
 void backend_session_request_stop(backend_session_t *session)
 {
     if (!session || !session->session)
         return;
-    receiver_session_request_stop(session->session);
+    session_request_stop(session->session);
 }

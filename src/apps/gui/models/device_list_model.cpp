@@ -3,7 +3,10 @@
 #include <QDateTime>
 #include <QPointF>
 #include <QSet>
+#include <QVariant>
 #include <QVariantMap>
+
+#include <algorithm>
 
 DeviceListModel::DeviceListModel(QObject *parent)
     : QAbstractListModel(parent)
@@ -25,6 +28,7 @@ QHash<int, QByteArray> DeviceListModel::roleNames() const
     return {
         {RssiRole,        "rssi"},
         {ProtoRole,       "proto"},
+        {TypeRole,        "type"},
         {AddrRole,        "addr"},
         {DeviceRole,      "device"},
         {IdentifierRole,  "identifier"},
@@ -49,6 +53,7 @@ QVariant DeviceListModel::data(const QModelIndex &index, int role) const
         // "--" is reproduced on the renderer side.
         return QVariant::fromValue(qIsNaN(r.rssiDb) ? kRssiSentinel : r.rssiDb);
     case ProtoRole:       return r.proto;
+    case TypeRole:        return typeLabelFor(r.proto, r.device);
     case AddrRole:       return r.addr;
     case DeviceRole:     return r.device;
     case IdentifierRole: return identifierLabelFor(r);
@@ -84,6 +89,13 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
     const qint64 now    = QDateTime::currentMSecsSinceEpoch();
 
     QString device = deviceLabelFor(proto, src, dst);
+
+    // BLE data-channel PDUs carry no device addresses: bucket them as a
+    // "connection" identified by the random access address (the `addr`
+    // field), mirroring how BR/EDR piconets get their own row.
+    if (proto == QStringLiteral("LE") &&
+        frame.value(QStringLiteral("type")).toString() == QStringLiteral("LL_DATA"))
+        device = QStringLiteral("connection");
 
     // BR/EDR piconet handling: a single piconet (identified by LAP, the low
     // 24 bits of the address) may emit frames whose `addr` flips between
@@ -181,13 +193,19 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
         rowIdx = m_rows.size();
         beginInsertRows(QModelIndex(), rowIdx, rowIdx);
         m_rows.append(std::move(r));
-        endInsertRows();
+        // Keep the lookups consistent before the proxy/views are notified.
         m_indexByKey.insert(key, rowIdx);
+        m_rowById.insert(m_rows.at(rowIdx).id, rowIdx);
+        endInsertRows();
         emit countChanged();
+        // The new row must land in its sorted position (emits layoutChanged
+        // if the order changed; no-op otherwise).
+        maybeResort();
         return;
     }
 
     Row &r = m_rows[rowIdx];
+    const QVariant sortKeyBefore = sortKey(r);
     r.packetsSeen++;
     r.packetsThisSecond++;
     r.lastSeenMs = now;
@@ -213,6 +231,11 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
 
     const QModelIndex idx = index(rowIdx, 0);
     emit dataChanged(idx, idx);
+
+    // Re-sort only when this row's sort key actually changed (a display name
+    // discovery, a fresh RSSI/last-seen, ...). Cheap guard for the hot path.
+    if (sortKey(r) != sortKeyBefore)
+        maybeResort();
 }
 
 void DeviceListModel::recomputeAverage(Row &r, qint64 now)
@@ -288,6 +311,7 @@ void DeviceListModel::tickRows()
     const QModelIndex topLeft = index(0, 0);
     const QModelIndex bottomRight = index(last, 0);
     emit dataChanged(topLeft, bottomRight);
+    maybeResort();
 }
 
 void DeviceListModel::clear()
@@ -297,6 +321,7 @@ void DeviceListModel::clear()
     beginResetModel();
     m_rows.clear();
     m_indexByKey.clear();
+    m_rowById.clear();
     m_brokenOutPiconets.clear();
     m_nextId = 1;
     endResetModel();
@@ -415,6 +440,21 @@ QString DeviceListModel::deviceLabelFor(const QString &proto, const QString &src
     return QStringLiteral("Unknown");
 }
 
+QString DeviceListModel::typeLabelFor(const QString &proto, const QString &device)
+{
+    if (proto == QStringLiteral("LE"))
+        // Advertising rows are keyed by a device address; connection rows
+        // (data-channel PDUs) are keyed by an access address.
+        return device == QStringLiteral("connection") ? QStringLiteral("CONN")
+                                                      : QStringLiteral("ADV_ADDR");
+    if (proto == QStringLiteral("BR/EDR"))
+        // Pre-break-out piconet rows have no slave track yet; broken-out
+        // rows are addressed by LT_ADDR (or the Central).
+        return device == QStringLiteral("piconet") ? QStringLiteral("CONN")
+                                                   : QStringLiteral("LT_ADDR");
+    return QStringLiteral("--");
+}
+
 QString DeviceListModel::identifierLabelFor(const Row &r)
 {
     if (r.proto == QStringLiteral("BR/EDR"))
@@ -442,6 +482,11 @@ QString DeviceListModel::identifierLabelFor(const Row &r)
         return r.addr + QStringLiteral("-") + suffix;
     }
 
+    // BLE connection rows (data-channel traffic) are identified by their
+    // random access address; there is never a learned local name for one.
+    if (r.device == QStringLiteral("connection"))
+        return r.addr.isEmpty() ? QStringLiteral("Connection") : r.addr;
+
     // BLE: a learned local name (from an advertising packet's AD structure)
     // wins over the raw AdvA so the table reads naturally. Fall back to the
     // advertising/scan address if no name was ever observed.
@@ -468,22 +513,156 @@ void DeviceListModel::removeRow(int index)
     if (index < 0 || index >= m_rows.size())
         return;
 
-    const QString removedKey = makeKey(m_rows.at(index).proto,
-                                       m_rows.at(index).addr,
-                                       m_rows.at(index).device);
-    m_indexByKey.remove(removedKey);
-
     beginRemoveRows(QModelIndex(), index, index);
     m_rows.removeAt(index);
+    // Re-key the lookups before endRemoveRows so any view reselect that runs
+    // synchronously on rowsRemoved reads a consistent row<->id mapping.
+    rebuildLookup();
     endRemoveRows();
+    emit countChanged();
+}
 
-    // Indexes after `index` shifted down by 1; the hash map needs to be re-keyed.
+int DeviceListModel::rowForDeviceId(int id) const
+{
+    return m_rowById.value(id, -1);
+}
+
+void DeviceListModel::setSortRoleName(const QString &name)
+{
+    if (m_sortRoleName == name)
+        return;
+    m_sortRoleName = name;
+    emit sortRoleNameChanged();
+    maybeResort();
+}
+
+void DeviceListModel::setSortOrder(Qt::SortOrder order)
+{
+    if (m_sortOrder == order)
+        return;
+    m_sortOrder = order;
+    emit sortOrderChanged();
+    maybeResort();
+}
+
+void DeviceListModel::sortBy(const QString &roleName, Qt::SortOrder order)
+{
+    const bool roleChanged = (m_sortRoleName != roleName);
+    const bool orderChanged = (m_sortOrder != order);
+    if (!roleChanged && !orderChanged)
+        return;
+
+    m_sortRoleName = roleName;
+    m_sortOrder = order;
+    if (roleChanged) emit sortRoleNameChanged();
+    if (orderChanged) emit sortOrderChanged();
+    maybeResort();
+}
+
+bool DeviceListModel::lessThan(const Row &a, const Row &b) const
+{
+    const bool asc = (m_sortOrder == Qt::AscendingOrder);
+    const auto cmpInt = [asc](qint64 l, qint64 r) { return asc ? (l < r) : (l > r); };
+    const auto cmpStr = [asc](const QString &l, const QString &r) { return asc ? (l < r) : (l > r); };
+
+    if (m_sortRoleName == QStringLiteral("rssi"))
+    {
+        // Pin the "no signal yet" sentinel to the bottom in either direction,
+        // mirroring the old proxy's lessThan.
+        const double l = qIsNaN(a.rssiDb) ? kRssiSentinel : a.rssiDb;
+        const double r = qIsNaN(b.rssiDb) ? kRssiSentinel : b.rssiDb;
+        const bool lSentinel = (l <= kRssiSentinel);
+        const bool rSentinel = (r <= kRssiSentinel);
+        if (lSentinel && rSentinel) return false;
+        if (lSentinel) return false;   // a sorts to the bottom in both orders
+        if (rSentinel) return true;    // b sorts to the bottom
+        return asc ? (l < r) : (l > r);
+    }
+
+    if (m_sortRoleName == QStringLiteral("identifier"))
+    {
+        // Group by protocol first (a 0x??<LAP> BR/EDR address never
+        // interleaves with a short BLE advertising address), then by type,
+        // then by the rendered identifier. Each level honors the direction.
+        if (a.proto != b.proto)
+            return cmpStr(a.proto, b.proto);
+        const QString ta = typeLabelFor(a.proto, a.device);
+        const QString tb = typeLabelFor(b.proto, b.device);
+        if (ta != tb)
+            return cmpStr(ta, tb);
+        return cmpStr(identifierLabelFor(a), identifierLabelFor(b));
+    }
+
+    if (m_sortRoleName == QStringLiteral("type"))
+        return cmpStr(typeLabelFor(a.proto, a.device),
+                      typeLabelFor(b.proto, b.device));
+    if (m_sortRoleName == QStringLiteral("proto"))
+        return cmpStr(a.proto, b.proto);
+    if (m_sortRoleName == QStringLiteral("lastSeen"))
+        return cmpInt(a.lastSeenMs, b.lastSeenMs);
+    if (m_sortRoleName == QStringLiteral("firstSeen"))
+        return cmpInt(a.firstSeenMs, b.firstSeenMs);
+    if (m_sortRoleName == QStringLiteral("packetRate"))
+        return cmpInt(a.lastRate, b.lastRate);
+
+    // Unknown/unsortable role: preserve current (stable insertion) order.
+    return false;
+}
+
+QVariant DeviceListModel::sortKey(const Row &r) const
+{
+    if (m_sortRoleName == QStringLiteral("rssi"))
+        return qIsNaN(r.rssiDb) ? kRssiSentinel : r.rssiDb;
+    if (m_sortRoleName == QStringLiteral("lastSeen"))
+        return r.lastSeenMs;
+    if (m_sortRoleName == QStringLiteral("firstSeen"))
+        return r.firstSeenMs;
+    if (m_sortRoleName == QStringLiteral("packetRate"))
+        return r.lastRate;
+    if (m_sortRoleName == QStringLiteral("proto"))
+        return r.proto;
+    if (m_sortRoleName == QStringLiteral("type"))
+        return typeLabelFor(r.proto, r.device);
+    if (m_sortRoleName == QStringLiteral("identifier"))
+        return identifierLabelFor(r);
+    return {};
+}
+
+void DeviceListModel::maybeResort()
+{
+    if (m_rows.size() < 2)
+        return;
+
+    QVector<int> before;
+    before.reserve(m_rows.size());
+    for (const Row &r : m_rows)
+        before.append(r.id);
+
+    std::stable_sort(m_rows.begin(), m_rows.end(),
+                     [this](const Row &a, const Row &b) { return lessThan(a, b); });
+
+    // Emit layoutChanged only when the order actually changed, so views and
+    // the selection resolver are not churned on every frame/tick.
+    for (int i = 0; i < m_rows.size(); ++i)
+    {
+        if (m_rows.at(i).id != before.at(i))
+        {
+            rebuildLookup();
+            emit layoutAboutToBeChanged();
+            emit layoutChanged();
+            return;
+        }
+    }
+}
+
+void DeviceListModel::rebuildLookup()
+{
     m_indexByKey.clear();
+    m_rowById.clear();
     for (int i = 0; i < m_rows.size(); ++i)
     {
         const Row &r = m_rows.at(i);
         m_indexByKey.insert(makeKey(r.proto, r.addr, r.device), i);
+        m_rowById.insert(r.id, i);
     }
-
-    emit countChanged();
 }

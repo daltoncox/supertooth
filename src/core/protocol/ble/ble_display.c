@@ -34,6 +34,21 @@ const char *ble_pdu_type_desc(uint8_t pdu_type)
     }
 }
 
+const char *ble_llid_name(uint8_t llid)
+{
+    switch (llid & 0x03u)
+    {
+    case 0x01u:
+        return "CONT";
+    case 0x02u:
+        return "START";
+    case 0x03u:
+        return "CTRL";
+    default:
+        return "RFU";
+    }
+}
+
 static void print_ble_addr(const ble_address_t *addr)
 {
     if (!addr)
@@ -139,33 +154,33 @@ const char *ble_pdu_type_name(uint8_t pdu_type)
     }
 }
 
-int ble_primary_addr(const ble_packet_t *pkt, const ble_address_t **addr_out)
+int ble_primary_addr(const ble_adv_pdu_t *adv, const ble_address_t **addr_out)
 {
-    if (!pkt || !addr_out)
+    if (!adv || !addr_out)
         return 0;
 
-    switch (pkt->pdu_type & 0x0Fu)
+    switch (adv->pdu_type & 0x0Fu)
     {
     case BLE_PDU_ADV_IND:
-        *addr_out = &pkt->payload.adv_ind.adv_addr;
+        *addr_out = &adv->payload.adv_ind.adv_addr;
         return 1;
     case BLE_PDU_ADV_DIRECT_IND:
-        *addr_out = &pkt->payload.adv_direct_ind.adv_addr;
+        *addr_out = &adv->payload.adv_direct_ind.adv_addr;
         return 1;
     case BLE_PDU_ADV_NONCONN_IND:
-        *addr_out = &pkt->payload.adv_nonconn_ind.adv_addr;
+        *addr_out = &adv->payload.adv_nonconn_ind.adv_addr;
         return 1;
     case BLE_PDU_SCAN_REQ:
-        *addr_out = &pkt->payload.scan_req.scanner_addr;
+        *addr_out = &adv->payload.scan_req.scanner_addr;
         return 1;
     case BLE_PDU_SCAN_RSP:
-        *addr_out = &pkt->payload.scan_rsp.adv_addr;
+        *addr_out = &adv->payload.scan_rsp.adv_addr;
         return 1;
     case BLE_PDU_CONNECT_IND:
-        *addr_out = &pkt->payload.connect_ind.init_addr;
+        *addr_out = &adv->payload.connect_ind.init_addr;
         return 1;
     case BLE_PDU_ADV_SCAN_IND:
-        *addr_out = &pkt->payload.adv_scan_ind.adv_addr;
+        *addr_out = &adv->payload.adv_scan_ind.adv_addr;
         return 1;
     default:
         return 0;
@@ -178,74 +193,76 @@ void ble_format_addr(char out[18], const uint8_t addr[BLE_ADDR_LEN])
              addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]);
 }
 
-void ble_print_packet(const ble_packet_t *pkt)
+static void ble_print_adv_pdu(const ble_packet_t *pkt)
 {
-    if (!pkt)
-        return;
+    const ble_adv_pdu_t *adv = &pkt->pdu.adv;
 
     printf("[BLE Advertising Packet]\n");
     printf("PHY      : %s\n", receiver_phy_name(pkt->phy));
+    printf("AA       : 0x%08" PRIX32 "\n", pkt->access_address);
     printf("PDU Type : %u [%s] (%s)\n",
-           (unsigned int)(pkt->pdu_type & 0x0Fu),
-           ble_pdu_type_name(pkt->pdu_type),
-           ble_pdu_type_desc(pkt->pdu_type));
+           (unsigned int)(adv->pdu_type & 0x0Fu),
+           ble_pdu_type_name(adv->pdu_type),
+           ble_pdu_type_desc(adv->pdu_type));
 
-    switch (pkt->pdu_type & 0x0Fu)
+    switch (adv->pdu_type & 0x0Fu)
     {
     case BLE_PDU_ADV_IND:
         printf("AdvA     : ");
-        print_ble_addr(&pkt->payload.adv_ind.adv_addr);
+        print_ble_addr(&adv->payload.adv_ind.adv_addr);
         printf("\n");
-        print_adv_data(pkt->payload.adv_ind.adv_data, pkt->payload.adv_ind.adv_data_len);
+        print_adv_data(adv->payload.adv_ind.adv_data,
+                       adv->payload.adv_ind.adv_data_len);
         break;
     case BLE_PDU_ADV_DIRECT_IND:
         printf("AdvA     : ");
-        print_ble_addr(&pkt->payload.adv_direct_ind.adv_addr);
+        print_ble_addr(&adv->payload.adv_direct_ind.adv_addr);
         printf("\n");
         printf("TargetA  : ");
-        print_ble_addr(&pkt->payload.adv_direct_ind.target_addr);
+        print_ble_addr(&adv->payload.adv_direct_ind.target_addr);
         printf("\n");
         break;
     case BLE_PDU_ADV_NONCONN_IND:
         printf("AdvA     : ");
-        print_ble_addr(&pkt->payload.adv_nonconn_ind.adv_addr);
+        print_ble_addr(&adv->payload.adv_nonconn_ind.adv_addr);
         printf("\n");
-        print_adv_data(pkt->payload.adv_nonconn_ind.adv_data,
-                       pkt->payload.adv_nonconn_ind.adv_data_len);
+        print_adv_data(adv->payload.adv_nonconn_ind.adv_data,
+                       adv->payload.adv_nonconn_ind.adv_data_len);
         break;
     case BLE_PDU_SCAN_REQ:
         printf("ScanA    : ");
-        print_ble_addr(&pkt->payload.scan_req.scanner_addr);
+        print_ble_addr(&adv->payload.scan_req.scanner_addr);
         printf("\n");
         printf("AdvA     : ");
-        print_ble_addr(&pkt->payload.scan_req.adv_addr);
+        print_ble_addr(&adv->payload.scan_req.adv_addr);
         printf("\n");
         break;
     case BLE_PDU_SCAN_RSP:
         printf("AdvA     : ");
-        print_ble_addr(&pkt->payload.scan_rsp.adv_addr);
+        print_ble_addr(&adv->payload.scan_rsp.adv_addr);
         printf("\n");
-        print_adv_data(pkt->payload.scan_rsp.adv_data, pkt->payload.scan_rsp.adv_data_len);
+        print_adv_data(adv->payload.scan_rsp.adv_data,
+                       adv->payload.scan_rsp.adv_data_len);
         break;
     case BLE_PDU_CONNECT_IND:
         printf("InitA    : ");
-        print_ble_addr(&pkt->payload.connect_ind.init_addr);
+        print_ble_addr(&adv->payload.connect_ind.init_addr);
         printf("\n");
         printf("AdvA     : ");
-        print_ble_addr(&pkt->payload.connect_ind.adv_addr);
+        print_ble_addr(&adv->payload.connect_ind.adv_addr);
         printf("\n");
         break;
     case BLE_PDU_ADV_SCAN_IND:
         printf("AdvA     : ");
-        print_ble_addr(&pkt->payload.adv_scan_ind.adv_addr);
+        print_ble_addr(&adv->payload.adv_scan_ind.adv_addr);
         printf("\n");
-        print_adv_data(pkt->payload.adv_scan_ind.adv_data,
-                       pkt->payload.adv_scan_ind.adv_data_len);
+        print_adv_data(adv->payload.adv_scan_ind.adv_data,
+                       adv->payload.adv_scan_ind.adv_data_len);
         break;
     default:
         printf("Payload  :");
-        for (unsigned int i = 0; i < pkt->payload.unknown.payload_len; i++)
-            printf(" %02X", pkt->payload.unknown.payload[i]);
+        for (unsigned int i = 0; i < adv->payload.unknown.payload_len; i++)
+            printf(" %02X", adv->payload.unknown.payload[i]);
         printf("\n");
         break;
     }
@@ -255,17 +272,81 @@ void ble_print_packet(const ble_packet_t *pkt)
            ble_verify_crc(pkt) ? "PASS" : "FAIL");
 }
 
+static void ble_print_data_pdu(const ble_packet_t *pkt)
+{
+    const ble_data_pdu_t *data = &pkt->pdu.data;
+
+    printf("[BLE Data Packet]\n");
+    printf("PHY      : %s\n", receiver_phy_name(pkt->phy));
+    printf("AA       : 0x%08" PRIX32 "\n", pkt->access_address);
+    printf("CRCInit  : 0x%06" PRIX32 "\n", pkt->crc_init);
+    printf("LLID     : %u [%s]\n",
+           (unsigned int)data->llid, ble_llid_name(data->llid));
+    printf("NESN     : %u\n", (unsigned int)data->nesn);
+    printf("SN       : %u\n", (unsigned int)data->sn);
+    printf("MD       : %u\n", (unsigned int)data->md);
+    printf("Length   : %u\n", (unsigned int)data->payload_len);
+    if (data->payload_len == 0u)
+    {
+        printf("Payload  : (empty)\n");
+    }
+    else
+    {
+        printf("Payload  :");
+        for (unsigned int i = 0; i < data->payload_len; i++)
+            printf(" %02X", data->payload[i]);
+        printf("\n");
+    }
+    printf("CRC      : 0x%06" PRIX32 " [%s]\n",
+           pkt->crc,
+           ble_verify_crc(pkt) ? "PASS" : "FAIL");
+}
+
+void ble_print_packet(const ble_packet_t *pkt)
+{
+    if (!pkt)
+        return;
+
+    if (!pkt->is_adv_pdu)
+    {
+        ble_print_data_pdu(pkt);
+        return;
+    }
+
+    ble_print_adv_pdu(pkt);
+}
+
 void ble_print_packet_summary_line(unsigned long packet_no,
                                    const ble_packet_t *pkt,
                                    const rx_metadata_t *meta)
 {
     if (!pkt)
         return;
-    const char *pdu_name = ble_pdu_type_name(pkt->pdu_type);
+
+    if (!pkt->is_adv_pdu)
+    {
+        printf("pkt=%-6lu type=BLE phy=%-12s pdu=%-14s ch=%02u aa=0x%08" PRIX32
+               " llid=%-5s sn=%u nesn=%u md=%u len=%-3u crc=%s rssi=%.1f\n",
+               packet_no,
+               receiver_phy_name(pkt->phy),
+               "LL_DATA",
+               meta->channel_index,
+               pkt->access_address,
+               ble_llid_name(pkt->pdu.data.llid),
+               (unsigned int)pkt->pdu.data.sn,
+               (unsigned int)pkt->pdu.data.nesn,
+               (unsigned int)pkt->pdu.data.md,
+               (unsigned int)pkt->pdu.data.payload_len,
+               ble_verify_crc(pkt) ? "PASS" : "FAIL",
+               meta->rssi_dbr);
+        return;
+    }
+
+    const char *pdu_name = ble_pdu_type_name(pkt->pdu.adv.pdu_type);
     const ble_address_t *addr = NULL;
     char addr_buf[18];
 
-    if (ble_primary_addr(pkt, &addr))
+    if (ble_primary_addr(&pkt->pdu.adv, &addr))
         ble_format_addr(addr_buf, addr->addr);
     else
         snprintf(addr_buf, sizeof(addr_buf), "--");
@@ -276,7 +357,7 @@ void ble_print_packet_summary_line(unsigned long packet_no,
            pdu_name,
            meta->channel_index,
            addr_buf,
-           pkt->payload_len,
+           pkt->pdu.adv.payload_len,
            ble_verify_crc(pkt) ? "PASS" : "FAIL",
            meta->rssi_dbr);
 }

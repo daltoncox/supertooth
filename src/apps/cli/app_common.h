@@ -4,7 +4,7 @@
 #include <stddef.h>
 
 #include "radio_common.h"
-#include "receiver_session.h"
+#include "session.h"
 
 typedef enum
 {
@@ -48,7 +48,7 @@ const char *app_output_mode_name(app_output_mode_t mode,
                                  size_t option_count);
 void app_output_lock(void);
 void app_output_unlock(void);
-void app_install_sigint_handler(receiver_session_t **session_slot);
+void app_install_sigint_handler(session_t *session_slot);
 
 /**
  * Parse a "<type>:<id>" device spec (e.g. "hackrf:b25062dc22113a0b").

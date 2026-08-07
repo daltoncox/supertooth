@@ -29,9 +29,19 @@ ReceiverController::ReceiverController(QObject *parent)
 ReceiverController::~ReceiverController()
 {
     stop();
+    /* Join the worker rather than detaching it. A detached thread keeps
+     * calling back into `this` (rowTrampoline -> handleRow, and the queued
+     * onFinish) long after the controller is destroyed, which segfaulted on
+     * app exit. stop() was just requested, so session_run()'s 50 ms stop
+     * poll returns promptly; the blocking radio teardown runs on the worker
+     * thread inside session_run(), so this join never blocks the GUI thread
+     * for long. */
     if (m_thread && m_thread->joinable())
         m_thread->join();
-    backend_session_destroy(m_session);
+    m_thread.reset();
+    if (m_session)
+        backend_session_destroy(m_session);
+    m_session = nullptr;
 }
 
 void ReceiverController::setRunning(bool running)
@@ -66,9 +76,15 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
 
     if (!m_session)
     {
-        qCWarning(lcSession) << "start() aborted: no session";
-        emit errorOccurred(tr("No receiver session available."));
-        return false;
+        /* A previous run's onFinish() cleanup thread releases the old session;
+         * recreate a fresh one for this run. */
+        m_session = backend_session_create();
+        if (!m_session)
+        {
+            qCWarning(lcSession) << "start() aborted: no session";
+            emit errorOccurred(tr("No receiver session available."));
+            return false;
+        }
     }
 
     if (inputType == BACKEND_INPUT_FILE)
@@ -78,9 +94,14 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         return false;
     }
 
-    /* Join any previous (finished) thread before starting a new one. */
+    /* A prior run's worker is always joined and released by onFinish() before
+     * running() flips back to false, so nothing should be pending here. Guard
+     * defensively: if a thread is somehow still joinable, session_run() has
+     * already returned (otherwise running() would be true and start() would
+     * have bailed), so this join is immediate. */
     if (m_thread && m_thread->joinable())
         m_thread->join();
+    m_thread.reset();
 
     QString idStr = deviceId;
     backend_session_t *session = m_session;
@@ -104,6 +125,10 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
             QByteArray idBytes = idStr.toUtf8();
             const char *idPtr = idBytes.isEmpty() ? nullptr
                                                   : idBytes.constData();
+            /* Note: no stopped-callback is registered. running() stays true
+             * until onFinish() runs (which is queued only after session_run()
+             * has torn the radio down), so a new start() can never race a
+             * still-finishing worker/session. */
             int result;
             if (sessionType == BACKEND_SESSION_BLE)
             {
@@ -158,16 +183,32 @@ void ReceiverController::stop()
     qCInfo(lcSession) << "stop() requested; running=" << m_running;
     if (m_session)
         backend_session_request_stop(m_session);
-    /* The worker's onFinish() handler (queued to the main thread) joins the
-     * thread once run_ble returns. */
+    /* The worker observes the stop request within its 50 ms poll, tears the
+     * radio down inside session_run(), then posts onFinish(); running() stays
+     * true until that queued onFinish() runs on the main thread. */
 }
 
 void ReceiverController::onFinish(int result)
 {
     qCInfo(lcSession) << "onFinish: result=" << result;
-    if (m_thread && m_thread->joinable())
-        m_thread->join();
+
+    /* Capture the session/thread handles we own so a subsequent start() that
+     * reassigns m_session/m_thread cannot be destroyed by this cleanup. */
+    backend_session_t *old_session = m_session;
+    std::unique_ptr<std::thread> old_thread = std::move(m_thread);
+    m_session = nullptr;
     m_thread.reset();
+
+    /* The worker has already returned from backend_session_run_*(), which
+     * performed the blocking radio teardown on its own thread before posting
+     * this callback. Joining is therefore immediate, and doing it here on the
+     * main thread keeps `this` alive until every worker callback has drained —
+     * no detached cleanup thread, so nothing outlives the controller. */
+    if (old_thread && old_thread->joinable())
+        old_thread->join();
+    if (old_session)
+        backend_session_destroy(old_session);
+
     setRunning(false);
     if (result != 0)
     {

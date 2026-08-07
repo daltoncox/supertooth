@@ -23,13 +23,6 @@ ApplicationWindow {
         id: deviceListModel
     }
 
-    DeviceListSortProxyModel {
-        id: deviceSortProxy
-        sourceModel: deviceListModel
-        sortRoleName: "rssi"
-        sortOrder: Qt.DescendingOrder
-    }
-
     Connections {
         target: receiverController
         function onFrameDecoded(row) {
@@ -119,7 +112,7 @@ onPlayPauseToggled: {
                 DeviceListView {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    deviceModel: deviceSortProxy
+                    deviceModel: deviceListModel
                 }
                 CaptureView {
                     id: captureView

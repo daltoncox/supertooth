@@ -7,7 +7,9 @@
 
 #define SAMPLE_BLOCK_SAMPLE_CAPACITY 262144u
 #define SAMPLE_READER_QUEUE_CAPACITY 8u
-#define SAMPLE_DISPATCHER_READER_CAPACITY 21u
+/* Worst-case fan-out: 20 BR/EDR channel workers + 10 BLE channel workers
+ * in a hybrid session. */
+#define SAMPLE_DISPATCHER_READER_CAPACITY 30u
 #define SAMPLE_DISPATCHER_BLOCK_CAPACITY 64u
 
 typedef struct sample_block
@@ -46,14 +48,21 @@ void sample_dispatcher_reset(sample_dispatcher_t *dispatcher);
 void sample_dispatcher_note_drop(sample_dispatcher_t *dispatcher, int debug_enabled);
 sample_block_t *sample_dispatcher_acquire_block(sample_dispatcher_t *dispatcher);
 unsigned int sample_dispatcher_push_block(sample_dispatcher_t *dispatcher,
-                                          sample_block_t *block);
+                                           sample_block_t *block);
+
+/**
+ * Total dropped blocks across this dispatcher: blocks the pool could not
+ * acquire plus blocks every reader's queue rejected because it was full.
+ * Both are real drops the capture loop could not keep up with.
+ */
+unsigned long sample_dispatcher_total_dropped(const sample_dispatcher_t *dispatcher);
 
 int sample_reader_init(sample_reader_t *reader,
                        sample_dispatcher_t *dispatcher);
 void sample_reader_destroy(sample_reader_t *reader);
 void sample_reader_signal(sample_reader_t *reader);
 int sample_reader_wait_pop(sample_reader_t *reader,
-                           const unsigned int *shutdown_requested,
-                           sample_block_t **block);
+                            const _Atomic unsigned int *shutdown_requested,
+                            sample_block_t **block);
 
 #endif

@@ -12,9 +12,10 @@ import QtQuick.Controls
 // Hybrid mode splits the bar 50/50; BLE mode expands the LE zone to fill
 // the bar; BR/EDR mode expands the BR/EDR zone to fill the bar.
 //
-// A capture-window overlay ("tuner box") spans numChannels MHz starting at
-// the window's left edge, with a dashed LO tick at its center. The window
-// snaps to one of two grids depending on the lock reference:
+// A capture-window overlay ("tuner box") spans the active grid's window —
+// numChannels MHz when BR/EDR-locked, numChannels*2 MHz when BLE-locked —
+// starting at the window's left edge, with a dashed LO tick at its center.
+// The window snaps to one of two grids depending on the lock reference:
 //   - BR/EDR lock: left edge = 2401.5 + bottom (1 MHz drag steps, LO at
 //     a half-MHz frequency).
 //   - BLE lock:    left edge = 2401 + 2*bottomLeIndex (2 MHz drag steps,
@@ -22,7 +23,8 @@ import QtQuick.Controls
 //
 // Interaction:
 //   - Drag the body of the tuner box to move the window (grid-snapped).
-//   - Drag the right edge to resize numChannels (even only, 2..maxChannels).
+//   - Drag the right edge to resize: BR/EDR-locked counts are even,
+//     2..maxChannels; BLE-locked counts are 2..maxChannels BLE channels.
 //   - Drag the left edge to resize: bottom channel and count both change,
 //     right edge stays fixed.
 //   - Click anywhere on the bar to jump the box's left edge there.
@@ -43,9 +45,10 @@ Item {
     // True when the window snaps to the LE grid (2 MHz steps); false when
     // it snaps to the BR/EDR grid (1 MHz steps).
     property bool bleLocked: false
-    // Window width in MHz (even, 2..maxChannels).
+    // Active-grid channel count: BR/EDR channels (even, 2..maxChannels)
+    // when BR/EDR-locked, BLE channels (2..maxChannels) when BLE-locked.
     property int numChannels: 20
-    // Max simultaneous capture channels supported by the pipeline.
+    // Max channels of the active grid supported by the pipeline.
     property int maxChannels: 20
     // True while a session is running — locks the tuner.
     property bool running: false
@@ -54,7 +57,8 @@ Item {
     property string leRangeText: ""
 
     // Emitted when the user edits the capture window by dragging. bottom
-    // is expressed in the active grid (leGrid=true -> LE RF index).
+    // is expressed in the active grid (leGrid=true -> LE RF index); count
+    // is the active grid's channel count (BLE channels when leGrid).
     signal windowEdited(int bottom, int count, bool leGrid)
 
     // All 40 LE RF channels (2 MHz spacing) mapped to their LE channel
@@ -88,11 +92,13 @@ Item {
     readonly property real bandStartMhz: 2401.0
     readonly property real bandEndMhz: 2481.0
 
-    // Window geometry in MHz, driven by the active grid.
+    // Window geometry in MHz, driven by the active grid. The window is
+    // numChannels*2 MHz wide when BLE-locked (2 MHz per BLE channel).
+    readonly property real windowMhz: bleLocked ? numChannels * 2 : numChannels
     readonly property real windowLeftMhz: bleLocked ? 2401 + 2 * bottomLeIndex
                                                     : 2401.5 + bottomChannel
-    readonly property real windowRightMhz: windowLeftMhz + numChannels
-    readonly property real windowCenterMhz: windowLeftMhz + numChannels / 2.0
+    readonly property real windowRightMhz: windowLeftMhz + windowMhz
+    readonly property real windowCenterMhz: windowLeftMhz + windowMhz / 2.0
 
     // Vertical split between the LE zone (top) and the BR/EDR zone
     // (bottom): 1.0 = all LE, 0.0 = all BR/EDR, 0.5 = even hybrid split.
@@ -119,6 +125,9 @@ Item {
 
     // ---- Clamping (pure — applied before emitting windowEdited) -----------
     function clampCount(count) {
+        if (root.bleLocked) {
+            return Math.max(2, Math.min(maxChannels, Math.round(count)))
+        }
         var c = Math.round(count / 2) * 2
         return Math.max(2, Math.min(maxChannels, c))
     }
@@ -127,7 +136,7 @@ Item {
         return Math.max(bandFirstChannel, Math.min(maxBottom, bottom))
     }
     function clampLeBottom(k, count) {
-        var maxK = 40 - count / 2
+        var maxK = 40 - count
         return Math.max(0, Math.min(maxK, k))
     }
 
@@ -394,27 +403,32 @@ Item {
             }
         }
 
-        // Right edge follows the mouse; left edge stays fixed. Count snaps
-        // to even MHz and the window stays inside the band.
+        // Right edge follows the mouse; left edge stays fixed. The count is
+        // expressed in the active grid (even MHz BR/EDR, BLE channels) and
+        // the window stays inside the band.
         function resizeRightTo(rightMhz) {
-            var c = root.clampCount(rightMhz - startLeftMhz)
-            var maxForBand = root.bleLocked ? 80 - 2 * root.bottomLeIndex
+            var mhz = rightMhz - startLeftMhz
+            var c = root.clampCount(root.bleLocked ? mhz / 2 : mhz)
+            var maxForBand = root.bleLocked ? 40 - root.bottomLeIndex
                                             : root.bandChannelCount - root.bottomChannel
             if (c > maxForBand)
-                c = Math.max(2, maxForBand - (maxForBand % 2))
+                c = root.bleLocked ? Math.max(2, maxForBand)
+                                   : Math.max(2, maxForBand - (maxForBand % 2))
             root.windowEdited(root.bleLocked ? root.bottomLeIndex : root.bottomChannel,
                               c, root.bleLocked)
         }
 
         // Left edge follows the mouse; right edge stays fixed, so both the
-        // bottom channel and the count change. Count snaps to even MHz.
+        // bottom channel and the count change.
         function resizeLeftTo(leftMhz) {
-            var c = root.clampCount(startRightMhz - leftMhz)
+            var c = root.clampCount(root.bleLocked
+                                        ? (startRightMhz - leftMhz) / 2
+                                        : startRightMhz - leftMhz)
             if (root.bleLocked) {
-                var k = Math.round((startRightMhz - c - 2401) / 2)
+                var k = Math.round((startRightMhz - c * 2 - 2401) / 2)
                 if (k < 0) {
-                    c = root.clampCount(startRightMhz - 2401)
-                    k = Math.round((startRightMhz - c - 2401) / 2)
+                    c = root.clampCount((startRightMhz - 2401) / 2)
+                    k = Math.round((startRightMhz - c * 2 - 2401) / 2)
                 }
                 root.windowEdited(k, c, true)
             } else {

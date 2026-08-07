@@ -225,7 +225,7 @@ Item {
                         id: rowDelegate
                         width: frameListView.width
                         height: 22
-                        color: frameListView.currentIndex === index ? "#094771" : (index % 2 === 0 ? "#1e1e1e" : "#252525")
+                        color: frameListView.currentIndex === index ? "#094771" : (model.no % 2 === 0 ? "#1e1e1e" : "#252525")
                         clip: true
 
                         property var cells: [no, time, rssi, proto, chIdx, addr, src, dst, type, info]

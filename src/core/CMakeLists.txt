@@ -137,11 +137,14 @@ configure_file(version.c.in version.c @ONLY)
 add_library(supertooth_core STATIC
     dsp/rssi_measurements.c
     dsp/rssi_measurements.h
+    dsp/channelizer_bank.c
+    dsp/channelizer_bank.h
     models/receive_event_models.h
     models/phy.h
     protocol/ble/ble_display.c protocol/ble/ble_display.h
     protocol/ble/ble_codec.c protocol/ble/ble_codec.h
     protocol/ble/ble_bitstream_decoder.c protocol/ble/ble_bitstream_decoder.h
+    protocol/ble/ble_piconet.c protocol/ble/ble_piconet.h
     protocol/ble/bt_assigned_numbers.c protocol/ble/bt_assigned_numbers.h
     protocol/bredr/bredr_display.c protocol/bredr/bredr_display.h
     protocol/bredr/bredr_codec.c protocol/bredr/bredr_codec.h
@@ -156,10 +159,8 @@ add_library(supertooth_core STATIC
     radio/hackrf.c radio/hackrf.h
     service/ble_channel_processor.c service/ble_channel_processor.h
     service/bredr_channel_processor.c service/bredr_channel_processor.h
-    service/receiver_session.c service/receiver_session.h
-    service/receiver_session_ble.c
-    service/receiver_session_bredr.c
-    service/receiver_session_hybrid.c
+    service/channelizer_thread.c service/channelizer_thread.h
+    service/session.c service/session.h
     ${CMAKE_CURRENT_BINARY_DIR}/version.c
 )
 
