@@ -7,15 +7,31 @@ Usage: $0 <build-dir> --version <ver> --qt-prefix <path> --output <deb-path>
 
 Build a vendor .deb for supertooth.  Bundles all 4 binaries plus Qt 6.8
 and radio library dependencies (hackrf, liquid-dsp, libbtbb) inside the
-package.
+package under /opt/supertooth.
+
+Layout:
+  /opt/supertooth/bin/      supertooth-bin + CLI tools, qt.conf
+  /opt/supertooth/lib/      bundled shared libraries (Qt, ICU, radio)
+  /opt/supertooth/plugins/  Qt platform/imageformat/... plugins
+  /opt/supertooth/qml/      QML modules
+  /usr/bin/supertooth       shell wrapper -> /opt/supertooth/bin/supertooth-bin
+  /usr/bin/supertooth-*     symlinks -> /opt/supertooth/bin/
+
+All linkage is private: RPATH (\$ORIGIN/../lib) on every binary, \$ORIGIN
+on bundled libraries, and qt.conf for plugin/QML paths.  The bundled
+libraries are NEVER registered with the system-wide linker search path
+(/etc/ld.so.conf.d), so no other application on the host can pick up our
+vendored Qt.
 
 Steps:
   1. cmake --install to a staging directory
-  2. Copy needed shared libraries from Qt and system paths into staging
-  3. Copy Qt platform plugins and QML modules
-  4. Set RPATH on all binaries
-  5. Create DEBIAN/control + postinst
-  6. Build .deb with dpkg-deb
+  2. Move binaries into /opt/supertooth/bin, wrapper + symlinks into /usr/bin
+  3. Copy needed shared libraries from Qt and system paths into lib/
+  4. Copy Qt platform plugins and QML modules
+  5. Set RPATH on all binaries and bundled Qt libraries
+  6. Verify every linkage resolves inside /opt/supertooth/lib
+  7. Create DEBIAN/control + postinst
+  8. Build .deb with dpkg-deb
 EOF
     exit 1
 }
@@ -55,7 +71,8 @@ if [[ -z "$QT_PREFIX" ]]; then
     exit 1
 fi
 
-# Check for patchelf
+# Check for patchelf.  RPATH is the ONLY mechanism by which the bundled
+# libraries are found, so this is mandatory.
 PATCHELF=""
 if command -v patchelf &>/dev/null; then
     PATCHELF="patchelf"
@@ -69,8 +86,9 @@ else
     done
 fi
 if [[ -z "$PATCHELF" ]]; then
-    echo "Warning: patchelf not found. RPATH will not be set on binaries."
-    echo "Install with: sudo apt install patchelf"
+    echo "Error: patchelf not found. It is required to set the RPATH on"
+    echo "bundled binaries and libraries. Install with: sudo apt install patchelf"
+    exit 1
 fi
 
 # Strip 'v' prefix from version if present
@@ -82,30 +100,50 @@ trap 'rm -rf "$STAGING"' EXIT
 echo "=== Installing to staging ==="
 DESTDIR="$STAGING" cmake --install "$BUILD_DIR" --prefix /usr
 
-# Move the GUI binary into the bundle directory so it can ship with a
-# qt.conf alongside it.  Replace it at /usr/bin/supertooth with a thin
-# wrapper that sets plugin/QML import paths before exec'ing the real one.
-GUI_REAL="$STAGING/usr/lib/supertooth/supertooth"
-mkdir -p "$(dirname "$GUI_REAL")"
-mv "$STAGING/usr/bin/supertooth" "$GUI_REAL"
+# ------------------------------------------------------------------
+# Layout: everything self-contained under /opt/supertooth
+# ------------------------------------------------------------------
+OPT_ROOT="$STAGING/opt/supertooth"
+BIN_DIR="$OPT_ROOT/bin"
+LIB_DIR="$OPT_ROOT/lib"
+PLUGIN_DIR="$OPT_ROOT/plugins"
+QML_DIR="$OPT_ROOT/qml"
+mkdir -p "$BIN_DIR" "$LIB_DIR"
+
+if [[ ! -f "$STAGING/usr/bin/supertooth" ]]; then
+    echo "Error: GUI binary not found in staging. Was the project configured with -DBUILD_GUI=ON?"
+    exit 1
+fi
+
+# Move all four binaries into /opt/supertooth/bin.  The GUI binary is
+# renamed to supertooth-bin; /usr/bin/supertooth becomes a thin wrapper.
+mv "$STAGING/usr/bin/supertooth" "$BIN_DIR/supertooth-bin"
+mv \
+    "$STAGING/usr/bin/supertooth-bredr" \
+    "$STAGING/usr/bin/supertooth-ble" \
+    "$STAGING/usr/bin/supertooth-hybrid" \
+    "$BIN_DIR/"
 
 cat > "$STAGING/usr/bin/supertooth" << 'WRAPPER'
 #!/bin/sh
-appdir=/usr/lib/supertooth
-export QT_PLUGIN_PATH="$appdir/qtplugins"
-export QML2_IMPORT_PATH="$appdir/qml"
-exec "$appdir/supertooth" "$@"
+exec /opt/supertooth/bin/supertooth-bin "$@"
 WRAPPER
 chmod 755 "$STAGING/usr/bin/supertooth"
 
-cat > "$(dirname "$GUI_REAL")/qt.conf" << 'QTCONF'
-[Paths]
-Plugins = qtplugins
-Qml2Imports = qml
-QTCONF
+# CLI tools: plain symlinks.  The kernel resolves the symlink before
+# exec, so $ORIGIN still points at /opt/supertooth/bin.
+ln -s /opt/supertooth/bin/supertooth-bredr "$STAGING/usr/bin/supertooth-bredr"
+ln -s /opt/supertooth/bin/supertooth-ble  "$STAGING/usr/bin/supertooth-ble"
+ln -s /opt/supertooth/bin/supertooth-hybrid "$STAGING/usr/bin/supertooth-hybrid"
 
-BUNDLE_DIR="$STAGING/usr/lib/supertooth"
-mkdir -p "$BUNDLE_DIR"
+# qt.conf sits next to supertooth-bin.  Qt resolves relative entries
+# against the directory containing qt.conf, so plugin/QML paths need no
+# environment variables in the wrapper.
+cat > "$BIN_DIR/qt.conf" << 'QTCONF'
+[Paths]
+Plugins = ../plugins
+Qml2Imports = ../qml
+QTCONF
 
 # ------------------------------------------------------------------
 # Collect shared library dependencies
@@ -186,7 +224,7 @@ copy_lib_with_symlinks() {
     [[ -n "${COPIED[$lib_name]:-}" ]] && return 0
     COPIED["$lib_name"]=1
 
-    local target="$BUNDLE_DIR/$lib_name"
+    local target="$LIB_DIR/$lib_name"
     if [[ ! -f "$target" ]]; then
         cp -a "$lib_path" "$target"
     fi
@@ -259,7 +297,7 @@ fi
 # Convert real .so.6 files to symlinks so ldconfig doesn't warn.
 # The Qt SDK installs hard copies instead of symlinks for versioned
 # filenames like libQt6Core.so.6 — ldconfig expects a symlink here.
-pushd "$BUNDLE_DIR" >/dev/null
+pushd "$LIB_DIR" >/dev/null
 for lib in libQt6*.so.?; do
     if [[ -f "$lib" && ! -L "$lib" ]]; then
         # Find the full versioned file (e.g. libQt6Core.so.6.8.0)
@@ -294,14 +332,13 @@ popd >/dev/null
 # ------------------------------------------------------------------
 echo "=== Copying Qt plugins ==="
 if [[ -d "$QT_PREFIX/plugins" ]]; then
-    PLUGIN_DEST="$BUNDLE_DIR/qtplugins"
-    mkdir -p "$PLUGIN_DEST"
+    mkdir -p "$PLUGIN_DIR"
     # Copy platforms, imageformats, styles, xcbglintegrations, tls, etc.
     for plugin_subdir in platforms imageformats styles xcbglintegrations tls sqldrivers \
                          wayland-decoration-client wayland-graphics-integration-client wayland-shell-integration; do
         src="$QT_PREFIX/plugins/$plugin_subdir"
         if [[ -d "$src" ]]; then
-            cp -a "$src" "$PLUGIN_DEST/"
+            cp -a "$src" "$PLUGIN_DIR/"
         fi
     done
 fi
@@ -311,18 +348,17 @@ fi
 # ------------------------------------------------------------------
 echo "=== Copying QML modules ==="
 if [[ -d "$QT_PREFIX/qml" ]]; then
-    QML_DEST="$BUNDLE_DIR/qml"
-    mkdir -p "$QML_DEST"
+    mkdir -p "$QML_DIR"
     for qml_mod in QtQuick QtQuick.2 QtQml QtQml.Models QtGraphs QtQuick3D; do
         src="$QT_PREFIX/qml/$qml_mod"
         if [[ -d "$src" ]]; then
-            cp -a "$src" "$QML_DEST/"
+            cp -a "$src" "$QML_DIR/"
         fi
     done
     # Also copy builtins.qmltypes and plugins.qmltypes if they exist
     for f in builtins.qmltypes plugins.qmltypes jsroot.qmltypes; do
         if [[ -f "$QT_PREFIX/qml/$f" ]]; then
-            cp -a "$QT_PREFIX/qml/$f" "$QML_DEST/"
+            cp -a "$QT_PREFIX/qml/$f" "$QML_DIR/"
         fi
     done
 fi
@@ -358,48 +394,77 @@ while IFS= read -r -d '' sofile; do
         is_standard_lib "$soname" && continue
         is_system_qt_lib "$libpath" && continue
         if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ||
-              "$libpath" == "$BUNDLE_DIR"/* ]]; then
+              "$libpath" == "$OPT_ROOT"/* ]]; then
             copy_lib_with_symlinks "$libpath"
         fi
     done < <(ldd "$sofile" 2>/dev/null || true)
-done < <(find "$BUNDLE_DIR" -name '*.so' -o -name '*.so.*' -type f -print0)
+done < <(find "$OPT_ROOT" \( -name '*.so' -o -name '*.so.*' \) -type f -print0)
 
 # ------------------------------------------------------------------
 # Set RPATH on all binaries
 # ------------------------------------------------------------------
 STAGED_BINARIES=(
-    "$STAGING/usr/bin/supertooth-bredr"
-    "$STAGING/usr/bin/supertooth-ble"
-    "$STAGING/usr/bin/supertooth-hybrid"
-    "$STAGING/usr/lib/supertooth/supertooth"
+    "$BIN_DIR/supertooth-bredr"
+    "$BIN_DIR/supertooth-ble"
+    "$BIN_DIR/supertooth-hybrid"
+    "$BIN_DIR/supertooth-bin"
 )
 
 echo "=== Setting RPATH ==="
-if [[ -n "$PATCHELF" ]]; then
-    RPATH='$ORIGIN/../lib/supertooth'
-    for binary in "${STAGED_BINARIES[@]}"; do
-        if [[ -f "$binary" ]]; then
-            echo "  patchelf: $(basename "$binary")"
-            "$PATCHELF" --set-rpath "$RPATH" "$binary" || true
-        fi
-    done
+# Every binary lives in /opt/supertooth/bin, so one uniform RPATH works.
+RPATH='$ORIGIN/../lib'
+for binary in "${STAGED_BINARIES[@]}"; do
+    echo "  patchelf: $(basename "$binary")"
+    "$PATCHELF" --set-rpath "$RPATH" "$binary"
+done
 
-    # Also set RPATH on the bundled Qt libs so they find each other at install time
-    if [[ -d "$BUNDLE_DIR" ]]; then
-        for lib in "$BUNDLE_DIR"/libQt6*.so*; do
-            if [[ -f "$lib" && ! -L "$lib" ]]; then
-                "$PATCHELF" --set-rpath "/usr/lib/supertooth" "$lib" 2>/dev/null || true
-            fi
-        done
+# Bundled Qt libs find each other via $ORIGIN (same directory)
+for lib in "$LIB_DIR"/libQt6*.so*; do
+    if [[ -f "$lib" && ! -L "$lib" ]]; then
+        "$PATCHELF" --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true
     fi
-else
-    echo "  Skipped (patchelf not available)"
-fi
+done
 
 # ------------------------------------------------------------------
-# Plugin and QML paths are set by the wrapper script at
-# /usr/bin/supertooth.  The real binary is at /usr/lib/supertooth/
-# with a qt.conf alongside it.  No further config needed.
+# Verify linkages: everything must resolve, and Qt must resolve into
+# our bundle — never from system paths.  Catches RPATH regressions at
+# build time instead of on user machines.
+# ------------------------------------------------------------------
+echo "=== Verifying linkages ==="
+for binary in "${STAGED_BINARIES[@]}"; do
+    while IFS= read -r line; do
+        if [[ "$line" =~ '=> not found' ]]; then
+            echo "  ERROR: $(basename "$binary") has unresolved dependency:"
+            echo "    $line"
+            exit 1
+        fi
+        if [[ "$line" =~ ^[[:space:]]*(libQt6[^ ]+)' => '([^ ]+)' '[\(0x] ]]; then
+            dep="${BASH_REMATCH[2]}"
+            if [[ "$dep" != "$LIB_DIR/"* ]]; then
+                echo "  ERROR: $(basename "$binary") resolves ${BASH_REMATCH[1]} outside the bundle:"
+                echo "    $dep"
+                exit 1
+            fi
+        fi
+    done < <(ldd "$binary" 2>/dev/null || true)
+    echo "  OK: $(basename "$binary")"
+done
+
+# Bundled Qt libs themselves must also resolve (ICU, zstd, etc. inside lib/)
+for lib in "$LIB_DIR"/libQt6*.so.6.* "$LIB_DIR"/libicu*.so.??.*; do
+    [[ -f "$lib" ]] || continue
+    while IFS= read -r line; do
+        if [[ "$line" =~ '=> not found' ]]; then
+            echo "  ERROR: $(basename "$lib") has unresolved dependency:"
+            echo "    $line"
+            exit 1
+        fi
+    done < <(ldd "$lib" 2>/dev/null || true)
+done
+echo "  All bundle libraries resolve"
+
+# Plugin and QML paths are handled by qt.conf next to supertooth-bin.
+# No environment variables or global linker configuration are needed.
 
 # ------------------------------------------------------------------
 # Create DEBIAN/ control files
@@ -431,8 +496,10 @@ CONTROL
 cat > "$DEBIAN_DIR/postinst" << 'POSTINST'
 #!/bin/sh
 set -e
-# Register the bundled library path so ldconfig finds it
-echo "/usr/lib/supertooth" > /etc/ld.so.conf.d/supertooth.conf
+# Clean up any registration left behind by versions that added
+# /usr/lib/supertooth to the system-wide linker search path.  Bundled
+# libraries are private to supertooth and found via RPATH only.
+rm -f /etc/ld.so.conf.d/supertooth.conf
 ldconfig
 POSTINST
 chmod 755 "$DEBIAN_DIR/postinst"
