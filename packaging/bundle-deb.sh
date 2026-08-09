@@ -440,6 +440,8 @@ for binary in "${STAGED_BINARIES[@]}"; do
         fi
         if [[ "$line" =~ ^[[:space:]]*(libQt6[^ ]+)' => '([^ ]+)' '[\(0x] ]]; then
             dep="${BASH_REMATCH[2]}"
+            # Normalize: ldd prints $ORIGIN as a literal 'bin/../lib' path
+            dep=$(readlink -f "$dep")
             if [[ "$dep" != "$LIB_DIR/"* ]]; then
                 echo "  ERROR: $(basename "$binary") resolves ${BASH_REMATCH[1]} outside the bundle:"
                 echo "    $dep"
