@@ -481,15 +481,14 @@ cat > "$DEBIAN_DIR/control" << CONTROL
 Package: supertooth
 Version: ${VERSION}
 Architecture: amd64
-Maintainer: Supertooth Developers <dev@supertooth.local>
+Maintainer: daltoncox <dalton@skinnyrd.com>
 Depends: libc6 (>= 2.35), libstdc++6 (>= 12), libgl1, libglx0
 Section: comm
 Priority: optional
-Homepage: https://github.com/supertooth/supertooth
-Description: Software-defined Bluetooth packet sniffer for HackRF
- Supertooth is a C-based software-defined Bluetooth receiver that
+Homepage: https://github.com/daltoncox/supertooth
+Description: Supertooth is a C-based software-defined Bluetooth receiver that
  captures and decodes BR/EDR and BLE packets using a HackRF SDR.
- .
+
  This package includes all four applications:
   - supertooth-bredr:  BR/EDR multichannel receiver
   - supertooth-ble: BLE advertising channel scanner
