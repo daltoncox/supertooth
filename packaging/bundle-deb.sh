@@ -275,7 +275,8 @@ for binary in "${BINARIES[@]}"; do
         fi
 
         # Bundle remaining system libraries
-        if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ]]; then
+        if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ||
+              "$libpath" == "$QT_PREFIX"/* ]]; then
             copy_lib_with_symlinks "$libpath"
         fi
     done < <(ldd "$binary" 2>/dev/null || true)
@@ -394,6 +395,7 @@ while IFS= read -r -d '' sofile; do
         is_standard_lib "$soname" && continue
         is_system_qt_lib "$libpath" && continue
         if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ||
+              "$libpath" == "$QT_PREFIX"/* ||
               "$libpath" == "$OPT_ROOT"/* ]]; then
             copy_lib_with_symlinks "$libpath"
         fi
