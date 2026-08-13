@@ -60,38 +60,78 @@ static void fmt_addr_plain(char *out, size_t out_sz, const ble_address_t *addr)
     ble_format_addr(out, addr->addr); /* writes exactly 17 chars + NUL */
 }
 
+/* Classify a BLE address into its device-list "type" subfield. Public
+ * addresses are reported by kind; random addresses are subdivided by the two
+ * most-significant bits of the address. The two indicator bits read in the
+ * order (bit47, bit46) map to:
+ *   00 -> NONRESOLVABLE
+ *   01 -> RESOLVABLE
+ *   10 -> RESERVED
+ *   11 -> STATIC
+ * (RESERVED is surfaced as-is: an address tagged random with the reserved
+ * pattern indicates a real anomaly worth showing rather than hiding.) */
+static const char *ble_addr_subtype(const ble_address_t *addr)
+{
+    if (!addr)
+        return "";
+    if (addr->kind == BLE_ADDR_PUBLIC)
+        return "PUBLIC";
+    switch ((addr->addr[5] >> 6) & 0x03u)
+    {
+    case 0x03u: return "STATIC";         /* random static */
+    case 0x02u: return "RESERVED";       /* reserved */
+    case 0x01u: return "RESOLVABLE";     /* random private resolvable */
+    default:    return "NONRESOLVABLE";  /* 0x00: random private non-resolvable */
+    }
+}
+
 static void set_src_dst(backend_row_t *row, const ble_adv_pdu_t *adv)
 {
     const uint8_t t = (uint8_t)(adv->pdu_type & 0x0Fu);
+    row->addr_type[0] = '\0';
     switch (t)
     {
     case BLE_PDU_ADV_IND:
         fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_ind.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "Broadcast");
+        snprintf(row->addr_type, sizeof(row->addr_type), "%s",
+                 ble_addr_subtype(&adv->payload.adv_ind.adv_addr));
         break;
     case BLE_PDU_ADV_DIRECT_IND:
         fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_direct_ind.adv_addr);
         fmt_addr_plain(row->dst, sizeof(row->dst), &adv->payload.adv_direct_ind.target_addr);
+        snprintf(row->addr_type, sizeof(row->addr_type), "%s",
+                 ble_addr_subtype(&adv->payload.adv_direct_ind.adv_addr));
         break;
     case BLE_PDU_ADV_NONCONN_IND:
         fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_nonconn_ind.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "Broadcast");
+        snprintf(row->addr_type, sizeof(row->addr_type), "%s",
+                 ble_addr_subtype(&adv->payload.adv_nonconn_ind.adv_addr));
         break;
     case BLE_PDU_SCAN_REQ:
         fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.scan_req.scanner_addr);
         fmt_addr_plain(row->dst, sizeof(row->dst), &adv->payload.scan_req.adv_addr);
+        snprintf(row->addr_type, sizeof(row->addr_type), "%s",
+                 ble_addr_subtype(&adv->payload.scan_req.scanner_addr));
         break;
     case BLE_PDU_SCAN_RSP:
         fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.scan_rsp.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "--");
+        snprintf(row->addr_type, sizeof(row->addr_type), "%s",
+                 ble_addr_subtype(&adv->payload.scan_rsp.adv_addr));
         break;
     case BLE_PDU_CONNECT_IND:
         fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.connect_ind.init_addr);
         fmt_addr_plain(row->dst, sizeof(row->dst), &adv->payload.connect_ind.adv_addr);
+        snprintf(row->addr_type, sizeof(row->addr_type), "%s",
+                 ble_addr_subtype(&adv->payload.connect_ind.init_addr));
         break;
     case BLE_PDU_ADV_SCAN_IND:
         fmt_addr_plain(row->src, sizeof(row->src), &adv->payload.adv_scan_ind.adv_addr);
         snprintf(row->dst, sizeof(row->dst), "Broadcast");
+        snprintf(row->addr_type, sizeof(row->addr_type), "%s",
+                 ble_addr_subtype(&adv->payload.adv_scan_ind.adv_addr));
         break;
     default:
         snprintf(row->src, sizeof(row->src), "--");
@@ -257,6 +297,19 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
                 }
                 name[nl] = '\0';
                 add_detail(row, "Device Name", "%s", name);
+            }
+
+            /* AD type 0xFF (Manufacturer Specific Data) carries a 16-bit
+             * little-endian Company Identifier as its leading payload,
+             * assigned by the Bluetooth SIG. Surface it as a dedicated
+             * "Manufacturer" detail so the GUI can show a human-readable
+             * vendor in the device info tab. */
+            if (ad_type == 0xFFu && (ve - vb) >= 2u)
+            {
+                uint16_t cid = (uint16_t)ad[vb] |
+                               ((uint16_t)ad[vb + 1u] << 8u);
+                add_detail(row, "Manufacturer", "%s (0x%04X)",
+                           bt_assigned_company_name(cid), cid);
             }
 
             i += 1u + ad_l;

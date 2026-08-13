@@ -66,6 +66,10 @@ typedef struct
     char src[BACKEND_ADDR_TEXT_LEN];
     char dst[BACKEND_ADDR_TEXT_LEN];
     char type[BACKEND_TYPE_TEXT_LEN];
+    /* BLE advertising address subtype: one of "PUBLIC", "STATIC",
+     * "RESOLVABLE", "NONRESOLVABLE", "RESERVED"; "" for non-BLE-adv rows
+     * (data-channel PDUs, BR/EDR frames, decode failures). */
+    char addr_type[BACKEND_TYPE_TEXT_LEN];
     char info[BACKEND_INFO_TEXT_LEN];
 
     /* Raw captured on-air bytes (BLE: preamble+AA+PDU; BR/EDR: header FEC + payload). */
