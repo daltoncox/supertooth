@@ -46,6 +46,7 @@ while [[ $# -gt 0 ]]; do
         --version) VERSION="$2"; shift 2 ;;
         --qt-prefix) QT_PREFIX="$2"; shift 2 ;;
         --output) OUTPUT_DEB="$2"; shift 2 ;;
+        --arch) ARCH="$2"; shift 2 ;;
         -*)
             if [[ -z "$BUILD_DIR" ]]; then
                 BUILD_DIR="$1"; shift
@@ -71,6 +72,30 @@ if [[ -z "$QT_PREFIX" ]]; then
     exit 1
 fi
 
+# Architecture: prefer explicit --arch, else the host's Debian arch, else
+# derive from uname -m.  This drives the multiarch lib directory and the
+# DEBIAN/control Architecture field so the same script produces amd64 or
+# arm64 packages unchanged in behavior.
+if [[ -z "${ARCH:-}" ]]; then
+    ARCH=$(dpkg --print-architecture 2>/dev/null || true)
+    if [[ -z "$ARCH" ]]; then
+        case "$(uname -m)" in
+            x86_64)  ARCH=amd64 ;;
+            aarch64) ARCH=arm64 ;;
+            *)       ARCH=amd64 ;;
+        esac
+    fi
+fi
+
+case "$ARCH" in
+    amd64) MULTIARCH="x86_64-linux-gnu" ;;
+    arm64) MULTIARCH="aarch64-linux-gnu" ;;
+    *)
+        echo "Error: unsupported architecture '$ARCH' (expected amd64 or arm64)"
+        exit 1
+        ;;
+esac
+
 # Check for patchelf.  RPATH is the ONLY mechanism by which the bundled
 # libraries are found, so this is mandatory.
 PATCHELF=""
@@ -93,6 +118,13 @@ fi
 
 # Strip 'v' prefix from version if present
 VERSION="${VERSION#v}"
+
+# dpkg requires the Version field to start with a digit.  Real releases pass
+# a semantic version (e.g. 1.2.3 from a v1.2.3 tag).  For non-release / local
+# test builds that pass a non-numeric value, fall back to a valid placeholder.
+if [[ ! "$VERSION" =~ ^[0-9] ]]; then
+    VERSION="0.0.0"
+fi
 
 STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
@@ -166,9 +198,9 @@ BINARIES=(
 # Standard libs (glibc, libstdc++, libpthread, libm, librt, libdl, libz)
 # are NOT bundled — they come from the target system.
 SYSTEM_LIB_DIRS=(
-    /usr/lib/x86_64-linux-gnu
+    /usr/lib/$MULTIARCH
     /usr/lib
-    /lib/x86_64-linux-gnu
+    /lib/$MULTIARCH
     /lib
 )
 
@@ -265,12 +297,12 @@ for binary in "${BINARIES[@]}"; do
         is_system_qt_lib "$libpath" && continue
 
         # Skip GPU driver-specific libs (EGL, GL, etc.)
-        if [[ "$libpath" == /usr/lib/x86_64-linux-gnu/libEGL* || \
-              "$libpath" == /usr/lib/x86_64-linux-gnu/libGL* || \
-              "$libpath" == /usr/lib/x86_64-linux-gnu/libOpenGL* || \
-              "$libpath" == /usr/lib/x86_64-linux-gnu/libGLX* || \
-              "$libpath" == /usr/lib/x86_64-linux-gnu/libGLdispatch* || \
-              "$libpath" == /usr/lib/x86_64-linux-gnu/libdrm* ]]; then
+        if [[ "$libpath" == /usr/lib/$MULTIARCH/libEGL* || \
+              "$libpath" == /usr/lib/$MULTIARCH/libGL* || \
+              "$libpath" == /usr/lib/$MULTIARCH/libOpenGL* || \
+              "$libpath" == /usr/lib/$MULTIARCH/libGLX* || \
+              "$libpath" == /usr/lib/$MULTIARCH/libGLdispatch* || \
+              "$libpath" == /usr/lib/$MULTIARCH/libdrm* ]]; then
             continue
         fi
 
@@ -480,7 +512,7 @@ mkdir -p "$DEBIAN_DIR"
 cat > "$DEBIAN_DIR/control" << CONTROL
 Package: supertooth
 Version: ${VERSION}
-Architecture: amd64
+Architecture: ${ARCH}
 Maintainer: daltoncox <dalton@skinnyrd.com>
 Depends: libc6 (>= 2.35), libstdc++6 (>= 12), libgl1, libglx0
 Section: comm
@@ -488,7 +520,7 @@ Priority: optional
 Homepage: https://github.com/daltoncox/supertooth
 Description: Supertooth is a C-based software-defined Bluetooth receiver that
  captures and decodes BR/EDR and BLE packets using a HackRF SDR.
-
+ .
  This package includes all four applications:
   - supertooth-bredr:  BR/EDR multichannel receiver
   - supertooth-ble: BLE advertising channel scanner

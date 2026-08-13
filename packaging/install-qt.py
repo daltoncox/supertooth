@@ -4,6 +4,7 @@ Download and extract a prebuilt Qt for Linux from the official Qt SDK repository
 
 Usage:
   python3 install-qt.py --version 6.8.0 --modules qtgraphs --output /opt/Qt
+  python3 install-qt.py --arch arm64 --version 6.8.0 --output /opt/Qt/6.8.0/gcc_arm64
 
 The base package (which includes qtbase, qtdeclarative, qtquicklayouts, etc.)
 is always installed. Extra modules are specified via --modules (comma-separated
@@ -15,6 +16,7 @@ Requires: requests, py7zr
 import argparse
 import hashlib
 import os
+import platform
 import re
 import shutil
 import sys
@@ -25,7 +27,23 @@ from pathlib import Path
 import requests
 import py7zr
 
-QT_MIRROR = "https://download.qt.io/online/qtsdkrepository/linux_x64/desktop"
+
+def detect_host_arch() -> str:
+    """Return 'amd64' or 'arm64' based on the build machine."""
+    machine = platform.machine().lower()
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    return "amd64"
+
+
+def mirror_for_arch(arch: str) -> str:
+    """Return the Qt SDK repository mirror subdir for the architecture."""
+    return "linux_x64" if arch == "amd64" else "linux_arm64"
+
+
+def qt_arch_for_arch(arch: str) -> str:
+    """Return the Qt package/arch suffix (e.g. gcc_64, gcc_arm64)."""
+    return "gcc_64" if arch == "amd64" else "gcc_arm64"
 
 
 def version_to_dir(ver: str) -> tuple[str, str]:
@@ -121,9 +139,12 @@ def extract_7z(archive_path: str, target_dir: str, strip_prefix: str = ""):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def install_qt(version: str, extra_modules: list[str], output_dir: str):
+def install_qt(version: str, extra_modules: list[str], output_dir: str, arch: str = "amd64"):
+    mirror_arch = mirror_for_arch(arch)
+    qt_arch = qt_arch_for_arch(arch)
+    base_url = f"https://download.qt.io/online/qtsdkrepository/{mirror_arch}/desktop"
     ver_dir, pkg_prefix = version_to_dir(version)
-    base_url = f"{QT_MIRROR}/{ver_dir}/{ver_dir}"
+    base_url = f"{base_url}/{ver_dir}/{ver_dir}"
     updates_url = f"{base_url}/Updates.xml"
 
     print(f"Fetching: {updates_url}")
@@ -132,15 +153,15 @@ def install_qt(version: str, extra_modules: list[str], output_dir: str):
     root = ET.fromstring(resp.text)
 
     # Determine package names
-    arch = "linux_gcc_64"
-    base_pkg_name = f"{pkg_prefix}.{arch}"
+    pkg_arch = f"linux_{qt_arch}"
+    base_pkg_name = f"{pkg_prefix}.{pkg_arch}"
     # Also check if the package uses the new naming scheme
     # Older scheme: qt.qt6.680.linux_gcc_64
     # We already verified this works for 6.8.0
 
     packages_to_download = [base_pkg_name]
     for mod in extra_modules:
-        modules_pkg = f"{pkg_prefix}.addons.{mod}.{arch}"
+        modules_pkg = f"{pkg_prefix}.addons.{mod}.{pkg_arch}"
         packages_to_download.append(modules_pkg)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -202,9 +223,12 @@ def main():
     parser.add_argument("--version", required=True, help="Qt version (e.g. 6.8.0)")
     parser.add_argument("--modules", nargs="*", default=[], help="Extra Qt modules (e.g. qtgraphs)")
     parser.add_argument("--output", required=True, help="Installation prefix directory")
+    parser.add_argument("--arch", default=detect_host_arch(),
+                        choices=["amd64", "arm64"],
+                        help="Target architecture (default: host arch)")
     args = parser.parse_args()
 
-    install_qt(args.version, args.modules, args.output)
+    install_qt(args.version, args.modules, args.output, args.arch)
 
 
 if __name__ == "__main__":

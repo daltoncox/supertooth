@@ -7,7 +7,17 @@ on:
 
 jobs:
   build-deb:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            qt_arch: gcc_64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            qt_arch: gcc_arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,14 +39,15 @@ jobs:
           python3 -m venv /tmp/qt-venv
           /tmp/qt-venv/bin/pip install requests py7zr
           /tmp/qt-venv/bin/python packaging/install-qt.py \
+            --arch ${{ matrix.arch }} \
             --version 6.8.0 \
             --modules qtgraphs qtquick3d qtquicktimeline qtshadertools \
-            --output /opt/Qt/6.8.0/gcc_64
+            --output /opt/Qt/6.8.0/${{ matrix.qt_arch }}
 
       - name: Configure
         run: |
           cmake -S . -B build \
-            -DCMAKE_PREFIX_PATH=/opt/Qt/6.8.0/gcc_64 \
+            -DCMAKE_PREFIX_PATH=/opt/Qt/6.8.0/${{ matrix.qt_arch }} \
             -DBUILD_GUI=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DSUPERTOOTH_VERSION=${{ github.ref_name }}
@@ -48,14 +59,15 @@ jobs:
       - name: Package Debian
         run: |
           bash packaging/bundle-deb.sh build \
+            --arch ${{ matrix.arch }} \
             --version "${{ github.ref_name }}" \
-            --qt-prefix /opt/Qt/6.8.0/gcc_64 \
-            --output "./supertooth_${{ github.ref_name }}_amd64.deb"
+            --qt-prefix /opt/Qt/6.8.0/${{ matrix.qt_arch }} \
+            --output "./supertooth_${{ github.ref_name }}_${{ matrix.arch }}.deb"
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
         with:
-          name: supertooth-deb
+          name: supertooth-deb-${{ matrix.arch }}
           path: ./*.deb
 
   release:
@@ -64,11 +76,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download .deb
+      - name: Download .deb artifacts
         uses: actions/download-artifact@v4
         with:
-          name: supertooth-deb
+          pattern: supertooth-deb-*
           path: release
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
