@@ -229,7 +229,9 @@ is_standard_lib() {
                libX11-xcb.so libxcb-shm.so libxcb-shape.so libxcb-xfixes.so \
                libxcb-render.so libxcb-sync.so libxcb-xkb.so libxcb-keysyms.so \
                libxcb-image.so libxcb-icccm.so libxcb-randr.so libxcb-xinerama.so \
-               libxcb-xinput.so libxcb-util.so libxcb-present.so libxcb-composite.so; do
+               libxcb-xinput.so libxcb-util.so libxcb-present.so libxcb-composite.so \
+               libwayland.so libwayland- libxkbcommon.so libxkbcommon- \
+               libgbm.so libgbm- libglapi.so libglapi- libxshmfence.so libxshmfence-; do
         if [[ "$name" == "$std"* ]]; then
             return 0
         fi
