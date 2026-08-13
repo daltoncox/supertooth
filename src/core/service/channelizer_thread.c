@@ -99,15 +99,16 @@ void *channelizer_worker(void *arg)
                (size_t)rf->num_samples * sizeof(float complex));
 
         size_t off = 0u;
+        int dropped = 0;
         while (combined_len - off >= max_rf)
         {
             sample_block_t *fm = sample_dispatcher_acquire_block(c->out);
             if (!fm)
             {
                 sample_dispatcher_note_drop(c->out, c->debug);
-                c->rf_carry_len = 0u; /* backpressure: drop the unprocessed
-                                        tail rather than let the carry grow
-                                        without bound and overflow. */
+                dropped = 1; /* backpressure: the loop below discards the
+                                unconsumed tail instead of letting rf_carry
+                                grow past max_rf and overflow the heap. */
                 break;
             }
 
@@ -124,17 +125,26 @@ void *channelizer_worker(void *arg)
             off += max_rf;
         }
 
-        size_t remainder = combined_len - off;
-        if (remainder > 0u)
+        if (dropped)
         {
-            memcpy(c->rf_carry, &c->scratch[off],
-                   remainder * sizeof(float complex));
-            c->rf_carry_len  = remainder;
-            c->rf_carry_base = combined_base + (uint64_t)off;
+            /* Backpressure: discard the entire unconsumed input rather than
+               let rf_carry grow past max_rf and overflow. */
+            c->rf_carry_len = 0u;
         }
         else
         {
-            c->rf_carry_len = 0u;
+            size_t remainder = combined_len - off; /* always < max_rf here */
+            if (remainder > 0u)
+            {
+                memcpy(c->rf_carry, &c->scratch[off],
+                       remainder * sizeof(float complex));
+                c->rf_carry_len  = remainder;
+                c->rf_carry_base = combined_base + (uint64_t)off;
+            }
+            else
+            {
+                c->rf_carry_len = 0u;
+            }
         }
 
         sample_block_release(rf);
