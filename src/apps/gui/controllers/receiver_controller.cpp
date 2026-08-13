@@ -241,6 +241,7 @@ void ReceiverController::handleRow(const backend_row_t *row)
     map.insert(QStringLiteral("src"),   QString::fromUtf8(row->src));
     map.insert(QStringLiteral("dst"),   QString::fromUtf8(row->dst));
     map.insert(QStringLiteral("type"),  QString::fromUtf8(row->type));
+    map.insert(QStringLiteral("addrType"), QString::fromUtf8(row->addr_type));
     map.insert(QStringLiteral("info"),  QString::fromUtf8(row->info));
 
     QByteArray raw(reinterpret_cast<const char *>(row->raw),

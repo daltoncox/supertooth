@@ -138,6 +138,7 @@ private:
         QString proto;
         QString addr;
         QString device;                 // resolved: BLE src / "Central" / "LT_ADDR N" / "piconet" / "Unknown"
+        QString addrType;               // BLE adv address subtype: PUBLIC/STATIC/RESOLVABLE/NONRESOLVABLE/RESERVED; "" otherwise
         QString displayName;            // BLE local name extracted from adv packets (if any)
 
         double rssiDb = qQNaN();        // displayed 1s avg; held when idle
@@ -162,7 +163,8 @@ private:
                            const QString &device);
     static QString deviceLabelFor(const QString &proto, const QString &src,
                            const QString &dst);
-    static QString typeLabelFor(const QString &proto, const QString &device);
+    static QString typeLabelFor(const QString &proto, const QString &device,
+                                 const QString &addrType);
     static QString identifierLabelFor(const Row &r);
     static QString formatLastSeen(qint64 ms);
     void recomputeAverage(Row &r, qint64 now);

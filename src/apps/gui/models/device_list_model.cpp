@@ -53,7 +53,7 @@ QVariant DeviceListModel::data(const QModelIndex &index, int role) const
         // "--" is reproduced on the renderer side.
         return QVariant::fromValue(qIsNaN(r.rssiDb) ? kRssiSentinel : r.rssiDb);
     case ProtoRole:       return r.proto;
-    case TypeRole:        return typeLabelFor(r.proto, r.device);
+    case TypeRole:        return typeLabelFor(r.proto, r.device, r.addrType);
     case AddrRole:       return r.addr;
     case DeviceRole:     return r.device;
     case IdentifierRole: return identifierLabelFor(r);
@@ -174,6 +174,7 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
         r.proto = proto;
         r.addr = addr;
         r.device = device;
+        r.addrType = frame.value(QStringLiteral("addrType")).toString();
         r.firstFrameMs = now;
         r.lastSeenMs   = now;
         r.firstSeenMs  = now;
@@ -440,13 +441,21 @@ QString DeviceListModel::deviceLabelFor(const QString &proto, const QString &src
     return QStringLiteral("Unknown");
 }
 
-QString DeviceListModel::typeLabelFor(const QString &proto, const QString &device)
+QString DeviceListModel::typeLabelFor(const QString &proto, const QString &device,
+                                    const QString &addrType)
 {
     if (proto == QStringLiteral("LE"))
-        // Advertising rows are keyed by a device address; connection rows
-        // (data-channel PDUs) are keyed by an access address.
-        return device == QStringLiteral("connection") ? QStringLiteral("CONN")
-                                                      : QStringLiteral("ADV_ADDR");
+    {
+        // Data-channel PDUs are keyed by an access address (a link-layer
+        // connection); advertising rows are keyed by a device address whose
+        // subtype (PUBLIC / STATIC / RESOLVABLE / NONRESOLVABLE / RESERVED)
+        // is carried in addrType when known.
+        if (device == QStringLiteral("connection"))
+            return QStringLiteral("CONN");
+        if (!addrType.isEmpty())
+            return addrType;
+        return QStringLiteral("ADV_ADDR");
+    }
     if (proto == QStringLiteral("BR/EDR"))
         // Pre-break-out piconet rows have no slave track yet; broken-out
         // rows are addressed by LT_ADDR (or the Central).
@@ -586,16 +595,16 @@ bool DeviceListModel::lessThan(const Row &a, const Row &b) const
         // then by the rendered identifier. Each level honors the direction.
         if (a.proto != b.proto)
             return cmpStr(a.proto, b.proto);
-        const QString ta = typeLabelFor(a.proto, a.device);
-        const QString tb = typeLabelFor(b.proto, b.device);
+        const QString ta = typeLabelFor(a.proto, a.device, a.addrType);
+        const QString tb = typeLabelFor(b.proto, b.device, b.addrType);
         if (ta != tb)
             return cmpStr(ta, tb);
         return cmpStr(identifierLabelFor(a), identifierLabelFor(b));
     }
 
     if (m_sortRoleName == QStringLiteral("type"))
-        return cmpStr(typeLabelFor(a.proto, a.device),
-                      typeLabelFor(b.proto, b.device));
+        return cmpStr(typeLabelFor(a.proto, a.device, a.addrType),
+                      typeLabelFor(b.proto, b.device, b.addrType));
     if (m_sortRoleName == QStringLiteral("proto"))
         return cmpStr(a.proto, b.proto);
     if (m_sortRoleName == QStringLiteral("lastSeen"))
@@ -622,7 +631,7 @@ QVariant DeviceListModel::sortKey(const Row &r) const
     if (m_sortRoleName == QStringLiteral("proto"))
         return r.proto;
     if (m_sortRoleName == QStringLiteral("type"))
-        return typeLabelFor(r.proto, r.device);
+        return typeLabelFor(r.proto, r.device, r.addrType);
     if (m_sortRoleName == QStringLiteral("identifier"))
         return identifierLabelFor(r);
     return {};
