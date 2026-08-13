@@ -38,17 +38,13 @@ typedef struct
     int debug;
     int active;
 
-    /* RF carry state: a raw HackRF block may not be an exact multiple of the
-     * frame-aligned chunk size, so the leftover tail is preserved here and
-     * prepended to the next raw block.  This keeps the RF stream handed to the
-     * bank continuous (no samples dropped) while every bank call still consumes
-     * a whole, frame-aligned amount, which is what keeps the demodulator's
-     * sample grid phase-locked across block boundaries. */
-    float complex *rf_carry;        /**< leftover RF tail carried forward */
-    size_t rf_carry_len;
-    uint64_t rf_carry_base;         /**< absolute RF index of rf_carry[0] */
-    float complex *scratch;         /**< rf_carry ++ current block buffer */
-    size_t max_rf;                  /**< frame-aligned RF chunk size */
+    /* The bank (channelizer_bank_t) keeps its own internal carry
+     * (q->carry) across calls, so no worker-side RF buffer is needed: raw RF
+     * blocks are fed to the bank in place, in max_in-sized sub-chunks, and the
+     * bank bridges the sub-chunk boundaries to keep the demodulator's sample
+     * grid phase-locked.  max_in bounds the output of a single bank call so it
+     * never exceeds the output block capacity. */
+    size_t max_in;                  /**< max RF samples fed per bank call */
 } channelizer_t;
 
 /**
