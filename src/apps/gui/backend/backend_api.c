@@ -299,6 +299,19 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
                 add_detail(row, "Device Name", "%s", name);
             }
 
+            /* AD type 0xFF (Manufacturer Specific Data) carries a 16-bit
+             * little-endian Company Identifier as its leading payload,
+             * assigned by the Bluetooth SIG. Surface it as a dedicated
+             * "Manufacturer" detail so the GUI can show a human-readable
+             * vendor in the device info tab. */
+            if (ad_type == 0xFFu && (ve - vb) >= 2u)
+            {
+                uint16_t cid = (uint16_t)ad[vb] |
+                               ((uint16_t)ad[vb + 1u] << 8u);
+                add_detail(row, "Manufacturer", "%s (0x%04X)",
+                           bt_assigned_company_name(cid), cid);
+            }
+
             i += 1u + ad_l;
         }
     }

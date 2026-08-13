@@ -140,6 +140,7 @@ private:
         QString device;                 // resolved: BLE src / "Central" / "LT_ADDR N" / "piconet" / "Unknown"
         QString addrType;               // BLE adv address subtype: PUBLIC/STATIC/RESOLVABLE/NONRESOLVABLE/RESERVED; "" otherwise
         QString displayName;            // BLE local name extracted from adv packets (if any)
+        QString manufacturer;            // BLE manufacturer (Company ID) from adv packets (if any)
 
         double rssiDb = qQNaN();        // displayed 1s avg; held when idle
         double lastFrameRssiDb = qQNaN();// most recent raw sample (used for series tail)

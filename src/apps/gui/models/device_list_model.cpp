@@ -167,6 +167,27 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
         }
     };
 
+    // BLE advertising packets can carry a Manufacturer Specific Data AD
+    // structure (0xFF) whose payload begins with a 16-bit Company Identifier.
+    // When the backend surfaces one (as a "Manufacturer" detail entry), adopt
+    // it on the row so the Device Info tab can show a human-readable vendor.
+    // The most recent non-empty value wins; a later frame without it keeps the
+    // previously discovered one.
+    auto applyManufacturerFromDetail = [](Row &r, const QVariantList &detail) {
+        for (const QVariant &entry : detail)
+        {
+            const QVariantMap pair = entry.toMap();
+            if (pair.value(QStringLiteral("field")).toString() ==
+                QStringLiteral("Manufacturer"))
+            {
+                const QString mfr = pair.value(QStringLiteral("value")).toString();
+                if (!mfr.isEmpty())
+                    r.manufacturer = mfr;
+                return;
+            }
+        }
+    };
+
     if (rowIdx < 0)
     {
         Row r;
@@ -190,6 +211,7 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
         }
         r.lastFrameDetail = frame.value(QStringLiteral("detail")).toList();
         applyDeviceNameFromDetail(r, r.lastFrameDetail);
+        applyManufacturerFromDetail(r, r.lastFrameDetail);
 
         rowIdx = m_rows.size();
         beginInsertRows(QModelIndex(), rowIdx, rowIdx);
@@ -229,6 +251,7 @@ void DeviceListModel::onFrameDecoded(const QVariantMap &frame)
     if (!newDetail.isEmpty())
         r.lastFrameDetail = newDetail;
     applyDeviceNameFromDetail(r, newDetail);
+    applyManufacturerFromDetail(r, newDetail);
 
     const QModelIndex idx = index(rowIdx, 0);
     emit dataChanged(idx, idx);
@@ -350,6 +373,8 @@ QVariantList DeviceListModel::detailFor(int index) const
     add(QStringLiteral("Device"), r.device);
     if (!r.displayName.isEmpty())
         add(QStringLiteral("Device Name"), r.displayName);
+    if (!r.manufacturer.isEmpty())
+        add(QStringLiteral("Manufacturer"), r.manufacturer);
     add(QStringLiteral("RSSI (1s avg)"),
         qIsNaN(r.rssiDb) ? QStringLiteral("--")
                          : QString::number(r.rssiDb, 'f', 1) + QStringLiteral(" dBm"));
@@ -373,6 +398,7 @@ QVariantList DeviceListModel::detailFor(int index) const
         QStringLiteral("Address"),
         QStringLiteral("Device"),
         QStringLiteral("Device Name"),
+        QStringLiteral("Manufacturer"),
     };
     for (const QVariant &entry : r.lastFrameDetail)
     {
