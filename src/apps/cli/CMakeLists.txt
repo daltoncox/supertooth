@@ -11,6 +11,8 @@ set(CLI_INCLUDE_DIRS
 add_library(cli_common STATIC
     app_common.c
     app_common.h
+    app_device_view.c
+    app_device_view.h
 )
 
 target_link_libraries(cli_common

@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include <getopt.h>
 #include "app_common.h"
+#include "app_device_view.h"
 #include "version.h"
 #include "bredr_display.h"
 #include "radio_common.h"
@@ -23,6 +24,9 @@ typedef void (*packet_formatter_fn)(unsigned long packet_no,
                                      const bredr_piconet_snapshot_t *pnet);
 
 static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
+
+/* Live device/piconet table view (started/stopped around session_run). */
+static app_device_view_t *g_device_view = NULL;
 static int g_debug = 0;
 static int g_lap_filter_enabled = 0;
 static uint32_t g_lap_filter = 0u;
@@ -137,7 +141,7 @@ static void print_packet_rssi(unsigned long packet_no,
 static const app_output_mode_option_t s_output_modes[] = {
     {APP_OUTPUT_MODE_FULL, "full"},
     {APP_OUTPUT_MODE_SUMMARY, "summary"},
-    {APP_OUTPUT_MODE_RSSI, "rssi"},
+    {APP_OUTPUT_MODE_DEVICES, "devices"},
 };
 
 static packet_formatter_fn output_mode_formatter(app_output_mode_t mode)
@@ -222,7 +226,7 @@ static int parse_bottom_channel(const char *arg, unsigned int *out_bottom_channe
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [-v|--view full|summary|rssi] [-l|--lap LAP] "
+            "Usage: %s [-v|--view full|summary|devices] [-l|--lap LAP] "
             "[--rssi-averaging N|none] [-c|--channels N] [-b|--bottom-channel CH] "
             "[-d|--device [<type>:<id>]] [--debug]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
@@ -241,10 +245,14 @@ static void print_usage(const char *argv0)
 }
 
 static void handle_bredr_packet(const bredr_event_t *event,
-                                 const bredr_piconet_snapshot_t *pnet,
-                                 void *user)
+                                  const bredr_piconet_snapshot_t *pnet,
+                                  void *user)
 {
     (void)user;
+    /* In devices mode the live table thread owns all output; the per-packet
+     * path is suppressed so the two never interleave. */
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        return;
     app_output_lock();
     g_total_packets++;
     output_mode_formatter(g_output_mode)(g_total_packets, event, pnet);
@@ -469,7 +477,16 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        g_device_view = app_device_view_start(g_session);
+
     int result = session_run(g_session);
+
+    if (g_device_view)
+    {
+        app_device_view_stop(g_device_view);
+        g_device_view = NULL;
+    }
 
     printf("\n\n=== Session Summary ===\n");
     printf("  Output mode    : %s\n", mode_name);

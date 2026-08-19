@@ -10,7 +10,8 @@ typedef enum
 {
     APP_OUTPUT_MODE_FULL = 0,
     APP_OUTPUT_MODE_SUMMARY = 1,
-    APP_OUTPUT_MODE_RSSI = 2
+    APP_OUTPUT_MODE_RSSI = 2,
+    APP_OUTPUT_MODE_DEVICES = 3
 } app_output_mode_t;
 
 typedef struct

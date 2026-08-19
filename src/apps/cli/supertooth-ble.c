@@ -8,6 +8,7 @@
 #include <signal.h>
 #include "session.h"
 #include "app_common.h"
+#include "app_device_view.h"
 #include "version.h"
 #include "ble_display.h"
 #include "ble_bitstream_decoder.h"
@@ -20,9 +21,13 @@ static unsigned int g_bottom_le_channel = BLE_CH37_INDEX;
 static session_t g_session;
 static int g_session_initialized = 0;
 
+/* Live device/piconet table view (started/stopped around session_run). */
+static app_device_view_t *g_device_view = NULL;
+
 static const app_output_mode_option_t s_output_modes[] = {
     {APP_OUTPUT_MODE_FULL, "full"},
     {APP_OUTPUT_MODE_SUMMARY, "summary"},
+    {APP_OUTPUT_MODE_DEVICES, "devices"},
 };
 
 static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
@@ -66,7 +71,7 @@ static int parse_bottom_channel(const char *arg, unsigned int *out_bottom_channe
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [-v|--view full|summary] [-c|--channels N] [-b|--bottom-channel CH] "
+            "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
             "[-d|--device [<type>:<id>]] [--debug] "
             "[--enforce-crc on|off]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
@@ -125,9 +130,13 @@ static void print_ble_packet_summary(unsigned long packet_no,
 }
 
 static void handle_ble_packet(const ble_event_t *event,
-                               void *user)
+                                void *user)
 {
     (void)user;
+
+    /* In devices mode the live table thread owns all output. */
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        return;
 
     if (g_enforce_crc)
     {
@@ -331,7 +340,16 @@ int main(int argc, char *argv[])
            g_bottom_le_channel);
     printf("Press Ctrl+C to exit\n\n");
 
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        g_device_view = app_device_view_start(&g_session);
+
     int result = session_run(&g_session);
+
+    if (g_device_view)
+    {
+        app_device_view_stop(g_device_view);
+        g_device_view = NULL;
+    }
     session_destroy(&g_session);
     g_session_initialized = 0;
 

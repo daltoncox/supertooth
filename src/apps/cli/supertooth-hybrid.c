@@ -7,6 +7,7 @@
 #include <inttypes.h>
 
 #include "app_common.h"
+#include "app_device_view.h"
 #include "version.h"
 #include "ble_display.h"
 #include "bredr_display.h"
@@ -23,9 +24,11 @@ static unsigned int g_bottom_bredr_channel = 0u;
 static int g_bottom_channel_explicit = 0;
 static session_protocol_ref_t g_tune_ref = SESSION_REF_BREDR;
 static session_t *g_session = NULL;
+static app_device_view_t *g_device_view = NULL;
 static const app_output_mode_option_t s_output_modes[] = {
     {APP_OUTPUT_MODE_FULL, "full"},
     {APP_OUTPUT_MODE_SUMMARY, "summary"},
+    {APP_OUTPUT_MODE_DEVICES, "devices"},
 };
 
 static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
@@ -148,7 +151,7 @@ static unsigned int ble_channels_in_window(uint64_t lo_hz, uint32_t sample_rate,
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [-v|--view full|summary] [-c|--channels N] [-b|--bottom-channel CH] "
+            "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
             "[--tune-ref bredr|ble] [-d|--device [<type>:<id>]] [--debug] [--enforce-crc on|off]\n",
             argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
@@ -168,10 +171,12 @@ static void print_usage(const char *argv0)
 }
 
 static void handle_hybrid_bredr_packet(const bredr_event_t *event,
-                                        const bredr_piconet_snapshot_t *pnet,
-                                        void *user)
+                                         const bredr_piconet_snapshot_t *pnet,
+                                         void *user)
 {
     (void)user;
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        return;
     app_output_lock();
     unsigned long packet_no = ++g_packet_count;
     if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
@@ -183,9 +188,12 @@ static void handle_hybrid_bredr_packet(const bredr_event_t *event,
 }
 
 static void handle_hybrid_ble_packet(const ble_event_t *event,
-                                      void *user)
+                                       void *user)
 {
     (void)user;
+
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        return;
 
     /* When CRC enforcement is on, drop BLE frames whose CRC fails (or that
      * fail to decode) before emitting anything. BR/EDR frames are unaffected
@@ -437,7 +445,17 @@ int main(int argc, char *argv[])
     }
 
     printf("Receiving... Press Ctrl+C to stop.\n");
+
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        g_device_view = app_device_view_start(g_session);
+
     int result = session_run(g_session);
+
+    if (g_device_view)
+    {
+        app_device_view_stop(g_device_view);
+        g_device_view = NULL;
+    }
 
     printf("\n\n=== Session Summary ===\n");
     printf("  Output mode    : %s\n",
