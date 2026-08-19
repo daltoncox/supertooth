@@ -27,13 +27,17 @@ ApplicationWindow {
         target: receiverController
         function onFrameDecoded(row) {
             frameListModel.appendRow(row)
-            deviceListModel.onFrameDecoded(row)
+        }
+        function onDevicesUpdated(rows) {
+            deviceListModel.setRows(rows)
         }
         function onErrorOccurred(message) {
             console.error("Supertooth:", message)
         }
         function onRunningChanged() {
             console.log("Supertooth: running =", receiverController.running)
+            if (receiverController.running)
+                deviceListModel.clear()
         }
     }
 

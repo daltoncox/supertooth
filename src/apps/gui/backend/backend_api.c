@@ -31,6 +31,15 @@ struct backend_session
     int                 enforce_crc;   /* drop BLE frames whose CRC fails */
 };
 
+/* GUI-wide backend debug flag; set via backend_set_debug() (driven by the
+ * --debug CLI argument) and applied to every session_config_t below. */
+static int g_gui_debug = 0;
+
+void backend_set_debug(int on)
+{
+    g_gui_debug = on ? 1 : 0;
+}
+
 /* ---------------------------------------------------------------------------
  * Local formatting helpers
  * ---------------------------------------------------------------------------*/
@@ -403,7 +412,7 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
         double t = (m->radio_sample_rate_hz > 0u)
                        ? (double)m->radio_start_sample_index / (double)m->radio_sample_rate_hz
                        : 0.0;
-        snprintf(row.time, sizeof(row.time), "%.6f", t);
+        snprintf(row.time, sizeof(row.time), "%.4f", t);
         row.rssi_db = m->rssi_dbr;
         snprintf(row.proto, sizeof(row.proto), "LE");
         row.ch_idx = m->channel_index;
@@ -616,6 +625,12 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
         }
     }
 
+    /* The General/Limited Inquiry Access Codes (GIAC 0x9E8B33, LIAC 0x9E8B00)
+     * are broadcast discovery LAPs; label those frames INQUIRY rather than a
+     * decoded data type. */
+    if (lap == 0x9E8B33u || lap == 0x9E8B00u)
+        snprintf(row.type, sizeof(row.type), "INQUIRY");
+
     /* Info summary line (mirrors the CLI bredr_print_packet_summary_line). */
     char uap_str[8];
     char clk_str[8];
@@ -782,7 +797,7 @@ int backend_session_run_ble(backend_session_t *session,
     session_config_t cfg = {
         .device_type = dev_type,
         .device_id = device_id,
-        .debug = 0,
+        .debug = g_gui_debug,
     };
     if (session_init(s, &cfg) != 0)
         return -1;
@@ -828,7 +843,7 @@ int backend_session_run_bredr(backend_session_t *session,
     session_config_t cfg = {
         .device_type = dev_type,
         .device_id = device_id,
-        .debug = 0,
+        .debug = g_gui_debug,
     };
     if (session_init(session->session, &cfg) != 0)
         return -1;
@@ -907,7 +922,7 @@ int backend_session_run_hybrid(backend_session_t *session,
     session_config_t cfg = {
         .device_type = dev_type,
         .device_id = device_id,
-        .debug = 0,
+        .debug = g_gui_debug,
     };
     if (session_init(session->session, &cfg) != 0)
         return -1;
@@ -937,4 +952,95 @@ void backend_session_request_stop(backend_session_t *session)
     if (!session || !session->session)
         return;
     session_request_stop(session->session);
+}
+
+size_t backend_session_poll_entities(backend_session_t *session,
+                                     backend_entity_t *out, size_t max)
+{
+    if (!session || !session->session || !out || max == 0u)
+        return 0u;
+
+    session_t *s = session->session;
+    size_t cap = max;
+    size_t n = 0u;
+
+    bredr_device_snapshot_t  *bd = (bredr_device_snapshot_t *)calloc(cap, sizeof(*bd));
+    bredr_piconet_snapshot_t *bp = (bredr_piconet_snapshot_t *)calloc(cap, sizeof(*bp));
+    ble_device_snapshot_t    *ld = (ble_device_snapshot_t *)calloc(cap, sizeof(*ld));
+    ble_piconet_snapshot_t   *lp = (ble_piconet_snapshot_t *)calloc(cap, sizeof(*lp));
+    if (!bd || !bp || !ld || !lp)
+    {
+        free(bd); free(bp); free(ld); free(lp);
+        return 0u;
+    }
+
+    size_t nb = session_get_bredr_devices(s, bd, cap);
+    size_t np = session_get_bredr_piconets(s, bp, cap);
+    size_t nl = session_get_ble_devices(s, ld, cap);
+    size_t nq = session_get_ble_piconets(s, lp, cap);
+
+    #define EMIT_BASE(e, snap)                                                \
+        do {                                                                  \
+            (e)->id = (snap)->id;                                            \
+            (e)->kind = (int)(snap)->kind;                                   \
+            (e)->rssi_db = (snap)->rssi_db;                                  \
+            (e)->rssi_valid = (snap)->rssi_valid;                            \
+            (e)->first_seen_ms = (snap)->first_seen_ms;                      \
+            (e)->last_seen_ms = (snap)->last_seen_ms;                        \
+            (e)->total_packets = (snap)->total_packets;                      \
+            (e)->packet_rate = (snap)->packet_rate;                          \
+            snprintf((e)->addr, sizeof((e)->addr), "%s", (snap)->addr_str);  \
+        } while (0)
+
+    for (size_t i = 0; i < nb && n < cap; i++)
+    {
+        backend_entity_t *e = &out[n++];
+        memset(e, 0, sizeof(*e));
+        EMIT_BASE(e, &bd[i]);
+        snprintf(e->proto, sizeof(e->proto), "BR/EDR");
+        snprintf(e->device, sizeof(e->device), "%s", bd[i].label);
+    }
+    for (size_t i = 0; i < np && n < cap; i++)
+    {
+        backend_entity_t *e = &out[n++];
+        memset(e, 0, sizeof(*e));
+        EMIT_BASE(e, &bp[i]);
+        /* Disjoint id namespaces: BR/EDR and LE trackers each start their
+         * id counter at 1, so ids collide across protocols (and would also
+         * collide with the GUI's int-keyed maps). Offset each source into its
+         * own int-safe range. */
+        e->id = bp[i].id + 100000000u;
+        snprintf(e->proto, sizeof(e->proto), "BR/EDR");
+        snprintf(e->device, sizeof(e->device), "%s", bp[i].label);
+    }
+    for (size_t i = 0; i < nl && n < cap; i++)
+    {
+        backend_entity_t *e = &out[n++];
+        memset(e, 0, sizeof(*e));
+        EMIT_BASE(e, &ld[i]);
+        e->id = ld[i].id + 200000000u;
+        snprintf(e->proto, sizeof(e->proto), "LE");
+        snprintf(e->device, sizeof(e->device), "%s", ld[i].label);
+        snprintf(e->addr_type, sizeof(e->addr_type), "%s", ld[i].addr_type);
+        snprintf(e->name, sizeof(e->name), "%s", ld[i].name);
+        snprintf(e->manufacturer, sizeof(e->manufacturer), "%s",
+                 ld[i].manufacturer);
+    }
+    for (size_t i = 0; i < nq && n < cap; i++)
+    {
+        backend_entity_t *e = &out[n++];
+        memset(e, 0, sizeof(*e));
+        EMIT_BASE(e, &lp[i]);
+        e->id = lp[i].id + 300000000u;
+        snprintf(e->proto, sizeof(e->proto), "LE");
+        snprintf(e->device, sizeof(e->device), "%s", lp[i].label);
+        e->crc_init = lp[i].crc_init;
+        e->crc_init_confirmed = lp[i].crc_init_confirmed;
+        e->crc_init_candidates = lp[i].candidate_count;
+    }
+
+    #undef EMIT_BASE
+
+    free(bd); free(bp); free(ld); free(lp);
+    return n;
 }

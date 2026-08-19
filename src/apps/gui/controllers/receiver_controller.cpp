@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QLoggingCategory>
 #include <QMetaObject>
+#include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -24,6 +25,9 @@ ReceiverController::ReceiverController(QObject *parent)
     {
         qCInfo(lcSession) << "Receiver session created";
     }
+
+    m_poll.setInterval(250);   /* 4 Hz device-list poll */
+    connect(&m_poll, &QTimer::timeout, this, &ReceiverController::pollDevices);
 }
 
 ReceiverController::~ReceiverController()
@@ -175,6 +179,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         });
 
     setRunning(true);
+    m_poll.start();
     return true;
 }
 
@@ -191,6 +196,8 @@ void ReceiverController::stop()
 void ReceiverController::onFinish(int result)
 {
     qCInfo(lcSession) << "onFinish: result=" << result;
+
+    m_poll.stop();
 
     /* Capture the session/thread handles we own so a subsequent start() that
      * reassigns m_session/m_thread cannot be destroyed by this cleanup. */
@@ -262,4 +269,52 @@ void ReceiverController::handleRow(const backend_row_t *row)
     map.insert(QStringLiteral("detail"), detail);
 
     emit frameDecoded(map);
+}
+
+void ReceiverController::pollDevices()
+{
+    if (!m_session || !m_running)
+        return;
+
+    /* The promoted piconet store can now hold 512 entries; combined with the
+     * other device/piconet registries the total entity count can exceed the
+     * old 256 buffer, so allocate on the heap to avoid truncation. */
+    const size_t cap = 4096u;
+    backend_entity_t *buf = (backend_entity_t *)calloc(cap, sizeof(backend_entity_t));
+    if (!buf)
+        return;
+    size_t count = backend_session_poll_entities(m_session, buf, cap);
+    if (count == 0u)
+    {
+        emit devicesUpdated(QVariantList());
+        free(buf);
+        return;
+    }
+
+    QVariantList list;
+    list.reserve((int)count);
+    for (size_t i = 0u; i < count; i++)
+    {
+        const backend_entity_t *e = &buf[i];
+        QVariantMap m;
+        m.insert(QStringLiteral("id"), (int)e->id);
+        m.insert(QStringLiteral("proto"), QString::fromUtf8(e->proto));
+        m.insert(QStringLiteral("device"), QString::fromUtf8(e->device));
+        m.insert(QStringLiteral("addr"), QString::fromUtf8(e->addr));
+        m.insert(QStringLiteral("addrType"), QString::fromUtf8(e->addr_type));
+        m.insert(QStringLiteral("displayName"), QString::fromUtf8(e->name));
+        m.insert(QStringLiteral("manufacturer"), QString::fromUtf8(e->manufacturer));
+        m.insert(QStringLiteral("rssiDb"), (double)e->rssi_db);
+        m.insert(QStringLiteral("rssiValid"), e->rssi_valid ? true : false);
+        m.insert(QStringLiteral("firstSeenMs"), (qlonglong)e->first_seen_ms);
+        m.insert(QStringLiteral("lastSeenMs"), (qlonglong)e->last_seen_ms);
+        m.insert(QStringLiteral("packetsSeen"), (qulonglong)e->total_packets);
+        m.insert(QStringLiteral("packetRate"), (int)e->packet_rate);
+        m.insert(QStringLiteral("crcInit"), (qulonglong)e->crc_init);
+        m.insert(QStringLiteral("crcInitConfirmed"), e->crc_init_confirmed ? true : false);
+        m.insert(QStringLiteral("crcInitCandidates"), (int)e->crc_init_candidates);
+        list.append(m);
+    }
+    emit devicesUpdated(list);
+    free(buf);
 }

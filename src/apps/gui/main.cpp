@@ -10,21 +10,25 @@
 #include <QLoggingCategory>
 #include <QIcon>
 #include "version.h"
+#include "backend_api.h"
 
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [-h | --help] [-V | --version]\n"
+            "Usage: %s [-h | --help] [-V | --version] [--debug]\n"
             "  %-30s Print this help and exit\n"
-            "  %-30s Print version and exit\n",
+            "  %-30s Print version and exit\n"
+            "  %-30s Enable verbose backend/session debug logging\n",
             argv0,
             "-h, --help",
-            "-V, --version");
+            "-V, --version",
+            "--debug");
 }
 
 int main(int argc, char *argv[])
 {
     /* Parse flags before touching Qt. */
+    int debug = 0;
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] != '-')
             continue;
@@ -36,6 +40,10 @@ int main(int argc, char *argv[])
             print_usage(argv[0]);
             return 0;
         }
+        if (strcmp(argv[i], "--debug") == 0) {
+            debug = 1;
+            continue;
+        }
         /* macOS process serial number — let Qt handle it. */
         if (strncmp(argv[i], "-psn", 4) == 0)
             continue;
@@ -44,6 +52,9 @@ int main(int argc, char *argv[])
         print_usage(argv[0]);
         return 1;
     }
+
+    if (debug)
+        backend_set_debug(1);
 
     /* Ensure session lifecycle logging is visible regardless of build type. */
     QLoggingCategory::setFilterRules(

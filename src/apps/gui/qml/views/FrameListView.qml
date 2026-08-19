@@ -119,7 +119,7 @@ Item {
 
     ListModel {
         id: columns
-        ListElement { title: "No.";          role: "no";    width: 50;  hAlign: 2; color: "#9cdcfe" }
+        ListElement { title: "No.";          role: "no";    width: 70;  hAlign: 2; color: "#9cdcfe" }
         ListElement { title: "Time";         role: "time";  width: 90;  hAlign: 1; color: "#cccccc" }
         ListElement { title: "RSSI";         role: "rssi";  width: 60;  hAlign: 1; color: "#b5cea8" }
         ListElement { title: "Protocol";     role: "proto"; width: 80;  hAlign: 1; color: "#dcdcaa" }

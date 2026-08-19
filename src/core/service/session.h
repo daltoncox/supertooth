@@ -14,7 +14,8 @@
 #include "ble_piconet.h"
 #include "bredr_piconet.h"
 #include "bredr_display.h"
-#include "bredr_piconet_store.h"
+#include "ble_tracker.h"
+#include "bredr_tracker.h"
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
 #include "radio_common.h"
@@ -101,9 +102,10 @@ typedef struct session {
     pthread_t            bredr_channelizer_thread;
     int                  bredr_channelizer_running;
 
-    ble_piconet_store_t   ble_piconet_store;
-    bredr_piconet_store_t bredr_piconet_store;
-    pthread_mutex_t       bredr_mutex;
+    ble_tracker_t       ble_tracker;   /**< owns BLE advertiser + connection
+                                             correlation (incl. piconet store) */
+    bredr_tracker_t     bredr_tracker;
+    pthread_mutex_t     bredr_mutex;
 
     ble_channel_processor_t   *ble_channels;
     size_t                     ble_channel_count;
@@ -160,6 +162,18 @@ size_t       session_bredr_piconet_count(const session_t *session);
 int          session_bredr_piconet_snapshot(const session_t *session,
                                            size_t index,
                                            bredr_piconet_snapshot_t *out);
+
+/** Snapshot polling API for the device/piconet list (caller-provided array,
+ *  core fills up to @p max entries and returns the number written). */
+size_t session_get_bredr_devices(const session_t *session,
+                                 bredr_device_snapshot_t *out, size_t max);
+size_t session_get_bredr_piconets(const session_t *session,
+                                 bredr_piconet_snapshot_t *out, size_t max);
+size_t session_get_ble_devices(const session_t *session,
+                               ble_device_snapshot_t *out, size_t max);
+size_t session_get_ble_piconets(const session_t *session,
+                               ble_piconet_snapshot_t *out, size_t max);
+
 unsigned long session_dropped_blocks(const session_t *session);
 
 /* Test-only helper: build the BLE/BR/EDR channel processors for the current

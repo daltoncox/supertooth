@@ -26,6 +26,14 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <sys/time.h>
+
+static uint64_t now_ms(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (uint64_t)tv.tv_sec * 1000u + (uint64_t)tv.tv_usec / 1000u;
+}
 
 /* ---------------------------------------------------------------------------
  * RSSI averaging configuration
@@ -220,6 +228,7 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
     int packet_is_newest;
     int has_active_track;
     uint32_t rx_clk_1600;
+    uint64_t now = now_ms();
 
     if (!pnet || !event)
         return 0;
@@ -244,6 +253,7 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
             update_rssi_value(pnet->combined_rssi, pnet->combined_rssi_seen, meta->rssi_dbr,
                               rssi_window, rssi_alpha, rssi_one_minus_alpha);
         pnet->combined_rssi_seen = 1;
+        rssi_window_add(&pnet->combined_rssi_win, meta->rssi_dbr, now);
     }
 
     /* Directional RSSI accumulation requires active track + header packet. */
@@ -269,6 +279,8 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
             update_rssi_value(pnet->master_rssi, pnet->master_rssi_seen, meta->rssi_dbr,
                               rssi_window, rssi_alpha, rssi_one_minus_alpha);
         pnet->master_rssi_seen = 1;
+        rssi_window_add(&pnet->master_rssi_win, meta->rssi_dbr, now);
+        pnet->master_pkts++;
     }
     else
     {
@@ -279,6 +291,8 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
             update_rssi_value(pnet->slave_rssi[lt], pnet->slave_rssi_seen[lt], meta->rssi_dbr,
                               rssi_window, rssi_alpha, rssi_one_minus_alpha);
         pnet->slave_rssi_seen[lt] = 1;
+        rssi_window_add(&pnet->slave_rssi_win[lt], meta->rssi_dbr, now);
+        pnet->slave_pkts[lt]++;
     }
 
     return packet_is_newest;

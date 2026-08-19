@@ -6,24 +6,7 @@
 
 #include "bredr_bitstream_decoder.h"
 #include "receive_event_models.h"
-
-typedef struct
-{
-    uint32_t lap;
-    int uap_found;
-    uint8_t uap;
-    int clk_known;
-    uint8_t central_clk_1_6;
-    uint32_t last_successful_rx_clk_1600;
-    int tracking_state;
-    unsigned long total_packets;
-    int combined_rssi_seen;
-    float combined_rssi;
-    int master_rssi_seen;
-    float master_rssi;
-    int slave_rssi_seen[8];
-    float slave_rssi[8];
-} bredr_piconet_snapshot_t;
+#include "device_models.h"
 
 void bredr_print_packet_details(const bredr_frame_t *frame,
                                 const bredr_piconet_snapshot_t *pnet,

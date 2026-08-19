@@ -7,6 +7,8 @@
 
 #include "ble_piconet.h"
 #include "bredr_piconet.h"
+#include "ble_codec.h"
+#include "bt_assigned_numbers.h"
 #include "channelizer_bank.h"
 #include "radio_common.h"
 
@@ -66,10 +68,10 @@ int session_init(session_t *session, const session_config_t *cfg)
     memset(&session->ble_channelizer, 0, sizeof(session->ble_channelizer));
     session->ble_channelizer_running = 0;
 
-    ble_piconet_store_init(&session->ble_piconet_store);
-    bredr_piconet_store_init(&session->bredr_piconet_store);
-    bredr_piconet_store_set_rssi_averaging(&session->bredr_piconet_store,
-                                           BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW);
+    ble_tracker_init(&session->ble_tracker);
+    bredr_tracker_init(&session->bredr_tracker);
+    bredr_tracker_set_rssi_averaging(&session->bredr_tracker,
+                                     BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW);
     pthread_mutex_init(&session->bredr_mutex, NULL);
 
     return 0;
@@ -81,6 +83,8 @@ void session_enable_ble(session_t *session,
 {
     if (!session) return;
     if (cfg) session->ble_cfg = *cfg;
+    ble_tracker_set_enforce_crc(&session->ble_tracker,
+                                cfg ? (int)cfg->enforce_crc : 0);
     session->ble_cb   = cb;
     session->ble_user = user;
     session->ble_enabled = 1;
@@ -209,6 +213,9 @@ static int session_create_channels(session_t *session)
             if (bin < 0)
                 continue;
 
+            /* The decoder CRC-gates data candidates against the tracker's
+             * piconet store (shared per-session; the store serializes its
+             * own access). */
             int ok = ble_channel_processor_init(
                 proc, session->ble_chan_dispatcher, rf, center,
                 session->sample_rate_hz, (unsigned int)bin,
@@ -216,7 +223,7 @@ static int session_create_channels(session_t *session)
                 session->ble_channelizer.bank.M2,
                 ble_frame_stride,
                 CHANNELIZER_BANK_RSSI_CAL_DB,
-                &session->ble_piconet_store);
+                &session->ble_tracker.conn_store);
 
             if (ok != 0)
                 continue;
@@ -502,8 +509,8 @@ int session_destroy(session_t *session)
     session->bredr_channelizer_running = 0;
     atomic_store_explicit(&session->shutdown_requested, 0u, memory_order_release);
 
-    ble_piconet_store_free(&session->ble_piconet_store);
-    bredr_piconet_store_free(&session->bredr_piconet_store);
+    ble_tracker_free(&session->ble_tracker);
+    bredr_tracker_free(&session->bredr_tracker);
     pthread_mutex_destroy(&session->bredr_mutex);
     
     channelizer_destroy(&session->ble_channelizer);
@@ -525,10 +532,20 @@ int session_destroy(session_t *session)
     return 0;
 }
 
+/* --- BLE advertiser tracking: owned by the BLE tracker (see ble_tracker) --- */
+
 void session_process_ble_event(session_t *session, const ble_event_t *event)
 {
-    if (!session || !event || !session->ble_cb) return;
-    session->ble_cb(event, session->ble_user);
+    if (!session || !event) return;
+
+    /* The tracker owns all BLE correlation: it parses advertising PDUs
+     * (advertiser name/manufacturer, CONNECT_IND linkage) and CRC-gates
+     * data frames against its piconet store. It returns whether the frame
+     * is surfaced to presentation layers (advertising, or a CRC-valid data
+     * frame); pure correlation frames are consumed silently. */
+    int surface = ble_tracker_submit_frame(&session->ble_tracker, event);
+    if (surface && session->ble_cb)
+        session->ble_cb(event, session->ble_user);
 }
 
 void session_process_bredr_event(session_t *session, const bredr_event_t *event)
@@ -537,8 +554,8 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
 
     pthread_mutex_lock(&session->bredr_mutex);
     int packet_is_newest = 0;
-    bredr_piconet_t *pnet = bredr_piconet_store_add_packet(&session->bredr_piconet_store,
-                                                          event, &packet_is_newest);
+    bredr_piconet_t *pnet = bredr_tracker_add_packet(&session->bredr_tracker,
+                                                     event, &packet_is_newest);
     bredr_piconet_snapshot_t snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
     const bredr_piconet_snapshot_t *snapshot_ptr = NULL;
@@ -571,7 +588,7 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
 size_t session_bredr_piconet_count(const session_t *session)
 {
     if (!session) return 0u;
-    return bredr_piconet_store_count(&session->bredr_piconet_store);
+    return bredr_piconet_store_count(&session->bredr_tracker.store);
 }
 
 int session_bredr_piconet_snapshot(const session_t *session,
@@ -579,7 +596,7 @@ int session_bredr_piconet_snapshot(const session_t *session,
                                   bredr_piconet_snapshot_t *out)
 {
     if (!session || !out) return -1;
-    const bredr_piconet_t *pnet = bredr_piconet_store_get(&session->bredr_piconet_store, index);
+    const bredr_piconet_t *pnet = bredr_piconet_store_get(&session->bredr_tracker.store, index);
     if (!pnet) return -1;
     memset(out, 0, sizeof(*out));
     out->lap            = pnet->lap;
@@ -597,6 +614,34 @@ int session_bredr_piconet_snapshot(const session_t *session,
     memcpy(out->slave_rssi_seen, pnet->slave_rssi_seen, sizeof(out->slave_rssi_seen));
     memcpy(out->slave_rssi, pnet->slave_rssi, sizeof(out->slave_rssi));
     return 0;
+}
+
+size_t session_get_bredr_devices(const session_t *session,
+                                 bredr_device_snapshot_t *out, size_t max)
+{
+    if (!session) return 0u;
+    return bredr_tracker_get_devices(&session->bredr_tracker, out, max);
+}
+
+size_t session_get_bredr_piconets(const session_t *session,
+                                  bredr_piconet_snapshot_t *out, size_t max)
+{
+    if (!session) return 0u;
+    return bredr_tracker_get_piconets(&session->bredr_tracker, out, max);
+}
+
+size_t session_get_ble_devices(const session_t *session,
+                               ble_device_snapshot_t *out, size_t max)
+{
+    if (!session) return 0u;
+    return ble_tracker_get_devices(&session->ble_tracker, out, max);
+}
+
+size_t session_get_ble_piconets(const session_t *session,
+                                ble_piconet_snapshot_t *out, size_t max)
+{
+    if (!session) return 0u;
+    return ble_tracker_get_piconets(&session->ble_tracker, out, max);
 }
 
 unsigned long session_dropped_blocks(const session_t *session)

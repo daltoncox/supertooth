@@ -43,6 +43,7 @@
 
 #include "receive_event_models.h"
 #include "bredr_bitstream_decoder.h"
+#include "rssi_window.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -128,6 +129,17 @@ extern "C"
         /** Non-zero if slave_rssi[i] contains a valid value. */
         int slave_rssi_seen[8];
 
+        /* -- Rolling 1-second RSSI window (per role) ------------------------- */
+
+        /** Average RSSI over the last ~1 s, aggregate (pre-track-lock). */
+        rssi_window_state_t combined_rssi_win;
+
+        /** Average RSSI over the last ~1 s, master transmissions. */
+        rssi_window_state_t master_rssi_win;
+
+        /** Average RSSI over the last ~1 s, slave transmissions (LT_ADDR). */
+        rssi_window_state_t slave_rssi_win[8];
+
         /* -- Ring buffer -------------------------------------------------------- */
 
         /** Circular queue of the 1024 most recently received BR/EDR events. */
@@ -141,6 +153,14 @@ extern "C"
 
         /** All-time count of packets received by this piconet. */
         unsigned long total_packets;
+
+        /* -- Per-member packet counts (for derived device rows) ----------- */
+
+        /** Packets classified as master transmissions (CLK1 == 0). */
+        unsigned long master_pkts;
+
+        /** Packets classified as slave transmissions, indexed by LT_ADDR (0–7). */
+        unsigned long slave_pkts[8];
 
         /* -- Timestamps (slot clock, 625 µs per tick / 1600 Hz) ----------------- */
 

@@ -259,12 +259,11 @@ static void test_data_unknown_aa_silent(void)
 
     TEST_ASSERT(out.count == 0u);
 
+    /* The store gates on promote-on-promise: a brand-new access address
+     * must recur (BLE_PICONET_PROMOTE_THRESHOLD raw frames) before it
+     * earns a slot, so a one-off unknown AA leaves no entry behind. */
     ble_piconet_t snap;
-    TEST_ASSERT(ble_piconet_store_find(&store, AA_DATA, &snap) == 0);
-    TEST_ASSERT(snap.state == BLE_PICONET_COLLECTING);
-    TEST_ASSERT(snap.candidate_count == 0u);
-    TEST_ASSERT(snap.packets_seen == 1u);
-    TEST_ASSERT(snap.packets_accepted == 0u);
+    TEST_ASSERT(ble_piconet_store_find(&store, AA_DATA, &snap) != 0);
 
     ble_piconet_store_free(&store);
 }
@@ -283,12 +282,18 @@ static void test_recovery_lifecycle(void)
     ble_test_stream_t s;
     ble_test_out_t out;
 
-    /* Phase 1: a 0-length packet produces a candidate, nothing emitted. */
-    bts_reset(&s);
-    stream_data_packet(&s, AA_DATA, 0x01u, NULL, 0u, CH_DATA, INIT_DATA);
-    stream_zeros(&s, FLUSH_ZEROS);
-    bts_feed(&dec, &s, &out);
-    TEST_ASSERT(out.count == 0u);
+    /* Phase 1: 0-length packets produce a candidate, nothing emitted. The
+     * AA must first recur enough times to earn a store slot
+     * (BLE_PICONET_PROMOTE_THRESHOLD); the first rounds only bump the
+     * pending tally, the final one reverses the CRC into a candidate. */
+    for (int round = 0; round < 3; round++)
+    {
+        bts_reset(&s);
+        stream_data_packet(&s, AA_DATA, 0x01u, NULL, 0u, CH_DATA, INIT_DATA);
+        stream_zeros(&s, FLUSH_ZEROS);
+        bts_feed(&dec, &s, &out);
+        TEST_ASSERT(out.count == 0u);
+    }
 
     ble_piconet_t snap;
     TEST_ASSERT(ble_piconet_store_find(&store, AA_DATA, &snap) == 0);
