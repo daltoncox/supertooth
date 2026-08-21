@@ -16,9 +16,41 @@
  * Constants
  * ---------------------------------------------------------------------------*/
 
-/** Reset btbb piconet state if a LAP is idle for too long.
+/** Reset recovery state if a LAP is idle for too long.
  *  CLKN ticks at 312.5 µs, so 16384 ticks ≈ 5.1 s. */
 #define BTBB_LAP_IDLE_RESET_CLKN 16384u
+
+/* ---------------------------------------------------------------------------
+ * Optional frame dump for offline recovery replay (Phase 3)
+ *
+ * When enabled, every frame fed to UAP acquisition is appended to an open FILE
+ * in a simple binary format so it can be replayed through the recovery backend
+ * from a real capture.  The format is intentionally trivial and self-describing
+ * so a replay tool/test can validate it without parsing the radio stack.
+ * --------------------------------------------------------------------------- */
+
+#define FRAME_DUMP_MAGIC   0x53544C44u /* "STLD" */
+#define FRAME_DUMP_VERSION 1u
+
+typedef struct
+{
+    uint32_t magic;
+    uint32_t version;
+    uint32_t lap;
+    int32_t channel;
+    uint32_t clkn;
+    uint64_t header_raw;
+    uint32_t air_payload_bits;
+    uint8_t air_payload[BR_MAX_AIR_PAYLOAD_BYTES];
+} frame_dump_rec_t;
+
+static FILE *g_frame_dump = NULL;
+
+void bredr_piconet_store_set_frame_dump(bredr_piconet_store_t *store, FILE *file)
+{
+    (void)store;
+    g_frame_dump = file;
+}
 
 /* ---------------------------------------------------------------------------
  * Internal entry struct
@@ -203,11 +235,32 @@ static void try_uap_acquisition(bredr_piconet_store_entry_t *entry,
     if (!entry->recovery)
         return;
 
+    if (g_frame_dump && frame->has_header)
+    {
+        frame_dump_rec_t rec;
+        memset(&rec, 0, sizeof(rec));
+        rec.magic = FRAME_DUMP_MAGIC;
+        rec.version = FRAME_DUMP_VERSION;
+        rec.lap = frame->lap & 0xFFFFFFu;
+        rec.channel = (int32_t)event->meta.channel_index;
+        rec.clkn = clkn;
+        rec.header_raw = frame->header_raw;
+        rec.air_payload_bits = frame->air_payload_bits;
+        if (rec.air_payload_bits > BR_MAX_AIR_PAYLOAD_BITS)
+            rec.air_payload_bits = BR_MAX_AIR_PAYLOAD_BITS;
+        unsigned int nbytes = (rec.air_payload_bits + 7u) / 8u;
+        if (nbytes > sizeof(rec.air_payload))
+            nbytes = sizeof(rec.air_payload);
+        memcpy(rec.air_payload, frame->air_payload, nbytes);
+        if (fwrite(&rec, sizeof(rec), 1u, g_frame_dump) == 1u)
+            fflush(g_frame_dump);
+    }
+
     bredr_recovery_result_t result = {0};
     if (bredr_recovery_process_packet(entry->recovery, frame, (int)event->meta.channel_index, clkn, &result))
     {
         uint8_t uap = result.uap;
-        uint8_t btbb_clk6 = result.clk6_hint;
+        uint8_t btbb_clk6 = result.clk6_hint; /* recovery backend CLK1-6 hint */
         if (!pnet->uap_found)
             bredr_piconet_set_uap_only(pnet, uap);
 
@@ -232,7 +285,7 @@ static void try_uap_acquisition(bredr_piconet_store_entry_t *entry,
         else if (valid_n > 1)
         {
             /* Still ambiguous after history scan — fall back to the candidate
-             * closest to btbb's clock-offset hint. */
+             * closest to the recovery backend's clock-offset hint. */
             int best = valid_clk[0];
             int best_dist = 64;
             for (int i = 0; i < valid_n; i++)
@@ -250,8 +303,8 @@ static void try_uap_acquisition(bredr_piconet_store_entry_t *entry,
             }
             bredr_piconet_set_uap(pnet, uap, (uint8_t)best, rx_clk_1600);
         }
-        /* valid_n == 0: UAP may be wrong — leave state unchanged and let btbb
-         * accumulate more packets before trying again. */
+        /* valid_n == 0: UAP may be wrong — leave state unchanged and let the
+         * recovery backend accumulate more packets before trying again. */
     }
 }
 
@@ -334,8 +387,8 @@ bredr_piconet_t *bredr_piconet_store_add_packet(bredr_piconet_store_t *store,
     if (!entry)
         return NULL;
 
-    /* Idle reset: if this LAP has been silent long enough, restart btbb state
-     * so UAP recovery begins fresh when it reappears.
+    /* Idle reset: if this LAP has been silent long enough, restart the
+     * recovery state so UAP recovery begins fresh when it reappears.
      *
      * Guard against occasional non-monotonic timestamp regressions by only
      * applying the idle test when clkn advances. */

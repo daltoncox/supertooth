@@ -37,7 +37,9 @@ The package bundles Qt 6.8, radio libs, and QML modules — no extra runtime dep
 |---|---|
 | `libhackrf` | HackRF device API |
 | `liquid-dsp` | Channelization, filtering, NCO mixing, GFSK/CPFSK demodulation |
-| `libbtbb` | BR/EDR access-code workflows and piconet UAP/clock recovery |
+
+BR/EDR UAP and CLK1-6 recovery is implemented in-tree (no external
+dependency); see `src/core/protocol/bredr/bredr_recovery_native.c`.
 
 ### CLI-only build (no GUI)
 
@@ -47,13 +49,13 @@ Linux (Debian-based):
 sudo apt update
 sudo apt install -y \
   build-essential cmake pkg-config \
-  hackrf libhackrf-dev libbtbb-dev libliquid-dev
+  hackrf libhackrf-dev libliquid-dev
 ```
 
 macOS (Homebrew):
 
 ```bash
-brew install cmake pkg-config hackrf liquid-dsp libbtbb
+brew install cmake pkg-config hackrf liquid-dsp
 ```
 
 ### GUI build (adds Qt 6.8)

@@ -61,3 +61,7 @@ Debug/
 Release/
 x64/
 out/
+
+# Vendored third-party source used only as a reference for porting; not part
+# of this project's tree.
+libbtbb/

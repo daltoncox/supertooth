@@ -243,7 +243,7 @@ static unsigned int bredr_whitening_index_after_bits(uint8_t clk6,
     return (unsigned int)((s_whitening_indices[clk6 & 0x3Fu] + logical_bits) % 127u);
 }
 
-static unsigned int bredr_dewhiten_air_payload_bytes(const uint8_t *src_air,
+unsigned int bredr_dewhiten_air_payload_bytes(const uint8_t *src_air,
                                                      unsigned int src_air_bits,
                                                      uint8_t clk6,
                                                      unsigned int logical_offset_bits,
@@ -424,7 +424,7 @@ void bredr_decode_dewhitened_header(const uint8_t dewhitened_header[18],
     out->hec = 0u;
     out->hec_ok = 0u;
     for (int i = 0; i < 8; i++)
-        out->hec |= (uint8_t)(dewhitened_header[10 + i] << (7 - i));
+        out->hec |= (uint8_t)(dewhitened_header[10 + i] << i);
 }
 
 static int bredr_decode_header(const bredr_frame_t *frame,
@@ -441,7 +441,7 @@ static int bredr_decode_header(const bredr_frame_t *frame,
     for (int i = 0; i < 10; i++)
         hdr_data |= (uint16_t)(bits[i] << i);
 
-    out->hec_ok = (uint8_t)(bredr_compute_hec(hdr_data, uap) == out->hec);
+    out->hec_ok = (uint8_t)(bredr_decode_uap_from_hec(hdr_data, out->hec) == uap);
     return out->hec_ok;
 }
 
@@ -730,7 +730,7 @@ int bredr_fec_decode_2_3(const uint8_t *input_bits,
             }
 
             if (!corrected_single)
-                error_count += 2;
+                return -1;
         }
 
         for (unsigned int bit = 0u; bit < 10u; bit++)
@@ -808,18 +808,29 @@ uint8_t bredr_reverse_byte(uint8_t b)
     return b;
 }
 
-uint8_t bredr_compute_hec(uint16_t data, uint8_t uap)
+/**
+ * Recover the UAP from the 10-bit header value and the 8-bit HEC.
+ *
+ * This is the Bluetooth HEC *decode* (inverse of the hardware HEC generation).
+ * It mirrors libbtbb's `uap_from_hec` semantics: the 8-bit HEC is run through a
+ * 10-step LFSR (seeded by the UAP, XOR 0x65 on the MSB, consuming header bits
+ * MSB-first) and the result is bit-reversed to obtain the UAP.
+ *
+ * NOTE: the HEC only constrains the UAP to one of (up to) 36 reachable values
+ * for a given header -- it does not uniquely identify the UAP.  The final
+ * disambiguation is performed by the payload CRC, exactly as libbtbb does in
+ * `crc_check`.  Callers must therefore treat the returned value as a *candidate*
+ * UAP and confirm it with the payload CRC before trusting it.
+ */
+uint8_t bredr_decode_uap_from_hec(uint16_t data, uint8_t hec)
 {
-    uint8_t lfsr = uap;
-
-    for (int i = 0; i < 10; i++)
+    for (int i = 9; i >= 0; i--)
     {
-        uint8_t fb = ((lfsr >> 7u) & 1u) ^ ((data >> i) & 1u);
-        lfsr = (uint8_t)(lfsr << 1u);
-        if (fb)
-            lfsr ^= 0xA7u;
+        if (hec & 0x80u)
+            hec ^= 0x65u;
+        hec = (uint8_t)((hec << 1) | (((hec >> 7) ^ (data >> i)) & 0x01u));
     }
-    return lfsr;
+    return bredr_reverse_byte(hec);
 }
 
 void bredr_decode_header_bits(const bredr_frame_t *frame, uint8_t clk6, uint8_t bits[18])
@@ -829,7 +840,8 @@ void bredr_decode_header_bits(const bredr_frame_t *frame, uint8_t clk6, uint8_t 
     unsigned int decoded_bits = 0u;
 
     bredr_pack_header_raw(frame->header_raw, packed_header);
-    if (bredr_fec_decode_1_3(packed_header, 54u, decoded_header, &decoded_bits) < 0 || decoded_bits != 18u)
+    int be = bredr_fec_decode_1_3(packed_header, 54u, decoded_header, &decoded_bits);
+    if (be < 0 || decoded_bits != 18u || be >= (int)(decoded_bits / 4u))
     {
         memset(bits, 0, 18u);
         return;
@@ -904,9 +916,9 @@ int bredr_hec_ok_for_clk6(const bredr_frame_t *frame, uint8_t uap, uint8_t clk6)
 
     uint8_t received_hec = 0;
     for (int i = 0; i < 8; i++)
-        received_hec |= (uint8_t)(bits[10 + i] << (7 - i));
+        received_hec |= (uint8_t)(bits[10 + i] << i);
 
-    return bredr_compute_hec(hdr_data, uap) == received_hec;
+    return (int)(bredr_decode_uap_from_hec(hdr_data, received_hec) == uap);
 }
 
 const char *bredr_packet_type_name(uint8_t type_code)

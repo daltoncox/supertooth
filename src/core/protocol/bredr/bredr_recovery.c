@@ -1,6 +1,6 @@
 /**
  * @file bredr_recovery.c
- * @brief Default BR/EDR recovery interface backed by the current btbb wrapper.
+ * @brief Default BR/EDR recovery interface backed by the native backend.
  */
 
 #include "bredr_recovery.h"
@@ -8,6 +8,7 @@
 #include <stdlib.h>
 
 #include "bredr_recovery_backend.h"
+#include "bredr_recovery_native.h"
 
 struct bredr_recovery_state
 {
@@ -70,4 +71,9 @@ int bredr_recovery_process_packet(bredr_recovery_state_t *state,
         return 0;
 
     return state->ops->process_packet(state->backend_state, frame, channel, clkn, out);
+}
+
+const bredr_recovery_backend_ops_t *bredr_recovery_default_backend(void)
+{
+    return bredr_recovery_native_backend();
 }

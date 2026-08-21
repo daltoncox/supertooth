@@ -138,7 +138,7 @@ typedef struct
 } bredr_packet_t;
 
 uint8_t bredr_reverse_byte(uint8_t b);
-uint8_t bredr_compute_hec(uint16_t data, uint8_t uap);
+uint8_t bredr_decode_uap_from_hec(uint16_t data, uint8_t hec);
 
 /**
  * @brief Decode 1/3-rate FEC bits packed LSB-first.
@@ -189,8 +189,35 @@ int bredr_fec_decode_2_3(const uint8_t *input_bits,
  * @return            16-bit CRC.
  */
 uint16_t bredr_payload_crc(const uint8_t *data,
-                           unsigned int bit_count,
-                           uint8_t uap);
+                            unsigned int bit_count,
+                            uint8_t uap);
+
+/**
+ * @brief Dewhiten (or whiten — the operation is symmetric) on-air payload
+ *        bits using the BR/EDR whitening sequence for a given CLK1-6.
+ *
+ * The whitening sequence starts at the bit index that follows
+ * @p logical_offset_bits of already-whitened bits (18 for a standard BR/EDR
+ * payload, i.e. after the access code and packet header).  Because whitening
+ * is an XOR, the same routine is used to reconstruct the payload on receive
+ * and to build it on transmit.
+ *
+ * @param src_air         Packed on-air bits (LSB-first within each byte).
+ * @param src_air_bits    Number of valid bits in @p src_air.
+ * @param clk6            CLK1-6 whitening key (0-63).
+ * @param logical_offset_bits  Whitening start offset, in bits (18 for payload).
+ * @param dst             Output buffer.
+ * @param dst_capacity    Capacity of @p dst, in bytes.
+ * @return                Number of bytes written to @p dst.
+ */
+unsigned int bredr_dewhiten_air_payload_bytes(const uint8_t *src_air,
+                                              unsigned int src_air_bits,
+                                              uint8_t clk6,
+                                              unsigned int logical_offset_bits,
+                                              uint8_t *dst,
+                                              unsigned int dst_capacity);
+
+
 
 /**
  * @brief Return the FEC mode used by the on-air payload of the given

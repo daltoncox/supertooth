@@ -28,7 +28,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             cmake build-essential pkg-config \
-            libhackrf-dev libliquid-dev libbtbb-dev \
+            libhackrf-dev libliquid-dev \
             libgl1-mesa-dev libxcb*-dev libfontconfig1-dev \
             libxkbcommon-x11-dev libdbus-1-dev \
             libpulse-dev libsdl2-dev \

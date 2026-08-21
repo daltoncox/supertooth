@@ -2,10 +2,10 @@
  * @file bredr_piconet.c
  * @brief BR/EDR piconet tracking implementation.
  *
- * UAP resolution is fully delegated to libbtbb by the calling application.
- * Once the application determines the UAP (and the corresponding CLK1-6 via
- * libbtbb), it calls bredr_piconet_set_uap() to put the piconet into
- * clock-tracking mode.
+ * UAP resolution is delegated to the recovery backend by the calling
+ * application.  Once the application determines the UAP (and the corresponding
+ * CLK1-6 via the recovery backend), it calls bredr_piconet_set_uap() to put
+ * the piconet into clock-tracking mode.
  *
  * Clock tracking
  * --------------
@@ -17,7 +17,7 @@
  * confidence is managed by tracking_state.
  *
  * Header unwhitening uses bredr_decode_header_bits() from bredr_codec.c/h,
- * which holds the whitening tables (sourced from libbtbb's bluetooth_packet.c).
+ * which holds the whitening tables.
  */
 
 #include "bredr_piconet.h"

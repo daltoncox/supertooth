@@ -9,7 +9,7 @@
  * identified by its 24-bit LAP.  It maintains a circular ring buffer of the
  * 1024 most recently received BR/EDR events.
  *
- * UAP and initial clock resolution is delegated entirely to libbtbb by the
+ * UAP and initial clock resolution is delegated to the recovery backend by the
  * calling application.  Once the UAP and an initial CLK1-6 value are known,
  * the caller invokes `bredr_piconet_set_uap()` to transition the piconet into
  * clock-tracking mode.  In this mode every subsequent header packet is used
@@ -214,7 +214,7 @@ extern "C"
                            float rssi_one_minus_alpha);
 
     /**
-     * @brief Record the UAP and initial CLK1-6, as solved by libbtbb.
+     * @brief Record the UAP and initial CLK1-6, as solved by the recovery backend.
      *
      * Transitions the piconet into clock-tracking mode.  Subsequent calls to
      * bredr_piconet_add_packet() will verify and maintain the CLK1-6 estimate

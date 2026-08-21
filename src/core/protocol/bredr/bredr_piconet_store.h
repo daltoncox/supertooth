@@ -13,8 +13,9 @@
  * Recovery backend integration
  * ----------------------------
  * Each entry in the store owns recovery backend state used to accumulate
- * header packets for UAP recovery.  The current backend is libbtbb-backed,
- * but that dependency is intentionally hidden behind repository-owned wrappers.
+ * header packets for UAP recovery.  The backend is repository-owned
+ * (src/core/protocol/bredr/bredr_recovery_native.c); the dependency on
+ * external libraries is intentionally hidden behind repository-owned wrappers.
  * Once the backend reports a valid UAP, the store scans all 64 CLK1-6
  * candidates using HEC verification and calls `bredr_piconet_set_uap()` to
  * put the `bredr_piconet_t` into clock-tracking mode.
@@ -22,7 +23,7 @@
  * Idle reset
  * ----------
  * If a LAP is silent for more than ~5.1 seconds (16384 CLKN half-slot ticks),
- * the libbtbb piconet state is reset so that UAP recovery restarts cleanly
+ * the recovery state is reset so that UAP recovery restarts cleanly
  * when the piconet reappears.  The `bredr_piconet_t` ring buffer and
  * statistics are preserved.
  */
@@ -32,6 +33,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "bredr_piconet.h"
 
 #ifdef __cplusplus
@@ -157,7 +159,22 @@ size_t bredr_piconet_store_count(const bredr_piconet_store_t *store);
  * @return       Piconet pointer, or NULL if index is out of range.
  */
 const bredr_piconet_t *bredr_piconet_store_get(const bredr_piconet_store_t *store,
-                                               size_t index);
+                                                size_t index);
+
+/**
+ * @brief Enable recording of every recovered frame to a binary dump file.
+ *
+ * When @p file is non-NULL, each frame fed to UAP acquisition is appended to
+ * it in a self-describing binary format (magic + version + lap + channel +
+ * clkn + header_raw + air_payload) so it can be replayed offline through the
+ * recovery backend for regression testing on a real capture.  Pass NULL to
+ * disable.  The file is owned by the caller, who is responsible for opening it
+ * (e.g. "wb"/"ab") and closing it; the store never closes it.
+ *
+ * @param store  Initialised store.  May be NULL (no-op).
+ * @param file   Opened FILE for writing, or NULL to disable.
+ */
+void bredr_piconet_store_set_frame_dump(bredr_piconet_store_t *store, FILE *file);
 
 #ifdef __cplusplus
 }

@@ -373,17 +373,21 @@ bredr_status_t bredr_bitstream_decoder_push_bit(bredr_bitstream_decoder_t *proc,
 int            bredr_bitstream_decoder_get_frame(bredr_bitstream_decoder_t *proc, bredr_frame_t *out);
 
 /**
- * @brief Compute the 8-bit HEC for a 10-bit header value and a known UAP.
+ * @brief Recover the candidate UAP from a 10-bit header value and the 8-bit HEC.
  *
- * Exposed publicly so that external modules (e.g. bredr_piconet) can
- * verify HEC without duplicating the LFSR logic.
+ * This is the Bluetooth HEC *decode* (the inverse of the hardware HEC
+ * generation).  It is exposed publicly so that external modules (e.g.
+ * bredr_piconet) can recover the UAP without duplicating the LFSR logic.
+ *
+ * The HEC only narrows the UAP to one of (up to) 36 reachable values for a
+ * given header; the payload CRC must be used to disambiguate the true UAP.
  *
  * @param data  10 header bits: bit 0 = LT_ADDR[0] (first transmitted),
  *              bit 9 = SEQN (last transmitted before HEC).
- * @param uap   8-bit Upper Address Part used to seed the LFSR.
- * @return      8-bit HEC register; bit 7 is the first bit transmitted.
+ * @param hec   8-bit HEC register; bit 7 is the first bit transmitted.
+ * @return      candidate 8-bit UAP.
  */
-uint8_t        bredr_compute_hec(uint16_t data, uint8_t uap);
+uint8_t        bredr_decode_uap_from_hec(uint16_t data, uint8_t hec);
 
 /**
  * @brief Return the maximum on-air payload bits for a given TYPE code.

@@ -6,7 +6,7 @@ usage() {
 Usage: $0 <build-dir> --version <ver> --qt-prefix <path> --output <deb-path>
 
 Build a vendor .deb for supertooth.  Bundles all 4 binaries plus Qt 6.8
-and radio library dependencies (hackrf, liquid-dsp, libbtbb) inside the
+and radio library dependencies (hackrf, liquid-dsp) inside the
 package under /opt/supertooth.
 
 Layout:
@@ -399,10 +399,10 @@ if [[ -d "$QT_PREFIX/qml" ]]; then
 fi
 
 # ------------------------------------------------------------------
-# Also bundle radio libs from the system (hackrf, liquid, btbb)
+# Also bundle radio libs from the system (hackrf, liquid)
 # ------------------------------------------------------------------
 echo "=== Bundling radio library dependencies ==="
-for libpattern in libhackrf.so* libliquid.so* libbtbb.so*; do
+for libpattern in libhackrf.so* libliquid.so*; do
     for dir in "${SYSTEM_LIB_DIRS[@]}"; do
         for libpath in "$dir/$libpattern"; do
             [[ -f "$libpath" ]] && copy_lib_with_symlinks "$libpath"
