@@ -1,6 +1,6 @@
 /**
- * @file bredr_recovery_native.c
- * @brief Repository-owned BR/EDR UAP / CLK1-6 recovery backend.
+ * @file bredr_clock_recovery.c
+ * @brief BR/EDR UAP / CLK1-6 clock recovery.
  *
  * Clean-room reimplementation of libbtbb's BR/EDR UAP/CLK1-6 recovery.  All
  * low-level primitives (1/3 and 2/3 FEC decode, dewhitening, HEC decode,
@@ -19,7 +19,7 @@
  *     positives are downgraded to inconclusive (high false-positive rate).
  */
 
-#include "bredr_recovery_native.h"
+#include "bredr_clock_recovery.h"
 
 #include "bredr_codec.h"
 #include "bredr_bitstream_decoder.h"
@@ -27,7 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define NATIVE_CLK6_CANDIDATES 64
+#define CLK6_CANDIDATES 64
 
 #define PT_FHS   2
 #define PT_DV    8
@@ -44,9 +44,9 @@
 #define PT_EV4   12
 #define PT_EV5   13
 
-struct bredr_recovery_native_state
+struct bredr_recovery_state
 {
-    int clock6_candidates[NATIVE_CLK6_CANDIDATES];
+    int clock6_candidates[CLK6_CANDIDATES];
     uint8_t uap;
     int clk_offset;
     uint32_t first_pkt_time;
@@ -56,55 +56,9 @@ struct bredr_recovery_native_state
     int clk6_valid;
 };
 
-/* --- bit helpers (packed LSB-first bit buffers) --- */
-
-static uint8_t nb_get_bit(const uint8_t *p, unsigned int i)
+static void state_clear(bredr_recovery_state_t *st)
 {
-    return (uint8_t)((p[i / 8u] >> (i % 8u)) & 1u);
-}
-
-static void nb_set_bit(uint8_t *p, unsigned int i, uint8_t b)
-{
-    if (b & 1u)
-        p[i / 8u] |= (uint8_t)(1u << (i % 8u));
-}
-
-static uint8_t native_field8(const uint8_t *bits, unsigned int off, unsigned int n)
-{
-    uint8_t v = 0u;
-    for (unsigned int i = 0u; i < n; i++)
-        v |= (uint8_t)(nb_get_bit(bits, off + i) << i);
-    return v;
-}
-
-static uint16_t native_field16(const uint8_t *bits, unsigned int off, unsigned int n)
-{
-    uint16_t v = 0u;
-    for (unsigned int i = 0u; i < n; i++)
-        v |= (uint16_t)(nb_get_bit(bits, off + i) << i);
-    return v;
-}
-
-static void native_pack_header_raw(uint64_t header_raw, uint8_t packed[7])
-{
-    memset(packed, 0, 7u);
-    for (unsigned int bit = 0u; bit < 54u; bit++)
-        if (header_raw & ((uint64_t)1u << bit))
-            packed[bit / 8u] |= (uint8_t)(1u << (bit % 8u));
-}
-
-static void native_copy_syms(const uint8_t *packed, unsigned int bit_off,
-                             unsigned int nbits, uint8_t *out)
-{
-    unsigned int bytes = (nbits + 7u) / 8u;
-    memset(out, 0, bytes);
-    for (unsigned int i = 0u; i < nbits; i++)
-        nb_set_bit(out, i, nb_get_bit(packed, bit_off + i));
-}
-
-static void native_state_clear(bredr_recovery_native_state_t *st)
-{
-    for (int i = 0; i < NATIVE_CLK6_CANDIDATES; i++)
+    for (int i = 0; i < CLK6_CANDIDATES; i++)
         st->clock6_candidates[i] = -1;
     st->uap = 0u;
     st->clk_offset = 0;
@@ -115,40 +69,39 @@ static void native_state_clear(bredr_recovery_native_state_t *st)
     st->clk6_valid = 0;
 }
 
-void bredr_recovery_native_global_init(uint8_t max_ac_errors)
+void bredr_recovery_global_init(uint8_t max_ac_errors)
 {
     (void)max_ac_errors;
 }
 
-bredr_recovery_native_state_t *bredr_recovery_native_state_create(uint32_t lap)
+bredr_recovery_state_t *bredr_recovery_state_create(uint32_t lap)
 {
     (void)lap;
-    bredr_recovery_native_state_t *state =
-        (bredr_recovery_native_state_t *)calloc(1, sizeof(*state));
+    bredr_recovery_state_t *state =
+        (bredr_recovery_state_t *)calloc(1, sizeof(*state));
     if (!state)
         return NULL;
-    native_state_clear(state);
+    state_clear(state);
     return state;
 }
 
-void bredr_recovery_native_state_destroy(bredr_recovery_native_state_t *state)
+void bredr_recovery_state_destroy(bredr_recovery_state_t *state)
 {
     free(state);
 }
 
-void bredr_recovery_native_state_reset(bredr_recovery_native_state_t *state,
-                                       uint32_t lap)
+void bredr_recovery_state_reset(bredr_recovery_state_t *state, uint32_t lap)
 {
     (void)lap;
     if (state)
-        native_state_clear(state);
+        state_clear(state);
 }
 
 /* --- header decode (mirror libbtbb try_clock) --- */
 
-static uint8_t native_try_clock(const bredr_frame_t *frame,
-                                uint8_t clock,
-                                uint8_t *type_out)
+static uint8_t try_clock(const bredr_frame_t *frame,
+                         uint8_t clock,
+                         uint8_t *type_out)
 {
     uint8_t packed_header[7];
     uint8_t header[18];
@@ -156,7 +109,7 @@ static uint8_t native_try_clock(const bredr_frame_t *frame,
     unsigned int decoded_bits = 0u;
     int be;
 
-    native_pack_header_raw(frame->header_raw, packed_header);
+    bredr_pack_header_raw(frame->header_raw, packed_header);
     be = bredr_fec_decode_1_3(packed_header, 54u, header, &decoded_bits);
     if (be < 0 || decoded_bits != 18u || be >= 4)
         return 0;
@@ -164,16 +117,16 @@ static uint8_t native_try_clock(const bredr_frame_t *frame,
     bredr_dewhiten_air_payload_bytes(header, 18u, clock, 0u, unwhitened,
                                      sizeof(unwhitened));
 
-    uint16_t hdr_data = native_field16(unwhitened, 0u, 10u);
-    uint8_t hec = native_field8(unwhitened, 10u, 8u);
-    *type_out = native_field8(unwhitened, 3u, 4u);
+    uint16_t hdr_data = (uint16_t)bredr_read_packed_field(unwhitened, 0u, 10u);
+    uint8_t hec = (uint8_t)bredr_read_packed_field(unwhitened, 10u, 8u);
+    *type_out = (uint8_t)bredr_read_packed_field(unwhitened, 3u, 4u);
     return bredr_decode_uap_from_hec(hdr_data, hec);
 }
 
 /* --- payload CRC checkers (mirror libbtbb fhs/DM/DH/EV3/EV4/EV5/HV) --- */
 /* return: 0 hard negative, 1 inconclusive, 2 likely, 10 positive, 1000 FHS. */
 
-static int native_fhs(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
+static int fhs(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
 {
     int size = (int)frame->air_payload_bits;
     int payload_length = 20;
@@ -186,7 +139,7 @@ static int native_fhs(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
     if (size < payload_length * 12)
         return 1;
 
-    native_copy_syms(frame->air_payload, 0u, (unsigned)(payload_length * 12), raw);
+    bredr_copy_packed_bits(frame->air_payload, 0u, (unsigned)(payload_length * 12), raw);
     if (bredr_fec_decode_2_3(raw, (unsigned)(payload_length * 12), corrected, &cb) < 0)
         return 0;
 
@@ -195,7 +148,7 @@ static int native_fhs(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
                                      sizeof(payload));
 
     crc = bredr_payload_crc(payload, 144u, uap); /* (20-2)*8 */
-    chk = native_field16(payload, 144u, 16u);
+    chk = (uint16_t)bredr_read_packed_field(payload, 144u, 16u);
     if (crc == chk)
         return 1000;
 
@@ -206,20 +159,20 @@ static int native_fhs(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
         bredr_dewhiten_air_payload_bytes(corrected, 160u, (uint8_t)c, 18u, p2,
                                          sizeof(p2));
         crc = bredr_payload_crc(p2, 144u, uap);
-        chk = native_field16(p2, 144u, 16u);
+        chk = (uint16_t)bredr_read_packed_field(p2, 144u, 16u);
         if (crc == chk)
             return 1000;
     }
     return 0;
 }
 
-static int native_decode_payload_header(const uint8_t *stream,
-                                        unsigned int sym_off,
-                                        int size,
-                                        int fec,
-                                        int header_bytes,
-                                        uint8_t clock,
-                                        int *payload_length_out)
+static int decode_payload_header(const uint8_t *stream,
+                                 unsigned int sym_off,
+                                 int size,
+                                 int fec,
+                                 int header_bytes,
+                                 uint8_t clock,
+                                 int *payload_length_out)
 {
     uint8_t ph[3] = {0};
 
@@ -234,7 +187,7 @@ static int native_decode_payload_header(const uint8_t *stream,
             unsigned int cb = 0u;
             if (size < 30)
                 return 0;
-            native_copy_syms(stream, sym_off, 24u, raw);
+            bredr_copy_packed_bits(stream, sym_off, 24u, raw);
             if (bredr_fec_decode_2_3(raw, 24u, cor, &cb) < 0)
                 return 0;
             bredr_dewhiten_air_payload_bytes(cor, 16u, clock, 18u, ph, sizeof(ph));
@@ -242,10 +195,10 @@ static int native_decode_payload_header(const uint8_t *stream,
         else
         {
             uint8_t raw[2];
-            native_copy_syms(stream, sym_off, 16u, raw);
+            bredr_copy_packed_bits(stream, sym_off, 16u, raw);
             bredr_dewhiten_air_payload_bytes(raw, 16u, clock, 18u, ph, sizeof(ph));
         }
-        *payload_length_out = (int)native_field16(ph, 3u, 10u) + 4;
+        *payload_length_out = (int)bredr_read_packed_field(ph, 3u, 10u) + 4;
     }
     else
     {
@@ -258,7 +211,7 @@ static int native_decode_payload_header(const uint8_t *stream,
             unsigned int cb = 0u;
             if (size < 15)
                 return 0;
-            native_copy_syms(stream, sym_off, 12u, raw);
+            bredr_copy_packed_bits(stream, sym_off, 12u, raw);
             if (bredr_fec_decode_2_3(raw, 12u, cor, &cb) < 0)
                 return 0;
             bredr_dewhiten_air_payload_bytes(cor, 8u, clock, 18u, ph, sizeof(ph));
@@ -266,16 +219,16 @@ static int native_decode_payload_header(const uint8_t *stream,
         else
         {
             uint8_t raw[1];
-            native_copy_syms(stream, sym_off, 8u, raw);
+            bredr_copy_packed_bits(stream, sym_off, 8u, raw);
             bredr_dewhiten_air_payload_bytes(raw, 8u, clock, 18u, ph, sizeof(ph));
         }
-        *payload_length_out = (int)native_field8(ph, 3u, 5u) + 3;
+        *payload_length_out = (int)bredr_read_packed_field(ph, 3u, 5u) + 3;
     }
     return 1;
 }
 
-static int native_DM(const bredr_frame_t *frame, uint8_t clock, uint8_t type,
-                     uint8_t uap)
+static int dm(const bredr_frame_t *frame, uint8_t clock, uint8_t type,
+              uint8_t uap)
 {
     const uint8_t *stream = frame->air_payload;
     int size = (int)frame->air_payload_bits;
@@ -306,8 +259,8 @@ static int native_DM(const bredr_frame_t *frame, uint8_t clock, uint8_t type,
         return 0;
     }
 
-    if (!native_decode_payload_header(stream, sym_off, size, 1, header_bytes,
-                                      clock, &payload_length))
+    if (!decode_payload_header(stream, sym_off, size, 1, header_bytes,
+                               clock, &payload_length))
         return 0;
     if (payload_length > max_length)
         return 1;
@@ -325,7 +278,7 @@ static int native_DM(const bredr_frame_t *frame, uint8_t clock, uint8_t type,
     uint8_t payload[300];
     unsigned int cb = 0u;
 
-    native_copy_syms(stream, sym_off, encoded, raw);
+    bredr_copy_packed_bits(stream, sym_off, encoded, raw);
     if (bredr_fec_decode_2_3(raw, encoded, corrected, &cb) < 0)
         return 0;
 
@@ -335,14 +288,14 @@ static int native_DM(const bredr_frame_t *frame, uint8_t clock, uint8_t type,
 
     uint16_t crc = bredr_payload_crc(payload, (unsigned)(payload_length - 2) * 8u,
                                      uap);
-    uint16_t chk = native_field16(payload, (unsigned)(payload_length - 2) * 8u, 16u);
+    uint16_t chk = (uint16_t)bredr_read_packed_field(payload, (unsigned)(payload_length - 2) * 8u, 16u);
     if (crc == chk)
         return 10;
     return 2;
 }
 
-static int native_DH(const bredr_frame_t *frame, uint8_t clock, uint8_t type,
-                     uint8_t uap)
+static int dh(const bredr_frame_t *frame, uint8_t clock, uint8_t type,
+              uint8_t uap)
 {
     const uint8_t *stream = frame->air_payload;
     int size = (int)frame->air_payload_bits;
@@ -367,8 +320,8 @@ static int native_DH(const bredr_frame_t *frame, uint8_t clock, uint8_t type,
         return 0;
     }
 
-    if (!native_decode_payload_header(stream, 0u, size, 0, header_bytes, clock,
-                                      &payload_length))
+    if (!decode_payload_header(stream, 0u, size, 0, header_bytes, clock,
+                               &payload_length))
         return 0;
     if (payload_length > max_length)
         return 1;
@@ -387,13 +340,13 @@ static int native_DH(const bredr_frame_t *frame, uint8_t clock, uint8_t type,
 
     uint16_t crc = bredr_payload_crc(payload, (unsigned)(payload_length - 2) * 8u,
                                      uap);
-    uint16_t chk = native_field16(payload, (unsigned)(payload_length - 2) * 8u, 16u);
+    uint16_t chk = (uint16_t)bredr_read_packed_field(payload, (unsigned)(payload_length - 2) * 8u, 16u);
     if (crc == chk)
         return 10;
     return 2;
 }
 
-static int native_EV3(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
+static int ev3(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
 {
     const uint8_t *stream = frame->air_payload;
     int size = (int)frame->air_payload_bits;
@@ -418,7 +371,7 @@ static int native_EV3(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
         {
             unsigned int data_bits = (unsigned)(payload_length - 2) * 8u;
             uint16_t crc = bredr_payload_crc(payload, data_bits, uap);
-            uint16_t chk = native_field16(payload, data_bits, 16u);
+            uint16_t chk = (uint16_t)bredr_read_packed_field(payload, data_bits, 16u);
             if (crc == chk)
                 return 10;
         }
@@ -426,7 +379,7 @@ static int native_EV3(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
     return 2;
 }
 
-static int native_EV4(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
+static int ev4(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
 {
     const uint8_t *stream = frame->air_payload;
     int size = (int)frame->air_payload_bits;
@@ -448,7 +401,7 @@ static int native_EV4(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
             return 1;
 
         uint8_t raw[2];
-        native_copy_syms(stream, (unsigned)syms, 15u, raw);
+        bredr_copy_packed_bits(stream, (unsigned)syms, 15u, raw);
         if (bredr_fec_decode_2_3(raw, 15u, corrected, &cb) < 0)
         {
             if (syms < minlength)
@@ -460,13 +413,14 @@ static int native_EV4(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
         bredr_dewhiten_air_payload_bytes(corrected, 10u, clock,
                                          (unsigned)(18 + bits), chunk, 2);
         for (int i = 0; i < 10; i++)
-            nb_set_bit(payload, (unsigned)(bits + i), nb_get_bit(chunk, (unsigned)i));
+            bredr_set_packed_bit(payload, (unsigned)(bits + i),
+                                 bredr_get_packed_bit(chunk, (unsigned)i));
 
         while (payload_length > 2 && payload_length * 8 <= bits)
         {
             unsigned int data_bits = (unsigned)(payload_length - 2) * 8u;
             uint16_t crc = bredr_payload_crc(payload, data_bits, uap);
-            uint16_t chk = native_field16(payload, data_bits, 16u);
+            uint16_t chk = (uint16_t)bredr_read_packed_field(payload, data_bits, 16u);
             if (crc == chk)
                 return 10;
             payload_length++;
@@ -478,7 +432,7 @@ static int native_EV4(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
     return 2;
 }
 
-static int native_EV5(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
+static int ev5(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
 {
     const uint8_t *stream = frame->air_payload;
     int size = (int)frame->air_payload_bits;
@@ -503,7 +457,7 @@ static int native_EV5(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
         {
             unsigned int data_bits = (unsigned)(payload_length - 2) * 8u;
             uint16_t crc = bredr_payload_crc(payload, data_bits, uap);
-            uint16_t chk = native_field16(payload, data_bits, 16u);
+            uint16_t chk = (uint16_t)bredr_read_packed_field(payload, data_bits, 16u);
             if (crc == chk)
                 return 10;
         }
@@ -511,7 +465,7 @@ static int native_EV5(const bredr_frame_t *frame, uint8_t clock, uint8_t uap)
     return 2;
 }
 
-static int native_HV(const bredr_frame_t *frame, uint8_t clock, uint8_t type)
+static int hv(const bredr_frame_t *frame, uint8_t clock, uint8_t type)
 {
     const uint8_t *stream = frame->air_payload;
     int size = (int)frame->air_payload_bits;
@@ -535,7 +489,7 @@ static int native_HV(const bredr_frame_t *frame, uint8_t clock, uint8_t type)
     {
         uint8_t raw[20];
         uint8_t cor[20];
-        native_copy_syms(stream, 0u, 240u, raw);
+        bredr_copy_packed_bits(stream, 0u, 240u, raw);
         if (bredr_fec_decode_2_3(raw, 240u, cor, &cb) < 0)
             return 0;
         memset(payload, 0, sizeof(payload));
@@ -554,38 +508,38 @@ static int native_HV(const bredr_frame_t *frame, uint8_t clock, uint8_t type)
     return 2;
 }
 
-static int native_crc_check(const bredr_frame_t *frame, uint8_t clock,
-                            uint8_t type, uint8_t uap)
+static int crc_check(const bredr_frame_t *frame, uint8_t clock,
+                     uint8_t type, uint8_t uap)
 {
     int retval = 1;
 
     switch (type & 0x0Fu)
     {
     case PT_FHS:
-        retval = native_fhs(frame, clock, uap);
+        retval = fhs(frame, clock, uap);
         break;
     case PT_DV:
     case PT_DM1:
     case PT_DM3:
     case PT_DM5:
-        retval = native_DM(frame, clock, type, uap);
+        retval = dm(frame, clock, type, uap);
         break;
     case PT_DH1:
     case PT_DH3:
     case PT_DH5:
-        retval = native_DH(frame, clock, type, uap);
+        retval = dh(frame, clock, type, uap);
         break;
     case PT_HV3: /* EV3 */
-        retval = native_EV3(frame, clock, uap);
+        retval = ev3(frame, clock, uap);
         break;
     case PT_EV4:
-        retval = native_EV4(frame, clock, uap);
+        retval = ev4(frame, clock, uap);
         break;
     case PT_EV5:
-        retval = native_EV5(frame, clock, uap);
+        retval = ev5(frame, clock, uap);
         break;
     case PT_HV1:
-        retval = native_HV(frame, clock, type);
+        retval = hv(frame, clock, type);
         break;
     default:
         break;
@@ -598,11 +552,10 @@ static int native_crc_check(const bredr_frame_t *frame, uint8_t clock,
     return retval;
 }
 
-static int native_process(bredr_recovery_native_state_t *st,
-                          const bredr_frame_t *frame,
-                          uint32_t clkn,
-                          uint8_t *uap_out,
-                          uint8_t *clk6_hint_out)
+static int process(bredr_recovery_state_t *st,
+                   const bredr_frame_t *frame,
+                   uint32_t clkn,
+                   bredr_recovery_result_t *out)
 {
     if (!st || !frame || !frame->has_header)
         return 0;
@@ -617,19 +570,19 @@ static int native_process(bredr_recovery_native_state_t *st,
     int remaining = 0;
     int first_clock = 0;
 
-    for (int count = 0; count < NATIVE_CLK6_CANDIDATES; count++)
+    for (int count = 0; count < CLK6_CANDIDATES; count++)
     {
         if (st->clock6_candidates[count] > -1 || !st->got_first_packet)
         {
             int clock = (count + (int)(clk1 - st->first_pkt_time)) & 0x3f;
 
             uint8_t type = 0u;
-            uint8_t UAP = native_try_clock(frame, (uint8_t)clock, &type);
+            uint8_t UAP = try_clock(frame, (uint8_t)clock, &type);
 
             int crc_chk = -1;
 
             if (!st->got_first_packet || UAP == (uint8_t)st->clock6_candidates[count])
-                crc_chk = native_crc_check(frame, (uint8_t)clock, type, UAP);
+                crc_chk = crc_check(frame, (uint8_t)clock, type, UAP);
 
             if (st->uap_valid && UAP != st->uap)
                 crc_chk = -1;
@@ -651,10 +604,8 @@ static int native_process(bredr_recovery_native_state_t *st,
                 st->uap = UAP;
                 st->uap_valid = 1;
                 st->clk6_valid = 1;
-                if (uap_out)
-                    *uap_out = UAP;
-                if (clk6_hint_out)
-                    *clk6_hint_out = (uint8_t)st->clk_offset;
+                out->uap = UAP;
+                out->clk6_hint = (uint8_t)st->clk_offset;
                 return 1;
             }
         }
@@ -668,78 +619,28 @@ static int native_process(bredr_recovery_native_state_t *st,
         st->uap = (uint8_t)st->clock6_candidates[first_clock];
         st->uap_valid = 1;
         st->clk6_valid = 1;
-        if (uap_out)
-            *uap_out = st->uap;
-        if (clk6_hint_out)
-            *clk6_hint_out = (uint8_t)st->clk_offset;
+        out->uap = st->uap;
+        out->clk6_hint = (uint8_t)st->clk_offset;
         return 1;
     }
 
     if (remaining == 0)
     {
-        native_state_clear(st);
+        state_clear(st);
         return 0;
     }
 
     return 0;
 }
 
-int bredr_recovery_native_process_packet(bredr_recovery_native_state_t *state,
-                                         const bredr_frame_t *frame,
-                                         int channel,
-                                         uint32_t clkn,
-                                         uint8_t *uap_out,
-                                         uint8_t *clk6_hint_out)
+int bredr_recovery_process_packet(bredr_recovery_state_t *state,
+                                  const bredr_frame_t *frame,
+                                  int channel,
+                                  uint32_t clkn,
+                                  bredr_recovery_result_t *out)
 {
     (void)channel;
-    return native_process(state, frame, clkn, uap_out, clk6_hint_out);
-}
-
-static bredr_recovery_backend_state_t *native_state_create_adapter(uint32_t lap)
-{
-    return (bredr_recovery_backend_state_t *)bredr_recovery_native_state_create(lap);
-}
-
-static void native_state_destroy_adapter(bredr_recovery_backend_state_t *state)
-{
-    bredr_recovery_native_state_destroy((bredr_recovery_native_state_t *)state);
-}
-
-static void native_state_reset_adapter(bredr_recovery_backend_state_t *state,
-                                       uint32_t lap)
-{
-    bredr_recovery_native_state_reset((bredr_recovery_native_state_t *)state, lap);
-}
-
-static int native_process_packet_adapter(bredr_recovery_backend_state_t *state,
-                                         const bredr_frame_t *frame,
-                                         int channel,
-                                         uint32_t clkn,
-                                         bredr_recovery_result_t *out)
-{
-    uint8_t uap = 0u;
-    uint8_t clk6_hint = 0u;
-
     if (!out)
         return 0;
-
-    if (!bredr_recovery_native_process_packet((bredr_recovery_native_state_t *)state,
-                                              frame, channel, clkn, &uap, &clk6_hint))
-        return 0;
-
-    out->uap = uap;
-    out->clk6_hint = clk6_hint;
-    return 1;
-}
-
-const bredr_recovery_backend_ops_t *bredr_recovery_native_backend(void)
-{
-    static const bredr_recovery_backend_ops_t ops = {
-        .global_init = bredr_recovery_native_global_init,
-        .state_create = native_state_create_adapter,
-        .state_destroy = native_state_destroy_adapter,
-        .state_reset = native_state_reset_adapter,
-        .process_packet = native_process_packet_adapter,
-    };
-    return &ops;
+    return process(state, frame, clkn, out);
 }

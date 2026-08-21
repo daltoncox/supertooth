@@ -1,10 +1,15 @@
 /**
- * @file bredr_recovery.h
- * @brief Backend-neutral BR/EDR recovery interface owned by Supertooth.
+ * @file bredr_clock_recovery.h
+ * @brief BR/EDR UAP / CLK1-6 clock recovery.
+ *
+ * Native reimplementation of libbtbb's UAP/CLK1-6 recovery.  All low-level
+ * primitives (1/3 and 2/3 FEC decode, dewhitening, HEC/CRC verification) are
+ * provided by bredr_codec.c; this module implements only the recovery
+ * orchestration (the 64 clock-candidate solve) on top of them.
  */
 
-#ifndef BREDR_RECOVERY_H
-#define BREDR_RECOVERY_H
+#ifndef BREDR_CLOCK_RECOVERY_H
+#define BREDR_CLOCK_RECOVERY_H
 
 #include <stdint.h>
 
@@ -37,4 +42,4 @@ int bredr_recovery_process_packet(bredr_recovery_state_t *state,
 }
 #endif
 
-#endif /* BREDR_RECOVERY_H */
+#endif /* BREDR_CLOCK_RECOVERY_H */

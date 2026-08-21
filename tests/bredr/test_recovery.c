@@ -17,8 +17,7 @@
 
 #include "bredr_bitstream_decoder.h"
 #include "bredr_codec.h"
-#include "bredr_recovery.h"
-#include "bredr_recovery_native.h"
+#include "bredr_clock_recovery.h"
 #include "golden_vectors.h"
 
 static int g_failures = 0;
@@ -35,7 +34,7 @@ static int g_failures = 0;
 
 static void run_case(const golden_case_t *c)
 {
-    bredr_recovery_native_state_t *st = bredr_recovery_native_state_create(0x123456u);
+    bredr_recovery_state_t *st = bredr_recovery_state_create(0x123456u);
     TEST_ASSERT(st != NULL);
 
     int recovered = 0;
@@ -61,13 +60,13 @@ static void run_case(const golden_case_t *c)
          * production clock model: clkn advances 2 ticks (one slot) per
          * packet and frames are whitened with CLK1-6 = (clkn >> 1) & 0x3f,
          * exactly as bredr_piconet_store feeds the recovery backend. */
-        uint8_t u = 0u, clk = 0u;
-        int rc = bredr_recovery_native_process_packet(st, &frame, 0, p->clkn, &u, &clk);
+        bredr_recovery_result_t r;
+        int rc = bredr_recovery_process_packet(st, &frame, 0, p->clkn, &r);
         if (rc)
         {
             recovered = 1;
-            got_uap = u;
-            got_clk6 = clk;
+            got_uap = r.uap;
+            got_clk6 = r.clk6_hint;
             converged_at = k;
         }
     }
@@ -86,7 +85,7 @@ static void run_case(const golden_case_t *c)
                    got_uap, got_clk6, converged_at + 1);
     }
 
-    bredr_recovery_native_state_destroy(st);
+    bredr_recovery_state_destroy(st);
 }
 
 int main(void)

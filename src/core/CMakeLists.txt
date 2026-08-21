@@ -107,9 +107,7 @@ add_library(supertooth_core STATIC
     protocol/bredr/bredr_piconet.c protocol/bredr/bredr_piconet.h
     protocol/bredr/bredr_piconet_store.c protocol/bredr/bredr_piconet_store.h
     protocol/bredr/bredr_tracker.c protocol/bredr/bredr_tracker.h
-    protocol/bredr/bredr_recovery.c protocol/bredr/bredr_recovery.h
-    protocol/bredr/bredr_recovery_backend.h
-    protocol/bredr/bredr_recovery_native.c protocol/bredr/bredr_recovery_native.h
+    protocol/bredr/bredr_clock_recovery.c protocol/bredr/bredr_clock_recovery.h
     radio/radio_common.c radio/radio_common.h
     radio/sample_dispatcher.c radio/sample_dispatcher.h
     radio/hackrf.c radio/hackrf.h

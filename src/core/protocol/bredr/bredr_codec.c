@@ -34,14 +34,14 @@ static const uint8_t s_whitening_data[127] = {
     1,1,1,0,1,1,1,0,0,0,0,1,1,1,1
 };
 
-static uint8_t read_packed_bit(const uint8_t *data, unsigned int bit_pos)
+uint8_t bredr_get_packed_bit(const uint8_t *data, unsigned int bit_pos)
 {
     unsigned int byte_idx = bit_pos / 8u;
     unsigned int bit_idx = bit_pos % 8u;
     return (uint8_t)((data[byte_idx] >> bit_idx) & 1u);
 }
 
-static void write_packed_bit(uint8_t *data, unsigned int bit_pos, uint8_t bit)
+void bredr_set_packed_bit(uint8_t *data, unsigned int bit_pos, uint8_t bit)
 {
     unsigned int byte_idx = bit_pos / 8u;
     unsigned int bit_idx = bit_pos % 8u;
@@ -49,16 +49,27 @@ static void write_packed_bit(uint8_t *data, unsigned int bit_pos, uint8_t bit)
         data[byte_idx] |= (uint8_t)(1u << bit_idx);
 }
 
-static uint32_t read_packed_field(const uint8_t *data,
-                                  unsigned int bit_offset,
-                                  unsigned int bit_count)
+uint32_t bredr_read_packed_field(const uint8_t *data,
+                                 unsigned int bit_offset,
+                                 unsigned int bit_count)
 {
     uint32_t value = 0u;
 
     for (unsigned int i = 0u; i < bit_count; i++)
-        value |= (uint32_t)read_packed_bit(data, bit_offset + i) << i;
+        value |= (uint32_t)bredr_get_packed_bit(data, bit_offset + i) << i;
 
     return value;
+}
+
+void bredr_copy_packed_bits(const uint8_t *src,
+                            unsigned int bit_off,
+                            unsigned int nbits,
+                            uint8_t *dst)
+{
+    unsigned int bytes = (nbits + 7u) / 8u;
+    memset(dst, 0, bytes);
+    for (unsigned int i = 0u; i < nbits; i++)
+        bredr_set_packed_bit(dst, i, bredr_get_packed_bit(src, bit_off + i));
 }
 
 static bredr_payload_family_t bredr_classify_family(uint8_t type_code)
@@ -168,13 +179,13 @@ static uint8_t bredr_fec_2_3_remainder(uint16_t codeword)
     return (uint8_t)(rem & 0x1Fu);
 }
 
-static void bredr_pack_header_raw(uint64_t header_raw, uint8_t packed[7])
+void bredr_pack_header_raw(uint64_t header_raw, uint8_t packed[7])
 {
     memset(packed, 0, 7u);
     for (unsigned int bit = 0u; bit < 54u; bit++)
     {
         if (header_raw & ((uint64_t)1u << bit))
-            write_packed_bit(packed, bit, 1u);
+            bredr_set_packed_bit(packed, bit, 1u);
     }
 }
 
@@ -263,8 +274,8 @@ unsigned int bredr_dewhiten_air_payload_bytes(const uint8_t *src_air,
 
     for (unsigned int bit_pos = 0u; bit_pos < src_air_bits && (bit_pos / 8u) < bytes; bit_pos++)
     {
-        uint8_t bit = read_packed_bit(src_air, bit_pos) ^ s_whitening_data[index];
-        write_packed_bit(dst, bit_pos, bit);
+        uint8_t bit = bredr_get_packed_bit(src_air, bit_pos) ^ s_whitening_data[index];
+        bredr_set_packed_bit(dst, bit_pos, bit);
         index = (index + 1u) % 127u;
     }
 
@@ -459,7 +470,7 @@ uint16_t bredr_payload_crc(const uint8_t *data,
 
     for (unsigned int i = 0u; i < bit_count; i++)
     {
-        uint8_t bit = read_packed_bit(data, i);
+        uint8_t bit = bredr_get_packed_bit(data, i);
         reg = (uint16_t)((reg >> 1) | (((reg & 0x0001u) ^ (bit & 0x01u)) << 15));
         reg = (uint16_t)(reg ^ ((reg & 0x8000u) >> 5));
         reg = (uint16_t)(reg ^ ((reg & 0x8000u) >> 12));
@@ -678,13 +689,13 @@ int bredr_fec_decode_1_3(const uint8_t *input_bits,
     for (unsigned int out_bit = 0u; out_bit < decoded_bit_count; out_bit++)
     {
         unsigned int bit_base = out_bit * 3u;
-        unsigned int ones = read_packed_bit(input_bits, bit_base)
-                          + read_packed_bit(input_bits, bit_base + 1u)
-                          + read_packed_bit(input_bits, bit_base + 2u);
+        unsigned int ones = bredr_get_packed_bit(input_bits, bit_base)
+                          + bredr_get_packed_bit(input_bits, bit_base + 1u)
+                          + bredr_get_packed_bit(input_bits, bit_base + 2u);
         uint8_t decoded = (uint8_t)(ones >= 2u);
 
         error_count += decoded ? (int)(3u - ones) : (int)ones;
-        write_packed_bit(output_bits, out_bit, decoded);
+        bredr_set_packed_bit(output_bits, out_bit, decoded);
     }
 
     *output_bit_count = decoded_bit_count;
@@ -711,7 +722,7 @@ int bredr_fec_decode_2_3(const uint8_t *input_bits,
     {
         unsigned int input_offset = block * 15u;
         unsigned int output_offset = block * 10u;
-        uint16_t corrected = (uint16_t)read_packed_field(input_bits, input_offset, 15u);
+        uint16_t corrected = (uint16_t)bredr_read_packed_field(input_bits, input_offset, 15u);
 
         if (bredr_fec_2_3_remainder(corrected) != 0u)
         {
@@ -734,7 +745,7 @@ int bredr_fec_decode_2_3(const uint8_t *input_bits,
         }
 
         for (unsigned int bit = 0u; bit < 10u; bit++)
-            write_packed_bit(output_bits, output_offset + bit, (uint8_t)((corrected >> bit) & 1u));
+            bredr_set_packed_bit(output_bits, output_offset + bit, (uint8_t)((corrected >> bit) & 1u));
     }
 
     *output_bit_count = decoded_bit_count;
@@ -769,9 +780,9 @@ int valid_fec_1_3_blocks(const uint8_t *input_bits,
     for (unsigned int out_bit = 0u; out_bit < input_bit_count / 3u; out_bit++)
     {
         unsigned int bit_base = out_bit * 3u;
-        unsigned int ones = (unsigned int)read_packed_bit(input_bits, bit_base)
-                          + (unsigned int)read_packed_bit(input_bits, bit_base + 1u)
-                          + (unsigned int)read_packed_bit(input_bits, bit_base + 2u);
+        unsigned int ones = (unsigned int)bredr_get_packed_bit(input_bits, bit_base)
+                          + (unsigned int)bredr_get_packed_bit(input_bits, bit_base + 1u)
+                          + (unsigned int)bredr_get_packed_bit(input_bits, bit_base + 2u);
 
         if (ones == 0u || ones == 3u)
             valid_count++;
@@ -791,7 +802,7 @@ int valid_fec_2_3_blocks(const uint8_t *input_bits,
     for (unsigned int block = 0u; block < input_bit_count / 15u; block++)
     {
         unsigned int input_offset = block * 15u;
-        uint16_t codeword = (uint16_t)read_packed_field(input_bits, input_offset, 15u);
+        uint16_t codeword = (uint16_t)bredr_read_packed_field(input_bits, input_offset, 15u);
 
         if (bredr_fec_2_3_remainder(codeword) == 0u)
             valid_count++;
@@ -848,7 +859,7 @@ void bredr_decode_header_bits(const bredr_frame_t *frame, uint8_t clk6, uint8_t 
     }
 
     for (unsigned int i = 0u; i < 18u; i++)
-        bits[i] = read_packed_bit(decoded_header, i);
+        bits[i] = bredr_get_packed_bit(decoded_header, i);
 
     int index = (int)s_whitening_indices[clk6 & 0x3fu];
     for (int i = 0; i < 18; i++)

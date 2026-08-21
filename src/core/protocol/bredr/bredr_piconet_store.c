@@ -6,7 +6,7 @@
 #include "bredr_piconet_store.h"
 #include "bredr_codec.h"
 #include "bredr_bitstream_decoder.h"
-#include "bredr_recovery.h"
+#include "bredr_clock_recovery.h"
 
 #include <stdlib.h>
 #include <stdio.h>

@@ -4,7 +4,7 @@
  *
  * This is the Phase 3 harness: with no IQ/file replay path in the radio stack,
  * a real capture is recorded via bredr_piconet_store_set_frame_dump() and
- * replayed here through bredr_recovery_native_process_packet() to confirm the
+ * replayed here through bredr_recovery_process_packet() to confirm the
  * aligned recovery produces a stable, expected UAP.
  *
  * Usage:
@@ -20,7 +20,7 @@
 #include <string.h>
 
 #include "bredr_bitstream_decoder.h"
-#include "bredr_recovery_native.h"
+#include "bredr_clock_recovery.h"
 #include "bredr_piconet_store.h"
 
 #define FRAME_DUMP_MAGIC   0x53544C44u
@@ -54,7 +54,7 @@ int main(void)
         return 1;
     }
 
-    bredr_recovery_native_state_t *st = NULL;
+    bredr_recovery_state_t *st = NULL;
     int records = 0;
     int recovered = 0;
     uint8_t got_uap = 0;
@@ -77,8 +77,8 @@ int main(void)
         if (st == NULL || rec.lap != last_lap)
         {
             if (st)
-                bredr_recovery_native_state_destroy(st);
-            st = bredr_recovery_native_state_create(rec.lap);
+                bredr_recovery_state_destroy(st);
+            st = bredr_recovery_state_create(rec.lap);
             last_lap = rec.lap;
         }
 
@@ -95,12 +95,12 @@ int main(void)
             nbytes = sizeof(fr.air_payload);
         memcpy(fr.air_payload, rec.air_payload, nbytes);
 
-        uint8_t u = 0, c = 0;
-        if (bredr_recovery_native_process_packet(st, &fr, (int)rec.channel, rec.clkn, &u, &c))
+        bredr_recovery_result_t r;
+        if (bredr_recovery_process_packet(st, &fr, (int)rec.channel, rec.clkn, &r))
         {
             recovered = 1;
-            got_uap = u;
-            got_clk = c;
+            got_uap = r.uap;
+            got_clk = r.clk6_hint;
             break;
         }
         records++;
@@ -108,7 +108,7 @@ int main(void)
 
     fclose(f);
     if (st)
-        bredr_recovery_native_state_destroy(st);
+        bredr_recovery_state_destroy(st);
 
     printf("test_replay_frame_dump: replayed %d records from %s\n", records, path);
 

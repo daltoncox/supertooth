@@ -6,7 +6,7 @@
  * libbtbb's reference primitives (HEC, CRC, whitening, FEC), feeds the exact
  * same frame sequences to:
  *
- *   1. the supertooth native backend (bredr_recovery_native), and
+ *   1. the supertooth native backend (bredr_clock_recovery), and
  *   2. the real libbtbb btbb_uap_from_header() via btbb_test_adapter,
  *
  * and asserts that both stacks report the same outcome: recovered-or-not,
@@ -23,7 +23,7 @@
 #include <string.h>
 
 #include "bredr_bitstream_decoder.h"
-#include "bredr_recovery_native.h"
+#include "bredr_clock_recovery.h"
 #include "btbb_test_adapter.h"
 
 /* libbtbb type codes (bluetooth_packet.h) */
@@ -475,24 +475,24 @@ static void make_bredr_frame(const pframe_t *pf, uint32_t lap, bredr_frame_t *ou
 static void run_scenario(const char *name, uint32_t lap, scen_pkt_t *pkts, int n)
 {
     /* Native backend. */
-    bredr_recovery_native_state_t *st = bredr_recovery_native_state_create(lap);
+    bredr_recovery_state_t *st = bredr_recovery_state_create(lap);
     int nat_rec = 0, nat_idx = -1;
     uint8_t nat_uap = 0, nat_clk = 0;
     for (int i = 0; i < n; i++)
     {
         bredr_frame_t fr;
         make_bredr_frame(&pkts[i].f, lap, &fr);
-        uint8_t u = 0, c = 0;
-        if (bredr_recovery_native_process_packet(st, &fr, 0, pkts[i].clkn, &u, &c))
+        bredr_recovery_result_t r;
+        if (bredr_recovery_process_packet(st, &fr, 0, pkts[i].clkn, &r))
         {
             nat_rec = 1;
             nat_idx = i;
-            nat_uap = u;
-            nat_clk = c;
+            nat_uap = r.uap;
+            nat_clk = r.clk6_hint;
             break;
         }
     }
-    bredr_recovery_native_state_destroy(st);
+    bredr_recovery_state_destroy(st);
 
     /* Real libbtbb. */
     btbb_piconet *pn = btbb_test_piconet_new(lap);

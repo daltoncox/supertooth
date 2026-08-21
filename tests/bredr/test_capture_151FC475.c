@@ -1,12 +1,12 @@
 #include <stdio.h>
 #include <string.h>
 #include "bredr_codec.h"
-#include "bredr_recovery_native.h"
+#include "bredr_clock_recovery.h"
 #include "capture_151FC475.h"
 
 int main(void)
 {
-    bredr_recovery_native_state_t *st = bredr_recovery_native_state_create(CAP_LAP);
+    bredr_recovery_state_t *st = bredr_recovery_state_create(CAP_LAP);
     if (!st) { fprintf(stderr,"state create failed\n"); return 1; }
     int recovered=0;
     uint8_t got_uap=0, got_clk=0;
@@ -20,14 +20,14 @@ int main(void)
         unsigned nbytes=(p->air_payload_bits+7u)/8u;
         if(nbytes>sizeof(f.air_payload)) nbytes=sizeof(f.air_payload);
         memcpy(f.air_payload,p->air_payload,nbytes);
-        uint8_t u=0,clk=0;
-        int rc = bredr_recovery_native_process_packet(st,&f,p->channel,p->clkn,&u,&clk);
-        if(rc){ recovered=1; got_uap=u; got_clk=clk; printf("recovered at pkt %d: UAP=0x%02X clk6=%u\n",i,u,clk); break; }
+        bredr_recovery_result_t r;
+        int rc = bredr_recovery_process_packet(st,&f,p->channel,p->clkn,&r);
+        if(rc){ recovered=1; got_uap=r.uap; got_clk=r.clk6_hint; printf("recovered at pkt %d: UAP=0x%02X clk6=%u\n",i,got_uap,got_clk); break; }
     }
     if(!recovered){ fprintf(stderr,"FAIL: LAP 0x%08X never recovered (true UAP 0x%02X)\n", CAP_LAP, CAP_TRUE_UAP); return 1; }
     if(got_uap != CAP_TRUE_UAP){ fprintf(stderr,"FAIL: LAP 0x%08X wrong UAP got 0x%02X expected 0x%02X\n", CAP_LAP, got_uap, CAP_TRUE_UAP); return 1; }
     printf("PASS: LAP 0x%08X correctly recovered UAP 0x%02X (clk6 %u)\n", CAP_LAP, got_uap, got_clk);
-    bredr_recovery_native_state_destroy(st);
+    bredr_recovery_state_destroy(st);
 
     // 0-gap check: for every packet, decoding with its *true* clock must yield true UAP
     // and for every of the 64 clock hypotheses, native decode must match libbtbb oracle

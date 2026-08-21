@@ -140,6 +140,19 @@ typedef struct
 uint8_t bredr_reverse_byte(uint8_t b);
 uint8_t bredr_decode_uap_from_hec(uint16_t data, uint8_t hec);
 
+/* --- packed bit-buffer helpers (LSB-first within each byte) --- */
+
+uint8_t bredr_get_packed_bit(const uint8_t *data, unsigned int bit_pos);
+void bredr_set_packed_bit(uint8_t *data, unsigned int bit_pos, uint8_t bit);
+uint32_t bredr_read_packed_field(const uint8_t *data,
+                                 unsigned int bit_offset,
+                                 unsigned int bit_count);
+void bredr_copy_packed_bits(const uint8_t *src,
+                            unsigned int bit_off,
+                            unsigned int nbits,
+                            uint8_t *dst);
+void bredr_pack_header_raw(uint64_t header_raw, uint8_t packed[7]);
+
 /**
  * @brief Decode 1/3-rate FEC bits packed LSB-first.
  *

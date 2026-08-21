@@ -14,7 +14,7 @@
  * ----------------------------
  * Each entry in the store owns recovery backend state used to accumulate
  * header packets for UAP recovery.  The backend is repository-owned
- * (src/core/protocol/bredr/bredr_recovery_native.c); the dependency on
+ * (src/core/protocol/bredr/bredr_clock_recovery.c); the dependency on
  * external libraries is intentionally hidden behind repository-owned wrappers.
  * Once the backend reports a valid UAP, the store scans all 64 CLK1-6
  * candidates using HEC verification and calls `bredr_piconet_set_uap()` to
