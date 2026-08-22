@@ -54,7 +54,7 @@ int main(void)
         return 1;
     }
 
-    bredr_recovery_state_t *st = NULL;
+    bredr_piconet_t *pnet = NULL;
     int records = 0;
     int recovered = 0;
     uint8_t got_uap = 0;
@@ -74,11 +74,16 @@ int main(void)
             return 1;
         }
 
-        if (st == NULL || rec.lap != last_lap)
+        if (!pnet || rec.lap != last_lap)
         {
-            if (st)
-                bredr_recovery_state_destroy(st);
-            st = bredr_recovery_state_create(rec.lap);
+            free(pnet);
+            pnet = malloc(sizeof(*pnet));
+            if (!pnet)
+            {
+                fclose(f);
+                return 1;
+            }
+            bredr_piconet_init(pnet, rec.lap);
             last_lap = rec.lap;
         }
 
@@ -88,15 +93,15 @@ int main(void)
         fr.lap = rec.lap;
         fr.header_raw = rec.header_raw;
         fr.air_payload_bits = rec.air_payload_bits > BR_MAX_AIR_PAYLOAD_BITS
-                                  ? BR_MAX_AIR_PAYLOAD_BITS
-                                  : rec.air_payload_bits;
+                                   ? BR_MAX_AIR_PAYLOAD_BITS
+                                   : rec.air_payload_bits;
         unsigned int nbytes = (fr.air_payload_bits + 7u) / 8u;
         if (nbytes > sizeof(fr.air_payload))
             nbytes = sizeof(fr.air_payload);
         memcpy(fr.air_payload, rec.air_payload, nbytes);
 
         bredr_recovery_result_t r;
-        if (bredr_recovery_process_packet(st, &fr, (int)rec.channel, rec.clkn, &r))
+        if (bredr_recovery_process_packet(pnet, &fr, (int)rec.channel, rec.clkn, &r))
         {
             recovered = 1;
             got_uap = r.uap;
@@ -106,9 +111,9 @@ int main(void)
         records++;
     }
 
+    free(pnet);
+
     fclose(f);
-    if (st)
-        bredr_recovery_state_destroy(st);
 
     printf("test_replay_frame_dump: replayed %d records from %s\n", records, path);
 

@@ -565,8 +565,7 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
         snapshot.uap_found      = pnet->uap_found;
         snapshot.uap            = pnet->uap;
         snapshot.clk_known      = pnet->clk_known;
-        snapshot.central_clk_1_6        = pnet->central_clk_1_6;
-        snapshot.last_successful_rx_clk_1600 = pnet->last_successful_rx_clk_1600;
+        snapshot.central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);
         snapshot.tracking_state = pnet->tracking_state;
         snapshot.total_packets  = pnet->total_packets;
         snapshot.combined_rssi_seen = pnet->combined_rssi_seen;
@@ -603,8 +602,7 @@ int session_bredr_piconet_snapshot(const session_t *session,
     out->uap_found      = pnet->uap_found;
     out->uap            = pnet->uap;
     out->clk_known      = pnet->clk_known;
-    out->central_clk_1_6        = pnet->central_clk_1_6;
-    out->last_successful_rx_clk_1600 = pnet->last_successful_rx_clk_1600;
+    out->central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);
     out->tracking_state = pnet->tracking_state;
     out->total_packets  = pnet->total_packets;
     out->combined_rssi_seen = pnet->combined_rssi_seen;

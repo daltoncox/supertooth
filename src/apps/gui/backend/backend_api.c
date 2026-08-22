@@ -509,13 +509,7 @@ static int bredr_gui_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
     if (have_uap)
         *uap_out = pnet->uap;
     if (have_clk)
-    {
-        uint64_t num = meta->radio_start_sample_index * 1600u
-                     + (uint64_t)(meta->radio_sample_rate_hz / 2u);
-        uint32_t rx_clk_1600 = (uint32_t)(num / (uint64_t)meta->radio_sample_rate_hz);
-        uint32_t delta = rx_clk_1600 - pnet->last_successful_rx_clk_1600;
-        *clk1_6_out = (uint8_t)((pnet->central_clk_1_6 + delta) & 0x3Fu);
-    }
+        *clk1_6_out = pnet->central_clk_1_6;
     return have_uap && have_clk;
 }
 

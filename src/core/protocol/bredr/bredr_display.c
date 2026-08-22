@@ -81,13 +81,10 @@ static uint32_t bredr_sample_to_rx_clk_1600(uint64_t radio_start_sample_index,
 }
 
 static int bredr_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
-                                     const rx_metadata_t *meta,
-                                     uint8_t *uap_out,
-                                     uint8_t *clk1_6_out)
+                                      const rx_metadata_t *meta,
+                                      uint8_t *uap_out,
+                                      uint8_t *clk1_6_out)
 {
-    uint32_t rx_clk_1600;
-    uint32_t delta;
-
     if (!uap_out || !clk1_6_out)
         return 0;
 
@@ -100,12 +97,7 @@ static int bredr_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
     if (pnet->uap_found)
         *uap_out = pnet->uap;
     if (pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u)
-    {
-        rx_clk_1600 = bredr_sample_to_rx_clk_1600(meta->radio_start_sample_index,
-                                                  meta->radio_sample_rate_hz);
-        delta = rx_clk_1600 - pnet->last_successful_rx_clk_1600;
-        *clk1_6_out = (uint8_t)((pnet->central_clk_1_6 + delta) & 0x3Fu);
-    }
+        *clk1_6_out = pnet->central_clk_1_6;
 
     return pnet->uap_found && pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u;
 }
@@ -373,7 +365,8 @@ void bredr_print_piconet_snapshot(const bredr_piconet_snapshot_t *pnet)
         printf("  UAP: ??");
 
     if (pnet->clk_known)
-        printf("  CLK1-6: %02u [state=%d]", pnet->central_clk_1_6, pnet->tracking_state);
+        printf("  CLK1-6: %02u [state=%d]", pnet->central_clk_1_6,
+               pnet->tracking_state);
     else
         printf("  CLK1-6: ?? [state=%d]", pnet->tracking_state);
 

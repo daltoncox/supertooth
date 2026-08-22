@@ -9,18 +9,21 @@
  * identified by its 24-bit LAP.  It maintains a circular ring buffer of the
  * 1024 most recently received BR/EDR events.
  *
- * UAP and initial clock resolution is delegated to the recovery backend by the
- * calling application.  Once the UAP and an initial CLK1-6 value are known,
- * the caller invokes `bredr_piconet_set_uap()` to transition the piconet into
- * clock-tracking mode.  In this mode every subsequent header packet is used
- * to verify and — if necessary — correct the central CLK1-6 estimate by
- * checking the HEC with the known UAP and trying CLK1-6 offsets of ±1 and
- * ±2.
+ * UAP and initial clock resolution is performed natively by the recovery
+ * module (bredr_clock_recovery.c) operating directly on these fields.  Once
+ * the UAP and an initial CLK1-6 value are known, the recovery module calls
+ * `bredr_piconet_set_uap()` to transition the piconet into clock-tracking
+ * mode.  In this mode every subsequent header packet is used to verify and —
+ * if necessary — correct the clock by checking the HEC with the known UAP and
+ * trying the tracked clock offset and its ±1, ±2 neighbours to absorb drift.
  *
- * Once the clock is established, incoming packets are tagged as master or
- * slave transmissions using slot parity (CLK1): even slot = master, odd slot
- * = slave. Per-role RSSI is tracked as an exponentially averaged value by
- * default (configurable, including disabled mode).
+ * The piconet does not store an absolute central clock; instead it keeps a
+ * single `clock_offset` such that the central CLK1-6 at any received packet is
+ * `(rx_clk_1600 + clock_offset) mod 64`.  Once the clock is established,
+ * incoming packets are tagged as master or slave transmissions using slot
+ * parity (CLK1): even slot = master, odd slot = slave. Per-role RSSI is
+ * tracked as an exponentially averaged value by default (configurable,
+ * including disabled mode).
  *
  * Memory notes
  * ------------
@@ -57,6 +60,9 @@ extern "C"
 /** Number of packets retained in each piconet's ring buffer. */
 #define BREDR_PICONET_QUEUE_SIZE 1024u
 
+/** Number of CLK1-6 candidates tracked during UAP/clock acquisition. */
+#define BREDR_CLK6_CANDIDATES 64
+
     /* ---------------------------------------------------------------------------
      * bredr_piconet_t
      * ---------------------------------------------------------------------------*/
@@ -69,7 +75,7 @@ extern "C"
      */
     typedef struct
     {
-        /* -- Identity ---------------------------------------------------------- */
+        /* -- Identity (info) --------------------------------------------------- */
 
         /** 24-bit Lower Address Part. */
         uint32_t lap;
@@ -77,7 +83,7 @@ extern "C"
         /** 8-bit Upper Address Part.  Valid only when uap_found != 0. */
         uint8_t uap;
 
-        /** Non-zero once the UAP has been provided via bredr_piconet_set_uap(). */
+        /** Non-zero once the UAP is known (tentative during recovery, then confirmed). */
         int uap_found;
 
         /* -- Clock tracking (valid once uap_found && clk_known) ---------------- */
@@ -85,14 +91,14 @@ extern "C"
         /** Non-zero once CLK1-6 has been established via bredr_piconet_set_uap(). */
         int clk_known;
 
-        /** Current best central CLK1-6 estimate (0–63). */
-        uint8_t central_clk_1_6;
-
         /**
-         * Packet rx_clk_1600 timestamp of the last packet that successfully passed
-         * HEC with the tracked central_clk_1_6.
+         * Offset between the piconet's central clock and the receiver clock.
+         * The central CLK1-6 of any received packet is:
+         *   (rx_clk_1600 + clock_offset) mod 64.
+         * Tracking tries this offset, then ±1 and ±2, correcting clock_offset
+         * when the two clocks have drifted.
          */
-        uint32_t last_successful_rx_clk_1600;
+        int clock_offset;
 
         /**
          * Clock tracking confidence:
@@ -102,7 +108,22 @@ extern "C"
          */
         int tracking_state;
 
-        /* -- Aggregate RSSI (used before tracking lock) ---------------------- */
+        /* -- Recovery: UAP / CLK1-6 acquisition working state ------------------ */
+
+        /**
+         * Per CLK1-6 index (0–63): the tentative UAP recovered for that clock
+         * candidate, or -1 if the candidate has been pruned.  Managed by the
+         * recovery module (bredr_clock_recovery.c) while acquiring the UAP.
+         */
+        int recovery_candidates[BREDR_CLK6_CANDIDATES];
+
+        /** clkn>>1 of the first packet fed to acquisition (anchors candidate clocks). */
+        uint32_t recovery_first_pkt_time;
+
+        /** Non-zero once at least one packet has been fed to acquisition. */
+        int recovery_got_first_packet;
+
+        /* -- Aggregate RSSI (used before tracking lock) ----------------------- */
 
         /** Most recent RSSI (dBr) while no active clock track exists. */
         float combined_rssi;
@@ -110,15 +131,19 @@ extern "C"
         /** Non-zero if combined_rssi contains a valid value. */
         int combined_rssi_seen;
 
-        /* -- Per-role RSSI (valid only with active track + HEC-pass packet) ----- */
+        /** Average RSSI over the last ~1 s, aggregate (pre-track-lock). */
+        rssi_window_state_t combined_rssi_win;
 
-        /**
-         * Most recent RSSI (dBr) for master transmissions (CLK1 == 0).
-         */
+        /* -- Per-role RSSI (valid with active track + HEC-pass packet) -------- */
+
+        /** Most recent RSSI (dBr) for master transmissions (CLK1 == 0). */
         float master_rssi;
 
         /** Non-zero if master_rssi contains a valid value. */
         int master_rssi_seen;
+
+        /** Average RSSI over the last ~1 s, master transmissions. */
+        rssi_window_state_t master_rssi_win;
 
         /**
          * Most recent RSSI (dBr) for slave transmissions, indexed by LT_ADDR
@@ -129,18 +154,10 @@ extern "C"
         /** Non-zero if slave_rssi[i] contains a valid value. */
         int slave_rssi_seen[8];
 
-        /* -- Rolling 1-second RSSI window (per role) ------------------------- */
-
-        /** Average RSSI over the last ~1 s, aggregate (pre-track-lock). */
-        rssi_window_state_t combined_rssi_win;
-
-        /** Average RSSI over the last ~1 s, master transmissions. */
-        rssi_window_state_t master_rssi_win;
-
         /** Average RSSI over the last ~1 s, slave transmissions (LT_ADDR). */
         rssi_window_state_t slave_rssi_win[8];
 
-        /* -- Ring buffer -------------------------------------------------------- */
+        /* -- Frames: ring buffer ---------------------------------------------- */
 
         /** Circular queue of the 1024 most recently received BR/EDR events. */
         bredr_event_t queue[BREDR_PICONET_QUEUE_SIZE];
@@ -154,7 +171,7 @@ extern "C"
         /** All-time count of packets received by this piconet. */
         unsigned long total_packets;
 
-        /* -- Per-member packet counts (for derived device rows) ----------- */
+        /* -- Per-member packet counts (derived device rows) ------------------- */
 
         /** Packets classified as master transmissions (CLK1 == 0). */
         unsigned long master_pkts;
@@ -222,14 +239,14 @@ extern "C"
      *
      * @param pnet          Must not be NULL.
      * @param uap           Solved 8-bit Upper Address Part.
-     * @param central_clk_1_6           Central CLK1-6 value (0–63) valid at
-     *                                  last_successful_rx_clk_1600.
-     * @param last_successful_rx_clk_1600  rx_clk_1600 of the packet at which
-     *                                      central_clk_1_6 is known-good.
+     * @param central_clk_1_6  Central CLK1-6 value (0–63) valid at the packet
+     *                          whose rx_clk_1600 is given below.
+     * @param rx_clk_1600       rx_clk_1600 of the packet at which
+     *                          central_clk_1_6 is known-good.
      */
     void bredr_piconet_set_uap(bredr_piconet_t *pnet, uint8_t uap,
-                               uint8_t central_clk_1_6,
-                               uint32_t last_successful_rx_clk_1600);
+                                uint8_t central_clk_1_6,
+                                uint32_t rx_clk_1600);
 
     /**
      * @brief Record only UAP (clock still unknown).
@@ -239,6 +256,30 @@ extern "C"
      * HEC-based clock acquisition occurs.
      */
     void bredr_piconet_set_uap_only(bredr_piconet_t *pnet, uint8_t uap);
+
+    /**
+     * @brief Compute the central CLK1-6 for a packet received at rx_clk_1600.
+     *
+     * Uses the tracked clock_offset: central = (rx_clk_1600 + clock_offset) mod 64.
+     *
+     * @param pnet        Must not be NULL.
+     * @param rx_clk_1600 Receiver slot-clock timestamp (625 µs/tick, 1600 Hz).
+     * @return            Central CLK1-6 value (0–63).
+     */
+    uint8_t bredr_piconet_central_clk_1_6(const bredr_piconet_t *pnet,
+                                          uint32_t rx_clk_1600);
+
+    /**
+     * @brief Convert a received event's start sample index to its rx_clk_1600
+     *        slot-clock timestamp (625 µs per tick, 1600 Hz).
+     */
+    uint32_t bredr_sample_to_rx_clk_1600(const bredr_event_t *event);
+
+    /**
+     * @brief Convert a received event's start sample index to its CLKN
+     *        timestamp (312.5 µs per tick, 3200 Hz).  CLKN = 2 * rx_clk_1600.
+     */
+    uint32_t bredr_sample_to_clkn(const bredr_event_t *event);
 
 
 #ifdef __cplusplus

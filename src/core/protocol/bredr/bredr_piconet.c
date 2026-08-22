@@ -22,6 +22,7 @@
 
 #include "bredr_piconet.h"
 #include "bredr_codec.h"
+#include "bredr_clock_recovery.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -49,7 +50,7 @@ static float update_rssi_value(float current, int seen, float sample,
     return alpha * sample + one_minus_alpha * current;
 }
 
-static uint32_t bredr_sample_to_rx_clk_1600(const bredr_event_t *event)
+uint32_t bredr_sample_to_rx_clk_1600(const bredr_event_t *event)
 {
     uint64_t num;
     unsigned int radio_sample_rate_hz;
@@ -62,7 +63,24 @@ static uint32_t bredr_sample_to_rx_clk_1600(const bredr_event_t *event)
         return 0u;
 
     num = event->meta.radio_start_sample_index * 1600u +
-          (uint64_t)(radio_sample_rate_hz / 2u);
+           (uint64_t)(radio_sample_rate_hz / 2u);
+    return (uint32_t)(num / (uint64_t)radio_sample_rate_hz);
+}
+
+uint32_t bredr_sample_to_clkn(const bredr_event_t *event)
+{
+    uint64_t num;
+    unsigned int radio_sample_rate_hz;
+
+    if (!event)
+        return 0u;
+
+    radio_sample_rate_hz = event->meta.radio_sample_rate_hz;
+    if (radio_sample_rate_hz == 0u)
+        return 0u;
+
+    num = event->meta.radio_start_sample_index * 3200u +
+           (uint64_t)(radio_sample_rate_hz / 2u);
     return (uint32_t)(num / (uint64_t)radio_sample_rate_hz);
 }
 
@@ -130,49 +148,6 @@ static int bredr_queue_insert_event(bredr_piconet_t *pnet,
 }
 
 /* ---------------------------------------------------------------------------
- * Clock tracking
- * ---------------------------------------------------------------------------*/
-
-/**
- * Verify the current CLK1-6 estimate against the incoming frame's header.
- * Tries the expected CLK1-6 (derived from last-success rx_clk_1600 delta),
- * then ±1 and ±2.  Updates central_clk_1_6 and
- * last_successful_rx_clk_1600 on success. Increments tracking_state on
- * success (capped at 5), decrements on failure, and clears clk_known once
- * tracking_state reaches 0.
- */
-static int update_clock(bredr_piconet_t *pnet,
-                        const bredr_frame_t *frame,
-                        uint32_t rx_clk_1600)
-{
-    uint32_t rx_clk_1600_delta = rx_clk_1600 - pnet->last_successful_rx_clk_1600;
-    int expected_clk6 = (int)((pnet->central_clk_1_6 + rx_clk_1600_delta) & 0x3f);
-
-    static const int offsets[] = {0, 1, -1, 2, -2};
-    for (int k = 0; k < 5; k++)
-    {
-        int candidate = ((expected_clk6 + offsets[k]) + 64) % 64;
-        if (bredr_hec_ok_for_clk6(frame, pnet->uap, (uint8_t)candidate))
-        {
-            pnet->central_clk_1_6 = (uint8_t)candidate;
-            pnet->last_successful_rx_clk_1600 = rx_clk_1600;
-            if (pnet->tracking_state < 5)
-                pnet->tracking_state++;
-            pnet->clk_known = 1;
-            return 1;
-        }
-    }
-
-    if (pnet->tracking_state > 0)
-        pnet->tracking_state--;
-
-    if (pnet->tracking_state == 0)
-        pnet->clk_known = 0;
-
-    return 0;
-}
-
-/* ---------------------------------------------------------------------------
  * bredr_piconet_t implementation
  * ---------------------------------------------------------------------------*/
 
@@ -185,6 +160,8 @@ void bredr_piconet_init(bredr_piconet_t *pnet, uint32_t lap)
     pnet->lap = lap & 0xFFFFFFu;
     pnet->tracking_state = -1;
 
+    bredr_piconet_recovery_reset(pnet);
+
     /* GIAC/LIAC: UAP is the well-known DCI value (0x00). */
     if (pnet->lap == BREDR_LAP_GIAC || pnet->lap == BREDR_LAP_LIAC)
     {
@@ -195,15 +172,14 @@ void bredr_piconet_init(bredr_piconet_t *pnet, uint32_t lap)
 
 void bredr_piconet_set_uap(bredr_piconet_t *pnet, uint8_t uap,
                            uint8_t central_clk_1_6,
-                           uint32_t last_successful_rx_clk_1600)
+                           uint32_t rx_clk_1600)
 {
     if (!pnet)
         return;
 
     pnet->uap = uap;
     pnet->uap_found = 1;
-    pnet->central_clk_1_6 = central_clk_1_6 & 0x3fu;
-    pnet->last_successful_rx_clk_1600 = last_successful_rx_clk_1600;
+    pnet->clock_offset = (int)((central_clk_1_6 - rx_clk_1600) & 0x3Fu);
     pnet->clk_known = 1;
     pnet->tracking_state = 1;
 }
@@ -219,6 +195,15 @@ void bredr_piconet_set_uap_only(bredr_piconet_t *pnet, uint8_t uap)
     pnet->tracking_state = -1;
 }
 
+uint8_t bredr_piconet_central_clk_1_6(const bredr_piconet_t *pnet,
+                                      uint32_t rx_clk_1600)
+{
+    if (!pnet)
+        return 0u;
+
+    return (uint8_t)((rx_clk_1600 + pnet->clock_offset) & 0x3Fu);
+}
+
 int bredr_piconet_add_packet(bredr_piconet_t *pnet,
                              const bredr_event_t *event,
                              unsigned int rssi_window,
@@ -228,6 +213,7 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
     int packet_is_newest;
     int has_active_track;
     uint32_t rx_clk_1600;
+    uint32_t clkn;
     uint64_t now = now_ms();
 
     if (!pnet || !event)
@@ -235,6 +221,7 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
     const bredr_frame_t *frame = &event->frame;
     const rx_metadata_t *meta = &event->meta;
     rx_clk_1600 = bredr_sample_to_rx_clk_1600(event);
+    clkn = bredr_sample_to_clkn(event);
 
     pnet->total_packets++;
     packet_is_newest = bredr_queue_insert_event(pnet, event);
@@ -256,18 +243,29 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
         rssi_window_add(&pnet->combined_rssi_win, meta->rssi_dbr, now);
     }
 
-    /* Directional RSSI accumulation requires active track + header packet. */
-    if (!packet_is_newest || !has_active_track || !frame->has_header)
+    /* Only the newest packet drives acquisition / tracking. */
+    if (!packet_is_newest)
         return packet_is_newest;
 
-    /* Update per-role RSSI only when current frame passes HEC under tracking. */
+    /* Still acquiring UAP/CLK1-6: feed the recovery engine. */
+    if (!has_active_track)
+    {
+        if (frame->has_header)
+            bredr_clock_recovery_acquire(pnet, event, clkn, rx_clk_1600);
+        return packet_is_newest;
+    }
+
+    /* Active track: verify/correct the clock, then accumulate directional RSSI. */
+    if (!frame->has_header)
+        return packet_is_newest;
+
     int hec_ok = 0;
     if (frame->ac_errors <= 1u)
-        hec_ok = update_clock(pnet, frame, rx_clk_1600);
+        hec_ok = bredr_clock_track_packet(pnet, frame, rx_clk_1600);
     if (!hec_ok || isnan(meta->rssi_dbr))
         return packet_is_newest;
 
-    uint8_t packet_clk6 = pnet->central_clk_1_6;
+    uint8_t packet_clk6 = bredr_piconet_central_clk_1_6(pnet, rx_clk_1600);
 
     /* Direction comes from the recovered central clock for this packet.
      * The local receive timeline is only used to recover that clock, not to

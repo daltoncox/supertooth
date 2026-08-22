@@ -107,8 +107,7 @@ typedef struct {
     int      uap_found;
 
     int      clk_known;             /**< nonzero once CLK1-6 established */
-    uint8_t  central_clk_1_6;       /**< best central CLK1-6 (0..63) */
-    uint32_t last_successful_rx_clk_1600; /**< ts of last HEC-verified pkt */
+    uint8_t  central_clk_1_6;       /**< current central CLK1-6 (0..63), derived */
     int      tracking_state;        /**< clock confidence (-1..5) */
 
     float    master_rssi;           /**< RSSI for master (CLK1 == 0) */

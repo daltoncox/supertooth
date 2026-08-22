@@ -475,7 +475,10 @@ static void make_bredr_frame(const pframe_t *pf, uint32_t lap, bredr_frame_t *ou
 static void run_scenario(const char *name, uint32_t lap, scen_pkt_t *pkts, int n)
 {
     /* Native backend. */
-    bredr_recovery_state_t *st = bredr_recovery_state_create(lap);
+    bredr_piconet_t *pnet = malloc(sizeof(*pnet));
+    if (!pnet)
+        return;
+    bredr_piconet_init(pnet, lap);
     int nat_rec = 0, nat_idx = -1;
     uint8_t nat_uap = 0, nat_clk = 0;
     for (int i = 0; i < n; i++)
@@ -483,7 +486,7 @@ static void run_scenario(const char *name, uint32_t lap, scen_pkt_t *pkts, int n
         bredr_frame_t fr;
         make_bredr_frame(&pkts[i].f, lap, &fr);
         bredr_recovery_result_t r;
-        if (bredr_recovery_process_packet(st, &fr, 0, pkts[i].clkn, &r))
+        if (bredr_recovery_process_packet(pnet, &fr, 0, pkts[i].clkn, &r))
         {
             nat_rec = 1;
             nat_idx = i;
@@ -492,7 +495,7 @@ static void run_scenario(const char *name, uint32_t lap, scen_pkt_t *pkts, int n
             break;
         }
     }
-    bredr_recovery_state_destroy(st);
+    free(pnet);
 
     /* Real libbtbb. */
     btbb_piconet *pn = btbb_test_piconet_new(lap);

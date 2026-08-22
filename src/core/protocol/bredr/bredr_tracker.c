@@ -239,8 +239,7 @@ size_t bredr_tracker_get_piconets(const bredr_tracker_t *t,
         s->uap = p->uap;
         s->uap_found = p->uap_found;
         s->clk_known = p->clk_known;
-        s->central_clk_1_6 = p->central_clk_1_6;
-        s->last_successful_rx_clk_1600 = p->last_successful_rx_clk_1600;
+        s->central_clk_1_6 = bredr_piconet_central_clk_1_6(p, p->last_seen);
         s->tracking_state = p->tracking_state;
 
         s->master_rssi = p->master_rssi;
