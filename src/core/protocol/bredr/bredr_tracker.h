@@ -50,7 +50,6 @@ typedef struct bredr_tracker_t {
 
 void bredr_tracker_init(bredr_tracker_t *t);
 void bredr_tracker_free(bredr_tracker_t *t);
-void bredr_tracker_set_rssi_averaging(bredr_tracker_t *t, unsigned int window);
 
 /** Ingest a BR/EDR event; drives recovery + member accounting. Returns the
  *  piconet that received it, or NULL on error. */

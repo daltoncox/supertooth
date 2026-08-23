@@ -70,8 +70,6 @@ int session_init(session_t *session, const session_config_t *cfg)
 
     ble_tracker_init(&session->ble_tracker);
     bredr_tracker_init(&session->bredr_tracker);
-    bredr_tracker_set_rssi_averaging(&session->bredr_tracker,
-                                     BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW);
     pthread_mutex_init(&session->bredr_mutex, NULL);
 
     return 0;
@@ -568,12 +566,14 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
         snapshot.central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);
         snapshot.tracking_state = pnet->tracking_state;
         snapshot.total_packets  = pnet->total_packets;
-        snapshot.combined_rssi_seen = pnet->combined_rssi_seen;
-        snapshot.combined_rssi      = pnet->combined_rssi;
-        snapshot.master_rssi_seen    = pnet->master_rssi_seen;
-        snapshot.master_rssi         = pnet->master_rssi;
-        memcpy(snapshot.slave_rssi_seen, pnet->slave_rssi_seen, sizeof(snapshot.slave_rssi_seen));
-        memcpy(snapshot.slave_rssi, pnet->slave_rssi, sizeof(snapshot.slave_rssi));
+        snapshot.combined_rssi_seen =
+            rssi_tracker_average(&pnet->combined_rssi_track, &snapshot.combined_rssi);
+        snapshot.master_rssi_seen =
+            rssi_tracker_average(&pnet->master_rssi_track, &snapshot.master_rssi);
+        for (int lt = 0; lt < 8; lt++)
+            snapshot.slave_rssi_seen[lt] =
+                rssi_tracker_average(&pnet->slave_rssi_track[lt],
+                                     &snapshot.slave_rssi[lt]);
         if (!packet_is_newest)
             snapshot.clk_known = 0;
         snapshot_ptr = &snapshot;
@@ -605,12 +605,14 @@ int session_bredr_piconet_snapshot(const session_t *session,
     out->central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);
     out->tracking_state = pnet->tracking_state;
     out->total_packets  = pnet->total_packets;
-    out->combined_rssi_seen = pnet->combined_rssi_seen;
-    out->combined_rssi      = pnet->combined_rssi;
-    out->master_rssi_seen    = pnet->master_rssi_seen;
-    out->master_rssi         = pnet->master_rssi;
-    memcpy(out->slave_rssi_seen, pnet->slave_rssi_seen, sizeof(out->slave_rssi_seen));
-    memcpy(out->slave_rssi, pnet->slave_rssi, sizeof(out->slave_rssi));
+    out->combined_rssi_seen =
+        rssi_tracker_average(&pnet->combined_rssi_track, &out->combined_rssi);
+    out->master_rssi_seen =
+        rssi_tracker_average(&pnet->master_rssi_track, &out->master_rssi);
+    for (int lt = 0; lt < 8; lt++)
+        out->slave_rssi_seen[lt] =
+            rssi_tracker_average(&pnet->slave_rssi_track[lt],
+                                 &out->slave_rssi[lt]);
     return 0;
 }
 

@@ -75,7 +75,6 @@ void ble_tracker_init(ble_tracker_t *t)
     t->conn_count = 0;
     t->conn_cap = 0;
     t->next_id = 1u;
-    t->rssi_avg_alpha = 2.0f / (16.0f + 1.0f);
     t->enforce_crc = 0;
     pthread_mutex_init(&t->lock, NULL);
 }
@@ -308,9 +307,8 @@ int ble_tracker_submit_frame(ble_tracker_t *t, const ble_event_t *event)
                 if (c->first_seen_ms == 0u)
                     c->first_seen_ms = now;
                 c->last_seen_ms = now;
-                double r = (double)event->meta.rssi_dbr;
-                if (!isnan(r))
-                    rssi_window_add(&c->rssi_win, r, now);
+                if (!isnan(event->meta.rssi_dbr))
+                    rssi_tracker_add(&c->rssi_track, &event->meta);
             }
             pthread_mutex_unlock(&t->lock);
         }
@@ -352,13 +350,15 @@ void ble_tracker_add_advertiser(ble_tracker_t *t,
 
     if (ev->rssi_valid)
     {
-        if (r->rssi_valid)
-            r->rssi_db = t->rssi_avg_alpha * ev->rssi_db +
-                         (1.0f - t->rssi_avg_alpha) * r->rssi_db;
-        else
-            r->rssi_db = ev->rssi_db;
-        r->rssi_valid = 1;
-        rssi_window_add(&r->rssi_win, ev->rssi_db, now);
+        /* Advertiser events carry only a scalar RSSI, not full sample
+         * metadata; synthesise a timestamp in milliseconds so the tracker's
+         * 1 s window still applies (1000 Hz sample clock, index = ms). */
+        rx_metadata_t meta;
+        memset(&meta, 0, sizeof(meta));
+        meta.radio_sample_rate_hz = 1000u;
+        meta.radio_start_sample_index = now;
+        meta.rssi_dbr = ev->rssi_db;
+        rssi_tracker_add(&r->rssi_track, &meta);
     }
 
     if (ev->addr_type && ev->addr_type[0])
@@ -423,16 +423,7 @@ size_t ble_tracker_get_devices(const ble_tracker_t *t,
         s->kind = ENTITY_BLE_DEVICE;
         format_addr_bytes(r->adv_addr, s->addr_str, sizeof(s->addr_str));
         snprintf(s->label, sizeof(s->label), "Advertiser");
-        if (rssi_window_has_data(&r->rssi_win))
-        {
-            s->rssi_db = (float)rssi_window_avg(&r->rssi_win);
-            s->rssi_valid = 1;
-        }
-        else
-        {
-            s->rssi_db = r->rssi_db;
-            s->rssi_valid = r->rssi_valid;
-        }
+        s->rssi_valid = rssi_tracker_average(&r->rssi_track, &s->rssi_db);
         s->first_seen_ms = r->first_seen_ms;
         s->last_seen_ms = r->last_seen_ms;
         s->total_packets = r->total_packets;
@@ -498,11 +489,8 @@ size_t ble_tracker_get_piconets(const ble_tracker_t *t,
         {
             int rssi_valid = 0;
             float rssi_db = 0.0f;
-            if (rssi_window_has_data(&c->rssi_win))
-            {
-                rssi_db = (float)rssi_window_avg(&c->rssi_win);
+            if (rssi_tracker_average(&c->rssi_track, &rssi_db))
                 rssi_valid = 1;
-            }
             else
             {
                 double sum = 0.0;
@@ -515,9 +503,10 @@ size_t ble_tracker_get_piconets(const ble_tracker_t *t,
                     if ((c->device_id_master && a->device_id == c->device_id_master) ||
                         (c->device_id_slave && a->device_id == c->device_id_slave))
                     {
-                        if (a->rssi_valid)
+                        float adv_rssi = 0.0f;
+                        if (rssi_tracker_average(&a->rssi_track, &adv_rssi))
                         {
-                            sum += a->rssi_db;
+                            sum += adv_rssi;
                             n++;
                         }
                     }

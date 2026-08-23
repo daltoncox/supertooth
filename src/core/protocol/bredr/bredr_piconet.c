@@ -27,28 +27,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
-#include <sys/time.h>
-
-static uint64_t now_ms(void)
-{
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (uint64_t)tv.tv_sec * 1000u + (uint64_t)tv.tv_usec / 1000u;
-}
-
-/* ---------------------------------------------------------------------------
- * RSSI averaging configuration
- * ---------------------------------------------------------------------------*/
-
-static float update_rssi_value(float current, int seen, float sample,
-                               unsigned int window, float alpha,
-                               float one_minus_alpha)
-{
-    if (!seen || window == 0u)
-        return sample;
-
-    return alpha * sample + one_minus_alpha * current;
-}
 
 uint32_t bredr_sample_to_rx_clk_1600(const bredr_event_t *event)
 {
@@ -160,6 +138,11 @@ void bredr_piconet_init(bredr_piconet_t *pnet, uint32_t lap)
     pnet->lap = lap & 0xFFFFFFu;
     pnet->tracking_state = -1;
 
+    rssi_tracker_init(&pnet->combined_rssi_track);
+    rssi_tracker_init(&pnet->master_rssi_track);
+    for (int i = 0; i < 8; i++)
+        rssi_tracker_init(&pnet->slave_rssi_track[i]);
+
     bredr_piconet_recovery_reset(pnet);
 
     /* GIAC/LIAC: UAP is the well-known DCI value (0x00). */
@@ -205,16 +188,12 @@ uint8_t bredr_piconet_central_clk_1_6(const bredr_piconet_t *pnet,
 }
 
 int bredr_piconet_add_packet(bredr_piconet_t *pnet,
-                             const bredr_event_t *event,
-                             unsigned int rssi_window,
-                             float rssi_alpha,
-                             float rssi_one_minus_alpha)
+                              const bredr_event_t *event)
 {
     int packet_is_newest;
     int has_active_track;
     uint32_t rx_clk_1600;
     uint32_t clkn;
-    uint64_t now = now_ms();
 
     if (!pnet || !event)
         return 0;
@@ -233,15 +212,9 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
 
     has_active_track = (pnet->uap_found && pnet->clk_known && pnet->tracking_state > 0);
 
-    /* Before track lock, keep only latest aggregate RSSI. */
+    /* Before track lock, accumulate aggregate RSSI from the newest packet. */
     if (packet_is_newest && !has_active_track && !isnan(meta->rssi_dbr))
-    {
-        pnet->combined_rssi =
-            update_rssi_value(pnet->combined_rssi, pnet->combined_rssi_seen, meta->rssi_dbr,
-                              rssi_window, rssi_alpha, rssi_one_minus_alpha);
-        pnet->combined_rssi_seen = 1;
-        rssi_window_add(&pnet->combined_rssi_win, meta->rssi_dbr, now);
-    }
+        rssi_tracker_add(&pnet->combined_rssi_track, meta);
 
     /* Only the newest packet drives acquisition / tracking. */
     if (!packet_is_newest)
@@ -273,11 +246,7 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
      * slave transmits when CLK1 == 1. */
     if ((packet_clk6 & 1u) == 0u)
     {
-        pnet->master_rssi =
-            update_rssi_value(pnet->master_rssi, pnet->master_rssi_seen, meta->rssi_dbr,
-                              rssi_window, rssi_alpha, rssi_one_minus_alpha);
-        pnet->master_rssi_seen = 1;
-        rssi_window_add(&pnet->master_rssi_win, meta->rssi_dbr, now);
+        rssi_tracker_add(&pnet->master_rssi_track, meta);
         pnet->master_pkts++;
     }
     else
@@ -285,11 +254,7 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
         uint8_t bits[18];
         bredr_decode_header_bits(frame, packet_clk6, bits);
         uint8_t lt = (bits[0]) | (uint8_t)(bits[1] << 1) | (uint8_t)(bits[2] << 2);
-        pnet->slave_rssi[lt] =
-            update_rssi_value(pnet->slave_rssi[lt], pnet->slave_rssi_seen[lt], meta->rssi_dbr,
-                              rssi_window, rssi_alpha, rssi_one_minus_alpha);
-        pnet->slave_rssi_seen[lt] = 1;
-        rssi_window_add(&pnet->slave_rssi_win[lt], meta->rssi_dbr, now);
+        rssi_tracker_add(&pnet->slave_rssi_track[lt], meta);
         pnet->slave_pkts[lt]++;
     }
 

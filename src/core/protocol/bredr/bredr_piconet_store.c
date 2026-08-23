@@ -106,25 +106,6 @@ static uint32_t sample_to_clkn(uint64_t radio_start_sample_index,
  * Public API
  * ---------------------------------------------------------------------------*/
 
-void bredr_piconet_store_set_rssi_averaging(bredr_piconet_store_t *store,
-                                            unsigned int window)
-{
-    if (!store)
-        return;
-
-    store->rssi_avg_window = window;
-    if (window == 0u)
-    {
-        store->rssi_avg_alpha = 1.0f;
-        store->rssi_avg_one_minus_alpha = 0.0f;
-    }
-    else
-    {
-        store->rssi_avg_alpha = 2.0f / ((float)window + 1.0f);
-        store->rssi_avg_one_minus_alpha = 1.0f - store->rssi_avg_alpha;
-    }
-}
-
 void bredr_piconet_store_init(bredr_piconet_store_t *store)
 {
     if (!store)
@@ -136,7 +117,6 @@ void bredr_piconet_store_init(bredr_piconet_store_t *store)
         store->capacity, sizeof(*store->entries));
 
     bredr_recovery_global_init(BREDR_AC_ERRORS_DEFAULT);
-    bredr_piconet_store_set_rssi_averaging(store, 16u);
 }
 
 void bredr_piconet_store_free(bredr_piconet_store_t *store)
@@ -199,10 +179,7 @@ bredr_piconet_t *bredr_piconet_store_add_packet(bredr_piconet_store_t *store,
 
     entry->has_last_clkn = 1;
 
-    packet_is_newest = bredr_piconet_add_packet(entry->pnet, event,
-                                                 store->rssi_avg_window,
-                                                 store->rssi_avg_alpha,
-                                                 store->rssi_avg_one_minus_alpha);
+    packet_is_newest = bredr_piconet_add_packet(entry->pnet, event);
 
     if (packet_is_newest_out)
         *packet_is_newest_out = packet_is_newest;

@@ -78,13 +78,6 @@ void bredr_tracker_free(bredr_tracker_t *t)
     memset(t, 0, sizeof(*t));
 }
 
-void bredr_tracker_set_rssi_averaging(bredr_tracker_t *t, unsigned int window)
-{
-    if (!t)
-        return;
-    bredr_piconet_store_set_rssi_averaging(&t->store, window);
-}
-
 /* ---------------------------------------------------------------------------
  * Internal: aux array + id allocation
  * ---------------------------------------------------------------------------*/
@@ -207,24 +200,27 @@ size_t bredr_tracker_get_piconets(const bredr_tracker_t *t,
         else
             snprintf(s->label, sizeof(s->label), "piconet");
 
-        if (rssi_window_has_data(&p->combined_rssi_win))
+        /* Pull the trailing-1 s RSSI averages out of the trackers. */
+        s->combined_rssi_seen =
+            rssi_tracker_average(&p->combined_rssi_track, &s->combined_rssi);
+        s->master_rssi_seen =
+            rssi_tracker_average(&p->master_rssi_track, &s->master_rssi);
+        for (int lt = 0; lt < 8; lt++)
         {
-            s->rssi_db = (float)rssi_window_avg(&p->combined_rssi_win);
+            s->slave_rssi_seen[lt] =
+                rssi_tracker_average(&p->slave_rssi_track[lt],
+                                     &s->slave_rssi[lt]);
+        }
+
+        /* Entity-level RSSI prefers the aggregate, then central. */
+        if (s->combined_rssi_seen)
+        {
+            s->rssi_db = s->combined_rssi;
             s->rssi_valid = 1;
         }
-        else if (p->combined_rssi_seen)
+        else if (s->master_rssi_seen)
         {
-            s->rssi_db = p->combined_rssi;
-            s->rssi_valid = 1;
-        }
-        else if (rssi_window_has_data(&p->master_rssi_win))
-        {
-            s->rssi_db = (float)rssi_window_avg(&p->master_rssi_win);
-            s->rssi_valid = 1;
-        }
-        else if (p->master_rssi_seen)
-        {
-            s->rssi_db = p->master_rssi;
+            s->rssi_db = s->master_rssi;
             s->rssi_valid = 1;
         }
         else
@@ -242,11 +238,6 @@ size_t bredr_tracker_get_piconets(const bredr_tracker_t *t,
         s->central_clk_1_6 = bredr_piconet_central_clk_1_6(p, p->last_seen);
         s->tracking_state = p->tracking_state;
 
-        s->master_rssi = p->master_rssi;
-        s->master_rssi_seen = p->master_rssi_seen;
-        memcpy(s->slave_rssi, p->slave_rssi, sizeof(s->slave_rssi));
-        memcpy(s->slave_rssi_seen, p->slave_rssi_seen,
-               sizeof(s->slave_rssi_seen));
 
         s->master_device_id = t->aux[i].master_device_id;
         memcpy(s->slave_device_id, t->aux[i].slave_device_id,
@@ -284,18 +275,8 @@ size_t bredr_tracker_get_devices(const bredr_tracker_t *t,
             format_addr_bredr(s->addr_str, sizeof(s->addr_str),
                               p->lap, p->uap, p->uap_found);
             snprintf(s->label, sizeof(s->label), "Central");
-            if (rssi_window_has_data(&p->master_rssi_win))
-            {
-                s->rssi_db = (float)rssi_window_avg(&p->master_rssi_win);
-                s->rssi_valid = 1;
-            }
-            else if (p->master_rssi_seen)
-            {
-                s->rssi_db = p->master_rssi;
-                s->rssi_valid = 1;
-            }
-            else
-                s->rssi_valid = 0;
+            s->rssi_valid =
+                rssi_tracker_average(&p->master_rssi_track, &s->rssi_db);
             s->first_seen_ms = clk_to_ms(t, p->first_seen);
             s->last_seen_ms = clk_to_ms(t, p->last_seen);
             s->total_packets = p->master_pkts;
@@ -318,18 +299,8 @@ size_t bredr_tracker_get_devices(const bredr_tracker_t *t,
             format_addr_bredr(s->addr_str, sizeof(s->addr_str),
                               p->lap, p->uap, p->uap_found);
             snprintf(s->label, sizeof(s->label), "LT_ADDR %d", lt);
-            if (rssi_window_has_data(&p->slave_rssi_win[lt]))
-            {
-                s->rssi_db = (float)rssi_window_avg(&p->slave_rssi_win[lt]);
-                s->rssi_valid = 1;
-            }
-            else if (p->slave_rssi_seen[lt])
-            {
-                s->rssi_db = p->slave_rssi[lt];
-                s->rssi_valid = 1;
-            }
-            else
-                s->rssi_valid = 0;
+            s->rssi_valid =
+                rssi_tracker_average(&p->slave_rssi_track[lt], &s->rssi_db);
             s->first_seen_ms = clk_to_ms(t, p->first_seen);
             s->last_seen_ms = clk_to_ms(t, p->last_seen);
             s->total_packets = p->slave_pkts[lt];

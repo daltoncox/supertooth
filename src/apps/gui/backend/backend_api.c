@@ -842,9 +842,7 @@ int backend_session_run_bredr(backend_session_t *session,
     if (session_init(session->session, &cfg) != 0)
         return -1;
 
-    session_bredr_config_t bredr_cfg = {
-        .rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW,
-    };
+    session_bredr_config_t bredr_cfg = { 0 };
     session_enable_bredr(session->session, &bredr_cfg, bredr_packet_trampoline, session);
     session_set_stopped_callback(session->session, backend_session_stopped_trampoline, session);
 
@@ -921,9 +919,7 @@ int backend_session_run_hybrid(backend_session_t *session,
     if (session_init(session->session, &cfg) != 0)
         return -1;
 
-    session_bredr_config_t bredr_cfg = {
-        .rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW,
-    };
+    session_bredr_config_t bredr_cfg = { 0 };
     session_enable_bredr(session->session, &bredr_cfg, bredr_packet_trampoline, session);
 
     /* BLE is always available on the hybrid window; the picked advertising

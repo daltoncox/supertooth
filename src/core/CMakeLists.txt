@@ -95,6 +95,8 @@ add_library(supertooth_core STATIC
     dsp/channelizer_bank.h
     models/receive_event_models.h
     models/phy.h
+    models/rssi_tracker.c
+    models/rssi_tracker.h
     protocol/ble/ble_display.c protocol/ble/ble_display.h
     protocol/ble/ble_codec.c protocol/ble/ble_codec.h
     protocol/ble/ble_bitstream_decoder.c protocol/ble/ble_bitstream_decoder.h

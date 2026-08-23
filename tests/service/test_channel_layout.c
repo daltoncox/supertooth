@@ -39,7 +39,7 @@ static int make_session(session_t *s, unsigned int bottom, unsigned int count,
     }
     if (enable_bredr)
     {
-        session_bredr_config_t bc = { .rssi_averaging_window = 16u };
+        session_bredr_config_t bc = { 0 };
         session_enable_bredr(s, &bc, NULL, NULL);
     }
     return session_tune(s, ref, bottom, count);

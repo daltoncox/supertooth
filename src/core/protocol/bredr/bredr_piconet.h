@@ -46,7 +46,7 @@
 
 #include "receive_event_models.h"
 #include "bredr_bitstream_decoder.h"
-#include "rssi_window.h"
+#include "rssi_tracker.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -125,37 +125,19 @@ extern "C"
 
         /* -- Aggregate RSSI (used before tracking lock) ----------------------- */
 
-        /** Most recent RSSI (dBr) while no active clock track exists. */
-        float combined_rssi;
-
-        /** Non-zero if combined_rssi contains a valid value. */
-        int combined_rssi_seen;
-
-        /** Average RSSI over the last ~1 s, aggregate (pre-track-lock). */
-        rssi_window_state_t combined_rssi_win;
+        /** RSSI tracker over the last ~1 s, aggregate (pre-track-lock). */
+        rssi_tracker_t combined_rssi_track;
 
         /* -- Per-role RSSI (valid with active track + HEC-pass packet) -------- */
 
-        /** Most recent RSSI (dBr) for master transmissions (CLK1 == 0). */
-        float master_rssi;
-
-        /** Non-zero if master_rssi contains a valid value. */
-        int master_rssi_seen;
-
-        /** Average RSSI over the last ~1 s, master transmissions. */
-        rssi_window_state_t master_rssi_win;
+        /** RSSI tracker over the last ~1 s, master transmissions (CLK1 == 0). */
+        rssi_tracker_t master_rssi_track;
 
         /**
-         * Most recent RSSI (dBr) for slave transmissions, indexed by LT_ADDR
-         * (0–7). Index 0 = broadcast / unaddressed frames from slaves.
+         * RSSI tracker over the last ~1 s for slave transmissions, indexed by
+         * LT_ADDR (0–7). Index 0 = broadcast / unaddressed frames from slaves.
          */
-        float slave_rssi[8];
-
-        /** Non-zero if slave_rssi[i] contains a valid value. */
-        int slave_rssi_seen[8];
-
-        /** Average RSSI over the last ~1 s, slave transmissions (LT_ADDR). */
-        rssi_window_state_t slave_rssi_win[8];
+        rssi_tracker_t slave_rssi_track[8];
 
         /* -- Frames: ring buffer ---------------------------------------------- */
 
@@ -217,18 +199,15 @@ extern "C"
      * candidates using
      * the known UAP's HEC.
      *
-    * If event metadata includes a valid RSSI value and the clock is known,
+     * If event metadata includes a valid RSSI value and the clock is known,
      * the latest role RSSI is updated: master (CLK1 == 0) or slave
      * (CLK1 == 1, indexed by LT_ADDR).
      *
      * @param pnet  Must not be NULL and must have been initialised.
-    * @param event BR/EDR event to add. Must not be NULL.
+     * @param event BR/EDR event to add. Must not be NULL.
      */
     int bredr_piconet_add_packet(bredr_piconet_t *pnet,
-                           const bredr_event_t *event,
-                           unsigned int rssi_window,
-                           float rssi_alpha,
-                           float rssi_one_minus_alpha);
+                           const bredr_event_t *event);
 
     /**
      * @brief Record the UAP and initial CLK1-6, as solved by the recovery backend.

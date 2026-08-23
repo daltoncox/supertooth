@@ -24,6 +24,7 @@ set(_supertooth_test_targets
     test_radio_list_devices
     test_channel_layout
     test_rssi_window
+    test_rssi_tracker
 )
 
 add_custom_target(tests)

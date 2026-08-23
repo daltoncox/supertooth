@@ -23,7 +23,7 @@
 #include "ble_piconet.h"
 #include "receive_event_models.h"
 #include "device_models.h"
-#include "rssi_window.h"
+#include "rssi_tracker.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,9 +54,7 @@ typedef struct {
     char     addr_type[DEVICE_ADDRTYPE_MAX];
     char     name[DEVICE_NAME_MAX];
     char     manufacturer[DEVICE_MANUF_MAX];
-    float    rssi_db;
-    int      rssi_valid;
-    rssi_window_state_t rssi_win;   /**< rolling 1 s average source */
+    rssi_tracker_t rssi_track;   /**< rolling 1 s average source */
     uint64_t first_seen_ms;
     uint64_t last_seen_ms;
     unsigned long total_packets;
@@ -77,7 +75,7 @@ typedef struct {
     int      state;
     uint64_t first_seen_ms;
     uint64_t last_seen_ms;
-    rssi_window_state_t rssi_win;   /**< rolling RSSI from accepted data
+    rssi_tracker_t rssi_track;   /**< rolling RSSI from accepted data
                                         frames (every data packet carries an
                                         RSSI), used to populate the piconet
                                         snapshot's signal strength */
@@ -93,7 +91,6 @@ typedef struct ble_tracker_t {
     size_t conn_count;
     size_t conn_cap;
     uint64_t next_id;
-    float    rssi_avg_alpha;
     int      enforce_crc;   /**< drop CRC-failing advertising frames and
                                  suppress unconfirmed connection candidates
                                  from the device list */

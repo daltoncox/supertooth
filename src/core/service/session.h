@@ -29,7 +29,6 @@ extern "C" {
 #define SESSION_BLE_LNA_GAIN   24u
 #define SESSION_BLE_VGA_GAIN   18u
 
-#define BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW 16u
 #define BREDR_SESSION_MAX_CHANNELS 79u
 
 /** Protocol whose channel window defines the radio tuning. */
@@ -57,7 +56,6 @@ typedef struct {
 } session_ble_config_t;
 
 typedef struct {
-    unsigned int rssi_averaging_window;
     uint32_t lap_filter;
     int lap_filter_enabled;
 } session_bredr_config_t;

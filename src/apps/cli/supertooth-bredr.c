@@ -30,7 +30,6 @@ static app_device_view_t *g_device_view = NULL;
 static int g_debug = 0;
 static int g_lap_filter_enabled = 0;
 static uint32_t g_lap_filter = 0u;
-static unsigned int g_rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW;
 /* Default BR/EDR channel count is derived from the radio's max sample rate
  * (see main()); this initial value is overwritten before use. */
 static unsigned int g_num_bredr_channels = BREDR_SESSION_MAX_CHANNELS;
@@ -172,25 +171,6 @@ static int parse_lap_filter(const char *arg, uint32_t *out_lap)
     return 0;
 }
 
-static int parse_rssi_averaging(const char *arg, unsigned int *out_window)
-{
-    if (!arg || !out_window)
-        return -1;
-    if (strcmp(arg, "none") == 0)
-    {
-        *out_window = 0u;
-        return 0;
-    }
-
-    char *end = NULL;
-    unsigned long value = strtoul(arg, &end, 0);
-    if (end == arg || *end != '\0' || value > 1000000ul)
-        return -1;
-
-    *out_window = (unsigned int)value;
-    return 0;
-}
-
 static int parse_channel_count(const char *arg, unsigned int *out_channels)
 {
     if (!arg || !out_channels)
@@ -227,12 +207,10 @@ static void print_usage(const char *argv0)
 {
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|devices] [-l|--lap LAP] "
-            "[--rssi-averaging N|none] [-c|--channels N] [-b|--bottom-channel CH] "
+            "[-c|--channels N] [-b|--bottom-channel CH] "
             "[-d|--device [<type>:<id>]] [--debug]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
     fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
-    fprintf(stderr, "  %-30s EMA window for piconet RSSI (default: 16; 0/none disables)\n",
-            "--rssi-averaging N|none");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
             "-c, --channels N",
             BREDR_SESSION_MAX_CHANNELS, g_num_bredr_channels);
@@ -269,7 +247,6 @@ int main(int argc, char *argv[])
     static const struct option long_opts[] = {
         {"view",           required_argument, NULL, 'v'},
         {"lap",            required_argument, NULL, 'l'},
-        {"rssi-averaging", required_argument, NULL, 'a'},
         {"channels",       required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
         {"device",         optional_argument, NULL, 'd'},
@@ -319,14 +296,6 @@ int main(int argc, char *argv[])
                     return EXIT_FAILURE;
                 }
                 g_lap_filter_enabled = 1;
-                break;
-            case 'a':
-                if (parse_rssi_averaging(optarg, &g_rssi_averaging_window) != 0)
-                {
-                    fprintf(stderr, "Invalid --rssi-averaging value: %s\n", optarg);
-                    print_usage(argv[0]);
-                    return EXIT_FAILURE;
-                }
                 break;
             case 'c':
         if (parse_channel_count(optarg, &g_num_bredr_channels) != 0)
@@ -428,10 +397,6 @@ int main(int argc, char *argv[])
         printf("LAP filter  : %06" PRIX32 "\n", g_lap_filter);
     else
         printf("LAP filter  : (none)\n");
-    if (g_rssi_averaging_window == 0u)
-        printf("RSSI EMA    : disabled\n");
-    else
-        printf("RSSI EMA    : window=%u\n", g_rssi_averaging_window);
     if (g_device_selected)
         printf("Device      : %s:%s\n",
                radio_device_type_name(g_device_spec_parsed.type),
@@ -461,7 +426,6 @@ int main(int argc, char *argv[])
     app_install_sigint_handler(g_session);
 
     session_bredr_config_t bredr_cfg = {
-        .rssi_averaging_window = g_rssi_averaging_window,
         .lap_filter = g_lap_filter,
         .lap_filter_enabled = g_lap_filter_enabled,
     };
@@ -494,10 +458,6 @@ int main(int argc, char *argv[])
         printf("  LAP filter     : %06" PRIX32 "\n", g_lap_filter);
     else
         printf("  LAP filter     : (none)\n");
-    if (g_rssi_averaging_window == 0u)
-        printf("  RSSI EMA       : disabled\n");
-    else
-        printf("  RSSI EMA       : window=%u\n", g_rssi_averaging_window);
     if (g_debug)
         printf("  Dropped blocks : %lu\n",
                 session_dropped_blocks(g_session));

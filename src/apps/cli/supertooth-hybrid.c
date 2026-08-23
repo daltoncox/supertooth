@@ -428,9 +428,7 @@ int main(int argc, char *argv[])
      * actually reaches a valid session and stops the capture loop. */
     app_install_sigint_handler(g_session);
 
-    session_bredr_config_t bredr_cfg = {
-        .rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW,
-    };
+    session_bredr_config_t bredr_cfg = { 0 };
     session_enable_bredr(g_session, &bredr_cfg, handle_hybrid_bredr_packet, NULL);
     session_ble_config_t ble_cfg = { .enforce_crc = g_enforce_crc ? 1u : 0u };
     session_enable_ble(g_session, &ble_cfg, handle_hybrid_ble_packet, NULL);

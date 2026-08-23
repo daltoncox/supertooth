@@ -74,13 +74,6 @@ typedef struct
     /** Allocated capacity of entries[]. */
     size_t capacity;
 
-    /** RSSI EMA window in packets; 0 disables averaging. */
-    unsigned int rssi_avg_window;
-    /** Precomputed EMA alpha = 2 / (window + 1). */
-    float rssi_avg_alpha;
-    /** Precomputed 1 - alpha. */
-    float rssi_avg_one_minus_alpha;
-
 } bredr_piconet_store_t;
 
 /* ---------------------------------------------------------------------------
@@ -96,18 +89,6 @@ typedef struct
  * @param store  Must not be NULL.
  */
 void bredr_piconet_store_init(bredr_piconet_store_t *store);
-
-/**
- * @brief Configure per-store exponential RSSI averaging.
- *
- * Averaging uses an EMA with alpha = 2 / (window + 1).
- * For window=0, averaging is disabled and values are replaced by each new sample.
- *
- * @param store  Must not be NULL.
- * @param window EMA window in packets. 0 disables averaging.
- */
-void bredr_piconet_store_set_rssi_averaging(bredr_piconet_store_t *store,
-                                            unsigned int window);
 
 /**
  * @brief Release all heap memory owned by the store and its piconets.
