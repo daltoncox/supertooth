@@ -17,22 +17,25 @@
  *     on the access address, regardless of channel.
  *  3. COLLECT_PDU: the dewhitened header length determines the candidate
  *     size (2 + len + 3 CRC bytes).
- *  4. Advertising candidates are emitted as captured (CRC enforcement is
- *     left to the consumer, as before); a CRC-valid CONNECT_IND also seeds
- *     a CRCInit candidate into the piconet store. Data candidates are
- *     CRC-gated against the store: accepted only when a confirmed CRCInit
- *     (or a candidate that thereby proves itself) verifies the packet.
+ *  4. Every candidate is emitted as captured. Advertising frames (and any
+ *     CONNECT_IND they carry) are handed to the consumer ungate; data
+ *     candidates are emitted raw too. Confirming a data candidate is a real
+ *     packet — and recovering its CRCInit from CONNECT_IND seeding — is the
+ *     consumer's job (the per-session piconet store owns CRC gating and
+ *     CRCInit recovery). This keeps the decoder a pure PHY/framing stage,
+ *     mirroring the BR/EDR path.
  *
- * Rejection rule: a data candidate that fails the CRC gate does NOT drop
- * its bits. Only the bits up to the next preamble found inside the
- * buffered candidate are rejected; collection resumes there (avoiding
- * false negatives when a false preamble swallowed bits of a real packet).
+ * Resync rule: a candidate that is not a real packet is detected later by
+ * the consumer's CRC gate. To avoid false negatives when a false preamble
+ * swallowed bits of a real packet, collection always resumes at the next
+ * preamble found inside the buffered candidate (never trusting the
+ * declared length to drop bits).
  *
  * Typical usage
  * -------------
  * @code
  *   ble_bitstream_decoder_t proc;
- *   ble_bitstream_decoder_init(&proc, 37, &store);    // advertising ch 37
+ *   ble_bitstream_decoder_init(&proc, 37);    // advertising ch 37
  *
  *   ble_status_t status = ble_bitstream_decoder_push_bit(&proc, bit);
  *   if (status == BLE_VALID_PACKET) {
@@ -178,8 +181,6 @@ typedef enum
  * ble_bitstream_decoder_t — per-channel decoder state
  * ---------------------------------------------------------------------------*/
 
-struct ble_piconet_store;   /* forward declaration (avoids include cycle) */
-
 /** Internal framing states. */
 typedef enum
 {
@@ -188,12 +189,12 @@ typedef enum
     BLE_DEC_COLLECT_PDU = 2,
 } ble_dec_state_t;
 
+/** Maximum frames queued between a push_bit and get_frame calls. */
+#define BLE_DEC_FRAME_QUEUE 8u
+
 typedef struct
 {
     uint8_t channel_index;
-    /** Shared per-session connection store (CRC gating + CRCInit recovery).
-     * NULL: advertising packets still emit; data candidates always reject. */
-    struct ble_piconet_store *store;
 
     ble_dec_state_t state;
     uint8_t detected_preamble;
@@ -209,7 +210,14 @@ typedef struct
     unsigned int pdu_target_bits;   /* PDU+CRC bits once the header is known */
 
     ble_frame_t last_frame;
-    int frame_ready;
+    int frame_ready;   /* transient: set while assembling a frame */
+
+    /* Frames emitted by the decoder but not yet retrieved by the consumer.
+     * A single push_bit may complete several candidates (a real packet
+     * recovered from inside a rejected false candidate), so emission is
+     * queued and drained by ble_bitstream_decoder_get_frame(). */
+    ble_frame_t pending[BLE_DEC_FRAME_QUEUE];
+    uint8_t pending_count;
 } ble_bitstream_decoder_t;
 
 /* ---------------------------------------------------------------------------
@@ -217,8 +225,7 @@ typedef struct
  * ---------------------------------------------------------------------------*/
 
 void ble_bitstream_decoder_init(ble_bitstream_decoder_t *proc,
-                                uint8_t channel_index,
-                                struct ble_piconet_store *store);
+                                 uint8_t channel_index);
 ble_status_t ble_bitstream_decoder_push_bit(ble_bitstream_decoder_t *proc, uint8_t bit);
 int ble_bitstream_decoder_get_frame(ble_bitstream_decoder_t *proc, ble_frame_t *out);
 

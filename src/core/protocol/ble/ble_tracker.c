@@ -161,32 +161,6 @@ static ble_conn_record_t *conn_find_or_create(ble_tracker_t *t, uint32_t aa)
  * Ingest
  * ---------------------------------------------------------------------------*/
 
-ble_gate_result_t ble_tracker_gate_data_pdu(ble_tracker_t *t,
-                                            uint32_t access_address,
-                                            const uint8_t *pdu,
-                                            unsigned int pdu_bytes,
-                                            uint32_t rx_crc,
-                                            uint32_t *crc_init_used_out)
-{
-    if (!t)
-        return BLE_GATE_REJECT;
-
-    /* Store gates internally (its own lock). We update our registry around it
-     * under our own lock so there is no lock-ordering hazard. */
-    pthread_mutex_lock(&t->lock);
-    ble_gate_result_t res = ble_piconet_store_gate_data_pdu(
-        &t->conn_store, access_address, pdu, pdu_bytes, rx_crc,
-        crc_init_used_out);
-    if (res == BLE_GATE_ACCEPT)
-    {
-        ble_conn_record_t *c = conn_find_or_create(t, access_address);
-        if (c)
-            c->last_seen_ms = now_ms();
-    }
-    pthread_mutex_unlock(&t->lock);
-    return res;
-}
-
 void ble_tracker_seed_candidate(ble_tracker_t *t,
                                 uint32_t access_address,
                                 uint32_t crc_init)
@@ -238,6 +212,7 @@ int ble_tracker_submit_frame(ble_tracker_t *t, const ble_event_t *event)
 
             ev.rssi_db = event->meta.rssi_dbr;
             ev.rssi_valid = !isnan((double)event->meta.rssi_dbr);
+            ev.crc_ok = pkt.crc_ok;
 
             if (adv->pdu_type == BLE_PDU_CONNECT_IND)
             {
@@ -369,7 +344,7 @@ void ble_tracker_add_advertiser(ble_tracker_t *t,
         snprintf(r->manufacturer, sizeof(r->manufacturer), "%s",
                  ev->manufacturer);
 
-    if (ev->is_connect_ind)
+    if (ev->is_connect_ind && ev->crc_ok)
     {
         /* Lookups may grow (realloc) the registries, freeing the previous
          * arrays and invalidating any record pointers obtained earlier.

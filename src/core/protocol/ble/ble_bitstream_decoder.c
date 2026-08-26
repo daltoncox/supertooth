@@ -8,7 +8,6 @@
 #include "ble_bitstream_decoder.h"
 
 #include "ble_codec.h"
-#include "ble_piconet.h"
 
 #include <string.h>
 
@@ -155,43 +154,23 @@ static void ble_classify(ble_bitstream_decoder_t *proc)
  * Frame completion
  * ---------------------------------------------------------------------------*/
 
-/* CONNECT_IND PDUs carry the connection's AA + CRCInit: seed them as
- * piconet candidates (they must still prove themselves on a data packet).
- * Only CRC-valid CONNECT_INDs seed — a corrupt one would seed garbage. */
-static void ble_maybe_seed_connect_ind(ble_bitstream_decoder_t *proc,
-                                       const uint8_t *raw_pdu,
-                                       unsigned int frame_bytes)
+/* Queue a fully-assembled frame for the consumer. The decoder may emit
+ * several frames from a single push_bit (a real packet recovered from inside
+ * a rejected false candidate), so emission is buffered and drained by
+ * ble_bitstream_decoder_get_frame(). */
+static void ble_dec_emit(ble_bitstream_decoder_t *proc)
 {
-    if (!proc->store ||
-        frame_bytes < (2u + 2u * BLE_ADDR_LEN + BLE_CONNECT_IND_DATA_MAX_BYTES +
-                       BLE_CRC_BYTES))
-        return;
-
-    uint8_t pdu[BLE_PDU_MAX_BYTES + BLE_CRC_BYTES];
-    memcpy(pdu, raw_pdu, frame_bytes);
-    ble_dewhiten(pdu, frame_bytes, proc->channel_index);
-
-    if ((pdu[0] & 0x0Fu) != BLE_PDU_CONNECT_IND)
-        return;
-
-    unsigned int payload_len = ble_payload_length_from_header(pdu);
-    if (payload_len < (2u * BLE_ADDR_LEN + BLE_CONNECT_IND_DATA_MAX_BYTES) ||
-        frame_bytes < (2u + payload_len + BLE_CRC_BYTES))
-        return;
-
-    uint32_t rx_crc = ble_extract_crc(&pdu[2u + payload_len]);
-    if (ble_crc_calc(pdu, 2u + payload_len, BLE_CRC_INIT_ADV) != rx_crc)
-        return;
-
-    ble_connect_ind_params_t params;
-    if (ble_connect_ind_parse(&pdu[2u + 2u * BLE_ADDR_LEN], &params) != 0)
-        return;
-
-    ble_piconet_store_seed_candidate(proc->store, params.access_address,
-                                     params.crc_init);
+    if (proc->pending_count < BLE_DEC_FRAME_QUEUE)
+    {
+        memcpy(&proc->pending[proc->pending_count], &proc->last_frame,
+               sizeof(ble_frame_t));
+        proc->pending_count++;
+    }
+    memset(&proc->last_frame, 0, sizeof(proc->last_frame));
+    proc->frame_ready = 0;
 }
 
-static ble_status_t ble_complete_adv_frame(ble_bitstream_decoder_t *proc)
+static void ble_complete_adv_frame(ble_bitstream_decoder_t *proc)
 {
     unsigned int frame_bytes = proc->pdu_target_bits / 8u;
 
@@ -205,41 +184,33 @@ static ble_status_t ble_complete_adv_frame(ble_bitstream_decoder_t *proc)
     proc->last_frame.raw_pdu_bytes = (uint16_t)frame_bytes;
     proc->frame_ready = 1;
 
-    ble_maybe_seed_connect_ind(proc, &proc->cand[5], frame_bytes);
-    ble_finish_candidate(proc);
-    return BLE_VALID_PACKET;
+    /* CONNECT_IND handling (seeding a CRCInit candidate, linking the two
+     * peers) is the consumer's job: the decoder is a pure framing stage and
+     * carries no piconet store. The collector CRC-checks the CONNECT_IND and
+     * seeds the candidate once confirmed. */
+    ble_dec_emit(proc);
 }
 
-/* CRC-gate a completed data candidate against the piconet store.
- * Returns nonzero when the frame was accepted and emitted. */
-static int ble_gate_data_candidate(ble_bitstream_decoder_t *proc)
+/* Emit a completed data candidate as a raw frame. We deliberately do NOT
+ * CRC-gate here: confirming a data packet is the consumer's job (it owns the
+ * piconet store and CRCInit recovery), exactly as the BR/EDR path leaves
+ * packet confirmation to its tracker. The emitted frame carries the still-
+ * whitened PDU; the consumer dewhitens and gates it. */
+static void ble_complete_data_frame(ble_bitstream_decoder_t *proc)
 {
     unsigned int frame_bytes = proc->pdu_target_bits / 8u;
-    unsigned int pdu_bytes = frame_bytes - BLE_CRC_BYTES;
-
-    uint8_t pdu[BLE_PDU_MAX_BYTES + BLE_CRC_BYTES];
-    memcpy(pdu, &proc->cand[5], frame_bytes);
-    ble_dewhiten(pdu, frame_bytes, proc->channel_index);
-
-    uint32_t rx_crc = ble_extract_crc(&pdu[pdu_bytes]);
-    uint32_t crc_init_used = 0u;
-    if (ble_piconet_store_gate_data_pdu(proc->store, proc->access_address,
-                                        pdu, pdu_bytes, rx_crc,
-                                        &crc_init_used) != BLE_GATE_ACCEPT)
-        return 0;
 
     memcpy(proc->last_frame.raw_pdu, &proc->cand[5], frame_bytes);
     proc->last_frame.phy = RECEIVER_PHY_LE_1M;
     proc->last_frame.kind = BLE_FRAME_DATA;
     proc->last_frame.preamble = proc->detected_preamble;
     proc->last_frame.access_address = proc->access_address;
-    proc->last_frame.crc_init = crc_init_used;
-    proc->last_frame.crc_ok = 1u;
+    proc->last_frame.crc_init = 0u;
+    proc->last_frame.crc_ok = 0u;   /* stamped by the consumer on accept */
     proc->last_frame.raw_pdu_bytes = (uint16_t)frame_bytes;
     proc->frame_ready = 1;
 
-    ble_finish_candidate(proc);
-    return 1;
+    ble_dec_emit(proc);
 }
 
 /* ---------------------------------------------------------------------------
@@ -299,15 +270,22 @@ static ble_status_t ble_drain(ble_bitstream_decoder_t *proc)
             return BLE_COLLECTING;
 
         if (!proc->is_data_candidate)
-            return ble_complete_adv_frame(proc);
+        {
+            ble_complete_adv_frame(proc);
+            ble_finish_candidate(proc);
+            continue;
+        }
 
-        if (ble_gate_data_candidate(proc))
-            return BLE_VALID_PACKET;
-
+        /* Data candidate: always emit it as a raw frame. The consumer owns
+         * CRC gating and CRCInit recovery. Rescan from the next preamble so
+         * a real packet embedded in noise (or a false candidate) is never
+         * lost; loop to also emit any candidate already buffered by the
+         * rescan (the old CRC-gate failure path did the same). */
+        ble_complete_data_frame(proc);
         ble_reject_and_rescan(proc);
         if (proc->state == BLE_DEC_SEARCH)
             return BLE_SEARCHING;
-        /* Otherwise loop and re-drain the rescan backlog. */
+        continue;
     }
 }
 
@@ -316,15 +294,13 @@ static ble_status_t ble_drain(ble_bitstream_decoder_t *proc)
  * ---------------------------------------------------------------------------*/
 
 void ble_bitstream_decoder_init(ble_bitstream_decoder_t *proc,
-                                uint8_t channel_index,
-                                struct ble_piconet_store *store)
+                                 uint8_t channel_index)
 {
     if (!proc)
         return;
 
     memset(proc, 0, sizeof(*proc));
     proc->channel_index = channel_index;
-    proc->store = store;
     proc->state = BLE_DEC_SEARCH;
 }
 
@@ -346,16 +322,20 @@ ble_status_t ble_bitstream_decoder_push_bit(ble_bitstream_decoder_t *proc, uint8
     ble_set_bit(proc->cand, proc->cand_bits, b);
     proc->cand_bits++;
 
-    return ble_drain(proc);
+    ble_status_t r = ble_drain(proc);
+    if (proc->pending_count > 0)
+        return BLE_VALID_PACKET;
+    return r;
 }
 
 int ble_bitstream_decoder_get_frame(ble_bitstream_decoder_t *proc, ble_frame_t *out)
 {
-    if (!proc || !out || !proc->frame_ready)
+    if (!proc || !out || proc->pending_count == 0u)
         return -1;
 
-    memcpy(out, &proc->last_frame, sizeof(*out));
-    memset(&proc->last_frame, 0, sizeof(proc->last_frame));
-    proc->frame_ready = 0;
+    memcpy(out, &proc->pending[0], sizeof(*out));
+    memmove(&proc->pending[0], &proc->pending[1],
+            (size_t)(proc->pending_count - 1u) * sizeof(ble_frame_t));
+    proc->pending_count--;
     return 0;
 }

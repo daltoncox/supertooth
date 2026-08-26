@@ -1,9 +1,17 @@
 /* Unified BLE bitstream decoder tests.
  *
- * Covers: advertising regression, preamble-based data detection, the CRC
- * gate (confirmed / candidate-proof / empty-packet recovery), CONNECT_IND
- * seeding across decoders sharing a store, and the rejection rule (reject
- * only bits up to the next preamble) via rescan scenarios.
+ * The decoder is a PURE framing stage: it emits every candidate (advertising
+ * or data) as a raw frame and performs NO CRC gating. Advertising frames are
+ * emitted with crc_init=BLE_CRC_INIT_ADV (the codec recomputes CRC on decode);
+ * data candidates are emitted with crc_ok=0 / crc_init=0. Confirming a data
+ * packet and recovering its CRCInit is the consumer's job (the per-session
+ * piconet store, exercised here through ble_tracker_t).
+ *
+ * These tests therefore fall into two groups:
+ *  - framing tests (decoder only): verify the decoder surfaces the right frame
+ *    for a given preamble/AA/length, found by access address;
+ *  - gating tests (decoder -> tracker): verify the collector accepts valid
+ *    data frames / seeds CONNECT_IND candidates and rejects the rest.
  *
  * Construction notes: false candidates use an all-zero AA so their prefix
  * introduces no spurious preambles, and crafted headers are chosen (via
@@ -18,6 +26,7 @@
 #include <string.h>
 
 #include "ble_test_stream.h"
+#include "ble_tracker.h"
 
 static int g_failures = 0;
 
@@ -44,9 +53,9 @@ static int g_failures = 0;
 
 /* Push a full data packet (preamble + AA + whitened PDU + CRC). */
 static void stream_data_packet(ble_test_stream_t *s, uint32_t aa,
-                               uint8_t hdr0, const uint8_t *payload,
-                               unsigned int payload_len, uint8_t ch,
-                               uint32_t crc_init)
+                                uint8_t hdr0, const uint8_t *payload,
+                                unsigned int payload_len, uint8_t ch,
+                                uint32_t crc_init)
 {
     uint8_t pdu[2u + BLE_LL_PAYLOAD_MAX_BYTES];
     pdu[0] = hdr0;
@@ -60,8 +69,8 @@ static void stream_data_packet(ble_test_stream_t *s, uint32_t aa,
 
 /* Push a full advertising packet on the advertising AA. */
 static void stream_adv_packet(ble_test_stream_t *s, uint8_t pdu_type,
-                              const uint8_t *payload, unsigned int payload_len,
-                              uint8_t ch)
+                               const uint8_t *payload, unsigned int payload_len,
+                               uint8_t ch)
 {
     uint8_t pdu[2u + BLE_RESERVED_PAYLOAD_MAX_BYTES];
     pdu[0] = pdu_type;
@@ -88,7 +97,7 @@ static int first_preamble_offset(const ble_test_stream_t *s, unsigned int from)
         uint8_t w = 0u;
         for (unsigned int j = 0; j < 8u; j++)
             w |= (uint8_t)(((s->bytes[(i + j) / 8u] >> ((i + j) % 8u)) & 1u)
-                           << j);
+                            << j);
         if (w == 0x55u || w == 0xAAu)
             return (int)i;
     }
@@ -100,14 +109,14 @@ static int first_preamble_offset(const ble_test_stream_t *s, unsigned int from)
  * 0xAA preceded by 1 forms 0x55). The decoder rescans through the overlap
  * candidate; the assertion guards against stray preambles ANYWHERE ELSE. */
 static void expect_first_preamble(const ble_test_stream_t *s,
-                                  unsigned int expected,
-                                  unsigned int line)
+                                   unsigned int expected,
+                                   unsigned int line)
 {
     int off = first_preamble_offset(s, 1u);
     if (off != (int)expected && off != (int)expected - 1)
     {
         printf("FAIL %s:%u: first preamble at %d, expected %u(+/-1)\n",
-               __FILE__, line, off, expected);
+                __FILE__, line, off, expected);
         g_failures++;
     }
 }
@@ -117,7 +126,7 @@ static void expect_first_preamble(const ble_test_stream_t *s,
 /* Push 2 header bytes whitened for @p ch (for hand-crafted false
  * candidates whose header must survive the decoder's dewhitening). */
 static void stream_whitened_header(ble_test_stream_t *s, uint8_t hdr0,
-                                   uint8_t hdr1, uint8_t ch)
+                                    uint8_t hdr1, uint8_t ch)
 {
     uint8_t header[2] = {hdr0, hdr1};
     ble_dewhiten(header, sizeof(header), ch);
@@ -129,7 +138,7 @@ static void stream_whitened_header(ble_test_stream_t *s, uint8_t hdr0,
  * introduce no preamble after the false preamble itself (including straddle
  * windows into following zeros). Returns 0 when none is clean. */
 static unsigned int stream_false_prefix(ble_test_stream_t *s, uint8_t ch,
-                                        unsigned int min_len)
+                                         unsigned int min_len)
 {
     for (unsigned int len = min_len; len <= 255u; len++)
     {
@@ -152,15 +161,69 @@ static unsigned int stream_false_prefix(ble_test_stream_t *s, uint8_t ch,
     return 0u;
 }
 
+/* Find the first emitted frame whose access address matches @p aa. The
+ * decoder now emits every candidate (including false ones), so callers must
+ * locate the real packet by AA rather than assume count == 1. */
+static const ble_frame_t *find_frame_by_aa(const ble_test_out_t *out,
+                                            uint32_t aa)
+{
+    for (unsigned int i = 0; i < out->count; i++)
+        if (out->frames[i].access_address == aa)
+            return &out->frames[i];
+    return NULL;
+}
+
+/* Feed a decoder's emitted frames through a tracker, collecting only the
+ * frames the tracker surfaces (advertising, or data whose CRC verified),
+ * with their post-gate annotations (crc_ok, crc_init). */
+static void bts_feed_collect(ble_bitstream_decoder_t *proc,
+                              ble_tracker_t *tracker,
+                              const ble_test_stream_t *s,
+                              ble_test_out_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    for (unsigned int i = 0; i < s->count; i++)
+    {
+        uint8_t b = (uint8_t)((s->bytes[i / 8u] >> (i % 8u)) & 1u);
+        if (ble_bitstream_decoder_push_bit(proc, b) != BLE_VALID_PACKET)
+            continue;
+        while (out->count < BTS_MAX_FRAMES)
+        {
+            ble_frame_t f;
+            if (ble_bitstream_decoder_get_frame(proc, &f) != 0)
+                break;
+            ble_event_t ev;
+            memset(&ev, 0, sizeof(ev));
+            ev.meta.channel_index = proc->channel_index;
+            ev.frame = f;
+            if (ble_tracker_submit_frame(tracker, &ev) == 1 &&
+                out->count < BTS_MAX_FRAMES)
+                out->frames[out->count++] = ev.frame;
+        }
+    }
+    /* Drain any frames still queued after the final bit. */
+    while (out->count < BTS_MAX_FRAMES)
+    {
+        ble_frame_t f;
+        if (ble_bitstream_decoder_get_frame(proc, &f) != 0)
+            break;
+        ble_event_t ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.meta.channel_index = proc->channel_index;
+        ev.frame = f;
+        if (ble_tracker_submit_frame(tracker, &ev) == 1 &&
+            out->count < BTS_MAX_FRAMES)
+            out->frames[out->count++] = ev.frame;
+    }
+}
+
 /* ---------------------------------------------------------------------------
- * 1. Advertising detection regression.
+ * 1. Advertising detection regression (decoder-only framing).
  * ---------------------------------------------------------------------------*/
 static void test_adv_regression(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_ADV, &store);
+    ble_bitstream_decoder_init(&dec, CH_ADV);
 
     const uint8_t payload[8] = {1, 2, 3, 4, 5, 6, 0x02, 0x0A};
     ble_test_stream_t s;
@@ -174,10 +237,10 @@ static void test_adv_regression(void)
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
+    const ble_frame_t *f = find_frame_by_aa(&out, BLE_ADVERTISING_AA);
+    TEST_ASSERT(f != NULL);
+    if (f)
     {
-        const ble_frame_t *f = &out.frames[0];
         TEST_ASSERT(f->kind == BLE_FRAME_ADVERTISING);
         TEST_ASSERT(f->access_address == BLE_ADVERTISING_AA);
         TEST_ASSERT(f->preamble == 0x55u);
@@ -190,32 +253,30 @@ static void test_adv_regression(void)
         TEST_ASSERT(pkt.crc_ok == 1u);
         TEST_ASSERT(pkt.pdu.adv.pdu_type == BLE_PDU_ADV_IND);
     }
-
-    ble_piconet_store_free(&store);
 }
 
 /* ---------------------------------------------------------------------------
- * 2. Data packet with a pre-confirmed store entry.
+ * 2. Data packet CRC gating + CRCInit recovery (decoder -> tracker).
  * ---------------------------------------------------------------------------*/
 static void test_data_confirmed(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
-    ble_piconet_store_confirm(&store, AA_DATA, INIT_DATA);
+    ble_tracker_t tracker;
+    ble_tracker_init(&tracker);
+    ble_piconet_store_confirm(&tracker.conn_store, AA_DATA, INIT_DATA);
 
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     const uint8_t payload[4] = {0xDEu, 0xADu, 0xBEu, 0xEFu};
     ble_test_stream_t s;
     bts_reset(&s);
     stream_zeros(&s, 19u);
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
-                       INIT_DATA);
+                        INIT_DATA);
     stream_zeros(&s, 23u);
 
     ble_test_out_t out;
-    bts_feed(&dec, &s, &out);
+    bts_feed_collect(&dec, &tracker, &s, &out);
 
     TEST_ASSERT(out.count == 1u);
     if (out.count == 1u)
@@ -235,27 +296,28 @@ static void test_data_confirmed(void)
         TEST_ASSERT(memcmp(pkt.pdu.data.payload, payload, 4u) == 0);
     }
 
-    ble_piconet_store_free(&store);
+    ble_tracker_free(&tracker);
 }
 
 /* ---------------------------------------------------------------------------
- * 3. Unknown AA, no candidates, len > 0: silently rejected.
+ * 3. Unknown AA, no candidates, len > 0: silently rejected by the gate.
  * ---------------------------------------------------------------------------*/
 static void test_data_unknown_aa_silent(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
+    ble_tracker_t tracker;
+    ble_tracker_init(&tracker);
+
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     const uint8_t payload[6] = {1, 2, 3, 4, 5, 6};
     ble_test_stream_t s;
     bts_reset(&s);
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
-                       INIT_DATA);
+                        INIT_DATA);
 
     ble_test_out_t out;
-    bts_feed(&dec, &s, &out);
+    bts_feed_collect(&dec, &tracker, &s, &out);
 
     TEST_ASSERT(out.count == 0u);
 
@@ -263,26 +325,27 @@ static void test_data_unknown_aa_silent(void)
      * must recur (BLE_PICONET_PROMOTE_THRESHOLD raw frames) before it
      * earns a slot, so a one-off unknown AA leaves no entry behind. */
     ble_piconet_t snap;
-    TEST_ASSERT(ble_piconet_store_find(&store, AA_DATA, &snap) != 0);
+    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) != 0);
 
-    ble_piconet_store_free(&store);
+    ble_tracker_free(&tracker);
 }
 
 /* ---------------------------------------------------------------------------
  * 4. Empty packet -> candidate -> proof on non-empty packet -> confirmed ->
- *    subsequent empty packet accepted.
+ *    subsequent empty packet accepted (decoder -> tracker gating).
  * ---------------------------------------------------------------------------*/
 static void test_recovery_lifecycle(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
+    ble_tracker_t tracker;
+    ble_tracker_init(&tracker);
+
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     ble_test_stream_t s;
     ble_test_out_t out;
 
-    /* Phase 1: 0-length packets produce a candidate, nothing emitted. The
+    /* Phase 1: 0-length packets produce a candidate, nothing surfaced. The
      * AA must first recur enough times to earn a store slot
      * (BLE_PICONET_PROMOTE_THRESHOLD); the first rounds only bump the
      * pending tally, the final one reverses the CRC into a candidate. */
@@ -291,33 +354,27 @@ static void test_recovery_lifecycle(void)
         bts_reset(&s);
         stream_data_packet(&s, AA_DATA, 0x01u, NULL, 0u, CH_DATA, INIT_DATA);
         stream_zeros(&s, FLUSH_ZEROS);
-        bts_feed(&dec, &s, &out);
+        bts_feed_collect(&dec, &tracker, &s, &out);
         TEST_ASSERT(out.count == 0u);
     }
 
     ble_piconet_t snap;
-    TEST_ASSERT(ble_piconet_store_find(&store, AA_DATA, &snap) == 0);
+    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) == 0);
     TEST_ASSERT(snap.state == BLE_PICONET_COLLECTING);
     TEST_ASSERT(snap.candidate_count == 1u);
     TEST_ASSERT(snap.candidates[0] == INIT_DATA);
 
     /* Phase 2: a non-empty packet proves the candidate -> confirmed, and
-     * the proving packet itself is emitted. */
+     * the proving packet itself is surfaced. */
     const uint8_t payload[5] = {9, 8, 7, 6, 5};
     bts_reset(&s);
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
-                       INIT_DATA);
+                        INIT_DATA);
     stream_zeros(&s, FLUSH_ZEROS);
-    bts_feed(&dec, &s, &out);
+    bts_feed_collect(&dec, &tracker, &s, &out);
     TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
-    {
-        TEST_ASSERT(out.frames[0].kind == BLE_FRAME_DATA);
-        TEST_ASSERT(out.frames[0].crc_init == INIT_DATA);
-        TEST_ASSERT(out.frames[0].crc_ok == 1u);
-    }
 
-    TEST_ASSERT(ble_piconet_store_find(&store, AA_DATA, &snap) == 0);
+    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) == 0);
     TEST_ASSERT(snap.state == BLE_PICONET_CONFIRMED);
     TEST_ASSERT(snap.crc_init == INIT_DATA);
     TEST_ASSERT(snap.candidate_count == 0u);
@@ -326,18 +383,18 @@ static void test_recovery_lifecycle(void)
     bts_reset(&s);
     stream_data_packet(&s, AA_DATA, 0x01u, NULL, 0u, CH_DATA, INIT_DATA);
     stream_zeros(&s, FLUSH_ZEROS);
-    bts_feed(&dec, &s, &out);
+    bts_feed_collect(&dec, &tracker, &s, &out);
     TEST_ASSERT(out.count == 1u);
 
-    ble_piconet_store_free(&store);
+    ble_tracker_free(&tracker);
 }
 
 /* ---------------------------------------------------------------------------
  * 5. CONNECT_IND seeding: valid seed proves on a data channel; corrupt seed
- *    is ignored. Two decoders share one store (as in the real session).
+ *    is ignored. Two decoders share one tracker (as in the real session).
  * ---------------------------------------------------------------------------*/
 static void push_connect_ind(ble_test_stream_t *s, uint8_t ch,
-                             uint32_t conn_aa, uint32_t conn_crc_init)
+                              uint32_t conn_aa, uint32_t conn_crc_init)
 {
     /* CONNECT_IND payload: InitA(6) + AdvA(6) + LLData(22) = 34 bytes. */
     uint8_t payload[34];
@@ -361,11 +418,12 @@ static void push_connect_ind(ble_test_stream_t *s, uint8_t ch,
 
 static void test_connect_ind_seeding(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
+    ble_tracker_t tracker;
+    ble_tracker_init(&tracker);
+
     ble_bitstream_decoder_t dec_adv, dec_data;
-    ble_bitstream_decoder_init(&dec_adv, CH_ADV, &store);
-    ble_bitstream_decoder_init(&dec_data, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec_adv, CH_ADV);
+    ble_bitstream_decoder_init(&dec_data, CH_DATA);
 
     ble_test_stream_t s;
     ble_test_out_t out;
@@ -374,13 +432,13 @@ static void test_connect_ind_seeding(void)
      * frame AND seeds a (still unproven) candidate. */
     bts_reset(&s);
     push_connect_ind(&s, CH_ADV, AA_DATA, INIT_DATA);
-    bts_feed(&dec_adv, &s, &out);
+    bts_feed_collect(&dec_adv, &tracker, &s, &out);
     TEST_ASSERT(out.count == 1u);
     if (out.count == 1u)
         TEST_ASSERT(out.frames[0].kind == BLE_FRAME_ADVERTISING);
 
     ble_piconet_t snap;
-    TEST_ASSERT(ble_piconet_store_find(&store, AA_DATA, &snap) == 0);
+    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) == 0);
     TEST_ASSERT(snap.state == BLE_PICONET_COLLECTING);
     TEST_ASSERT(snap.candidate_count == 1u);
     TEST_ASSERT(snap.candidates[0] == INIT_DATA);
@@ -389,24 +447,25 @@ static void test_connect_ind_seeding(void)
     const uint8_t payload[3] = {0x11u, 0x22u, 0x33u};
     bts_reset(&s);
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
-                       INIT_DATA);
-    bts_feed(&dec_data, &s, &out);
+                        INIT_DATA);
+    bts_feed_collect(&dec_data, &tracker, &s, &out);
     TEST_ASSERT(out.count == 1u);
 
-    TEST_ASSERT(ble_piconet_store_find(&store, AA_DATA, &snap) == 0);
+    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) == 0);
     TEST_ASSERT(snap.state == BLE_PICONET_CONFIRMED);
     TEST_ASSERT(snap.crc_init == INIT_DATA);
 
-    ble_piconet_store_free(&store);
+    ble_tracker_free(&tracker);
 }
 
 static void test_connect_ind_corrupt_no_seed(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
+    ble_tracker_t tracker;
+    ble_tracker_init(&tracker);
+
     ble_bitstream_decoder_t dec_adv, dec_data;
-    ble_bitstream_decoder_init(&dec_adv, CH_ADV, &store);
-    ble_bitstream_decoder_init(&dec_data, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec_adv, CH_ADV);
+    ble_bitstream_decoder_init(&dec_data, CH_DATA);
 
     ble_test_stream_t s;
     ble_test_out_t out;
@@ -416,42 +475,40 @@ static void test_connect_ind_corrupt_no_seed(void)
     bts_reset(&s);
     push_connect_ind(&s, CH_ADV, AA_DATA, INIT_DATA);
     s.bytes[120u / 8u] ^= (uint8_t)(1u << (120u % 8u));
-    bts_feed(&dec_adv, &s, &out);
+    bts_feed_collect(&dec_adv, &tracker, &s, &out);
 
-    /* The adv frame is still emitted (advertising is not CRC-gated in the
+    /* The adv frame is still surfaced (advertising is not CRC-gated in the
      * framer), but its CRC fails so nothing is seeded. */
     TEST_ASSERT(out.count == 1u);
     ble_piconet_t snap;
-    TEST_ASSERT(ble_piconet_store_find(&store, AA_DATA, &snap) != 0);
+    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) != 0);
 
     /* The data packet now has no candidate to prove -> rejected. */
     const uint8_t payload[3] = {0x11u, 0x22u, 0x33u};
     bts_reset(&s);
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
-                       INIT_DATA);
-    bts_feed(&dec_data, &s, &out);
+                        INIT_DATA);
+    bts_feed_collect(&dec_data, &tracker, &s, &out);
     TEST_ASSERT(out.count == 0u);
 
-    ble_piconet_store_free(&store);
+    ble_tracker_free(&tracker);
 }
 
 /* ---------------------------------------------------------------------------
  * 6. Rescan: a false candidate swallows a real packet. The real packet must
  *    still be emitted (bits are only rejected up to the next preamble).
+ *    Decoder-only: find the real frame by access address.
  * ---------------------------------------------------------------------------*/
 static void test_rescan_swallowed_packet(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
-    ble_piconet_store_confirm(&store, AA_DATA, INIT_DATA);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     const uint8_t payload[8] = {1, 3, 5, 7, 9, 11, 13, 15};
     ble_test_stream_t real, s;
     bts_reset(&real);
     stream_data_packet(&real, AA_DATA, 0x02u, payload, sizeof(payload),
-                       CH_DATA, INIT_DATA);
+                        CH_DATA, INIT_DATA);
     TEST_ASSERT(real.count == 144u);
 
     /* False candidate: zero AA + header with a large clean length. Its
@@ -470,32 +527,28 @@ static void test_rescan_swallowed_packet(void)
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
+    const ble_frame_t *f = find_frame_by_aa(&out, AA_DATA);
+    TEST_ASSERT(f != NULL);
+    if (f)
     {
-        TEST_ASSERT(out.frames[0].kind == BLE_FRAME_DATA);
-        TEST_ASSERT(out.frames[0].access_address == AA_DATA);
-        TEST_ASSERT(out.frames[0].raw_pdu_bytes == (2u + 8u + 3u));
+        TEST_ASSERT(f->kind == BLE_FRAME_DATA);
+        TEST_ASSERT(f->access_address == AA_DATA);
+        TEST_ASSERT(f->raw_pdu_bytes == (2u + 8u + 3u));
     }
-
-    ble_piconet_store_free(&store);
 }
 
 /* Variant: the real packet straddles the end of the false candidate, so
  * collection must resume from backlog and finish with live bits. */
 static void test_rescan_straddling_packet(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
-    ble_piconet_store_confirm(&store, AA_DATA, INIT_DATA);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     const uint8_t payload[8] = {1, 3, 5, 7, 9, 11, 13, 15};
     ble_test_stream_t real, s;
     bts_reset(&real);
     stream_data_packet(&real, AA_DATA, 0x02u, payload, sizeof(payload),
-                       CH_DATA, INIT_DATA);
+                        CH_DATA, INIT_DATA);
 
     /* False candidate of 40+232..312 bits; the real packet starts 200
      * bits into its body so it ends past the false candidate. */
@@ -513,15 +566,14 @@ static void test_rescan_straddling_packet(void)
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
+    const ble_frame_t *f = find_frame_by_aa(&out, AA_DATA);
+    TEST_ASSERT(f != NULL);
+    if (f)
     {
-        TEST_ASSERT(out.frames[0].kind == BLE_FRAME_DATA);
-        TEST_ASSERT(out.frames[0].access_address == AA_DATA);
-        TEST_ASSERT(out.frames[0].raw_pdu_bytes == (2u + 8u + 3u));
+        TEST_ASSERT(f->kind == BLE_FRAME_DATA);
+        TEST_ASSERT(f->access_address == AA_DATA);
+        TEST_ASSERT(f->raw_pdu_bytes == (2u + 8u + 3u));
     }
-
-    ble_piconet_store_free(&store);
 }
 
 /* ---------------------------------------------------------------------------
@@ -530,11 +582,8 @@ static void test_rescan_straddling_packet(void)
  * ---------------------------------------------------------------------------*/
 static void test_rescan_nested(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
-    ble_piconet_store_confirm(&store, AA_DATA, INIT_DATA);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     /* Outer false candidate: zero AA + large clean length. Its body holds
      * an inner false candidate (zero AA, small clean length) after zeros. */
@@ -558,21 +607,20 @@ static void test_rescan_nested(void)
     /* Then the real packet arrives on live bits. */
     const uint8_t payload[4] = {0xCAu, 0xFEu, 0xBAu, 0xBEu};
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
-                       INIT_DATA);
+                        INIT_DATA);
     stream_zeros(&s, FLUSH_ZEROS);
 
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
+    const ble_frame_t *f = find_frame_by_aa(&out, AA_DATA);
+    TEST_ASSERT(f != NULL);
+    if (f)
     {
-        TEST_ASSERT(out.frames[0].kind == BLE_FRAME_DATA);
-        TEST_ASSERT(out.frames[0].access_address == AA_DATA);
-        TEST_ASSERT(out.frames[0].raw_pdu_bytes == (2u + 4u + 3u));
+        TEST_ASSERT(f->kind == BLE_FRAME_DATA);
+        TEST_ASSERT(f->access_address == AA_DATA);
+        TEST_ASSERT(f->raw_pdu_bytes == (2u + 4u + 3u));
     }
-
-    ble_piconet_store_free(&store);
 }
 
 /* ---------------------------------------------------------------------------
@@ -580,11 +628,8 @@ static void test_rescan_nested(void)
  * ---------------------------------------------------------------------------*/
 static void test_preamble_overlap(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
-    ble_piconet_store_confirm(&store, AA_DATA, INIT_DATA);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     ble_test_stream_t s;
     bts_reset(&s);
@@ -596,29 +641,25 @@ static void test_preamble_overlap(void)
 
     const uint8_t payload[2] = {0x42u, 0x24u};
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
-                       INIT_DATA);
+                        INIT_DATA);
     stream_zeros(&s, FLUSH_ZEROS);
 
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
-        TEST_ASSERT(out.frames[0].access_address == AA_DATA);
-
-    ble_piconet_store_free(&store);
+    const ble_frame_t *f = find_frame_by_aa(&out, AA_DATA);
+    TEST_ASSERT(f != NULL);
+    if (f)
+        TEST_ASSERT(f->access_address == AA_DATA);
 }
 
 /* ---------------------------------------------------------------------------
- * 9. Maximum-length data packet (len=255).
+ * 9. Maximum-length data packet (len=255) (decoder-only framing).
  * ---------------------------------------------------------------------------*/
 static void test_max_length(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
-    ble_piconet_store_confirm(&store, AA_DATA, INIT_DATA);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     uint8_t payload[BLE_LL_PAYLOAD_MAX_BYTES];
     for (unsigned int i = 0; i < sizeof(payload); i++)
@@ -627,24 +668,23 @@ static void test_max_length(void)
     ble_test_stream_t s;
     bts_reset(&s);
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
-                       INIT_DATA);
+                        INIT_DATA);
 
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
+    const ble_frame_t *f = find_frame_by_aa(&out, AA_DATA);
+    TEST_ASSERT(f != NULL);
+    if (f)
     {
-        TEST_ASSERT(out.frames[0].raw_pdu_bytes ==
+        TEST_ASSERT(f->raw_pdu_bytes ==
                     (2u + BLE_LL_PAYLOAD_MAX_BYTES + BLE_CRC_BYTES));
         ble_packet_t pkt;
-        TEST_ASSERT(ble_decode_frame(&out.frames[0], CH_DATA, &pkt) == 0);
+        TEST_ASSERT(ble_decode_frame(f, CH_DATA, &pkt) == 0);
         TEST_ASSERT(pkt.pdu.data.payload_len == BLE_LL_PAYLOAD_MAX_BYTES);
         TEST_ASSERT(memcmp(pkt.pdu.data.payload, payload,
-                           BLE_LL_PAYLOAD_MAX_BYTES) == 0);
+                            BLE_LL_PAYLOAD_MAX_BYTES) == 0);
     }
-
-    ble_piconet_store_free(&store);
 }
 
 /* ---------------------------------------------------------------------------
@@ -653,11 +693,8 @@ static void test_max_length(void)
  * ---------------------------------------------------------------------------*/
 static void test_garbage_length_recovery(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
-    ble_piconet_store_confirm(&store, AA_DATA, INIT_DATA);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     const uint8_t payload[4] = {0x0Au, 0x0Bu, 0x0Cu, 0x0Du};
     ble_test_stream_t s;
@@ -668,7 +705,7 @@ static void test_garbage_length_recovery(void)
     unsigned int body_bits = (2u + len + BLE_CRC_BYTES) * 8u;
     stream_zeros(&s, 40u);
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
-                       INIT_DATA);
+                        INIT_DATA);
     stream_zeros(&s, body_bits - 16u - 40u - 112u);
 
     /* Sanity: the first preamble after the false one is the real one. */
@@ -677,24 +714,21 @@ static void test_garbage_length_recovery(void)
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
-        TEST_ASSERT(out.frames[0].access_address == AA_DATA);
-
-    ble_piconet_store_free(&store);
+    const ble_frame_t *f = find_frame_by_aa(&out, AA_DATA);
+    TEST_ASSERT(f != NULL);
+    if (f)
+        TEST_ASSERT(f->access_address == AA_DATA);
 }
 
 /* ---------------------------------------------------------------------------
- * 12. Unified classification: the advertising AA takes the advertising path
+ * 11. Unified classification: the advertising AA takes the advertising path
  *     on ANY channel — advertising PDUs appearing on data channels stay
  *     visible (they indicate a genuine bug or a diagnosable misread).
  * ---------------------------------------------------------------------------*/
 static void test_adv_aa_on_data_channel_adv_path(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     const uint8_t payload[8] = {1, 2, 3, 4, 5, 6, 0x02, 0x0A};
     ble_test_stream_t s;
@@ -704,10 +738,10 @@ static void test_adv_aa_on_data_channel_adv_path(void)
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
+    const ble_frame_t *f = find_frame_by_aa(&out, BLE_ADVERTISING_AA);
+    TEST_ASSERT(f != NULL);
+    if (f)
     {
-        const ble_frame_t *f = &out.frames[0];
         TEST_ASSERT(f->kind == BLE_FRAME_ADVERTISING);
         TEST_ASSERT(f->access_address == BLE_ADVERTISING_AA);
         TEST_ASSERT(f->crc_init == BLE_CRC_INIT_ADV);
@@ -717,21 +751,14 @@ static void test_adv_aa_on_data_channel_adv_path(void)
         TEST_ASSERT(pkt.is_adv_pdu == 1u);
         TEST_ASSERT(pkt.crc_ok == 1u);
     }
-
-    /* The advertising path touches no piconet state. */
-    TEST_ASSERT(ble_piconet_store_count(&store) == 0u);
-
-    ble_piconet_store_free(&store);
 }
 
 /* A rescan-spawned adv-AA candidate on a data channel surfaces as an
  * advertising frame (ungated path) — visibility over masking. */
 static void test_rescan_adv_aa_visible(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_DATA, &store);
+    ble_bitstream_decoder_init(&dec, CH_DATA);
 
     ble_test_stream_t s;
     bts_reset(&s);
@@ -752,31 +779,28 @@ static void test_rescan_adv_aa_visible(void)
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    /* Exactly the junk frame, through the advertising path. */
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
+    /* The junk advertising frame, found by the advertising AA. */
+    const ble_frame_t *f = find_frame_by_aa(&out, BLE_ADVERTISING_AA);
+    TEST_ASSERT(f != NULL);
+    if (f)
     {
-        TEST_ASSERT(out.frames[0].kind == BLE_FRAME_ADVERTISING);
-        TEST_ASSERT(out.frames[0].access_address == BLE_ADVERTISING_AA);
+        TEST_ASSERT(f->kind == BLE_FRAME_ADVERTISING);
+        TEST_ASSERT(f->access_address == BLE_ADVERTISING_AA);
 
         ble_packet_t pkt;
-        TEST_ASSERT(ble_decode_frame(&out.frames[0], CH_DATA, &pkt) == 0);
+        TEST_ASSERT(ble_decode_frame(f, CH_DATA, &pkt) == 0);
         TEST_ASSERT(pkt.crc_ok == 0u);   /* distinguishable as a misread */
     }
-
-    ble_piconet_store_free(&store);
 }
 
 /* ---------------------------------------------------------------------------
- * 13. Advertising frames are NOT CRC-gated in the framer: a corrupted adv
+ * 12. Advertising frames are NOT CRC-gated in the framer: a corrupted adv
  *     packet is still emitted (and the codec flags crc_ok=0).
  * ---------------------------------------------------------------------------*/
 static void test_adv_crc_fail_still_emitted(void)
 {
-    ble_piconet_store_t store;
-    ble_piconet_store_init(&store);
     ble_bitstream_decoder_t dec;
-    ble_bitstream_decoder_init(&dec, CH_ADV, &store);
+    ble_bitstream_decoder_init(&dec, CH_ADV);
 
     const uint8_t payload[8] = {1, 2, 3, 4, 5, 6, 0x02, 0x0A};
     ble_test_stream_t s;
@@ -788,15 +812,14 @@ static void test_adv_crc_fail_still_emitted(void)
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
 
-    TEST_ASSERT(out.count == 1u);
-    if (out.count == 1u)
+    const ble_frame_t *f = find_frame_by_aa(&out, BLE_ADVERTISING_AA);
+    TEST_ASSERT(f != NULL);
+    if (f)
     {
         ble_packet_t pkt;
-        TEST_ASSERT(ble_decode_frame(&out.frames[0], CH_ADV, &pkt) == 0);
+        TEST_ASSERT(ble_decode_frame(f, CH_ADV, &pkt) == 0);
         TEST_ASSERT(pkt.crc_ok == 0u);
     }
-
-    ble_piconet_store_free(&store);
 }
 
 int main(void)

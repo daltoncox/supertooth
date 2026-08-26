@@ -127,13 +127,18 @@ static inline void bts_feed(ble_bitstream_decoder_t *proc,
     for (unsigned int i = 0; i < s->count; i++)
     {
         uint8_t b = (uint8_t)((s->bytes[i / 8u] >> (i % 8u)) & 1u);
-        if (ble_bitstream_decoder_push_bit(proc, b) == BLE_VALID_PACKET &&
-            out->count < BTS_MAX_FRAMES)
+        if (ble_bitstream_decoder_push_bit(proc, b) == BLE_VALID_PACKET)
         {
-            if (ble_bitstream_decoder_get_frame(proc, &out->frames[out->count]) == 0)
+            while (out->count < BTS_MAX_FRAMES &&
+                   ble_bitstream_decoder_get_frame(proc,
+                        &out->frames[out->count]) == 0)
                 out->count++;
         }
     }
+    /* Drain any frames still queued after the final bit. */
+    while (out->count < BTS_MAX_FRAMES &&
+           ble_bitstream_decoder_get_frame(proc, &out->frames[out->count]) == 0)
+        out->count++;
 }
 
 #endif /* BLE_TEST_STREAM_H */

@@ -211,17 +211,15 @@ static int session_create_channels(session_t *session)
             if (bin < 0)
                 continue;
 
-            /* The decoder CRC-gates data candidates against the tracker's
-             * piconet store (shared per-session; the store serializes its
-             * own access). */
+            /* The decoder is a pure framing stage; the per-session tracker's
+             * piconet store owns CRC gating and CRCInit recovery. */
             int ok = ble_channel_processor_init(
                 proc, session->ble_chan_dispatcher, rf, center,
                 session->sample_rate_hz, (unsigned int)bin,
                 session->ble_channelizer.bank.M,
                 session->ble_channelizer.bank.M2,
                 ble_frame_stride,
-                CHANNELIZER_BANK_RSSI_CAL_DB,
-                &session->ble_tracker.conn_store);
+                CHANNELIZER_BANK_RSSI_CAL_DB);
 
             if (ok != 0)
                 continue;

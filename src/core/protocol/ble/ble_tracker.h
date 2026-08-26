@@ -45,6 +45,9 @@ typedef struct {
     uint64_t conn_initiator_addr;
     uint64_t conn_advertiser_addr;
     uint32_t conn_crc_init;
+    int      crc_ok;   /**< CRC of the emitted frame (advertising or data) as
+                            computed by the codec. For a CONNECT_IND this gates
+                            whether the connection candidate is seeded. */
 } ble_advertiser_event_t;
 
 /** Advertiser registry entry (owned by the tracker). */
@@ -116,14 +119,6 @@ void ble_tracker_set_enforce_crc(ble_tracker_t *t, int on);
  *         CRC-invalid data candidate).
  */
 int ble_tracker_submit_frame(ble_tracker_t *t, const ble_event_t *event);
-
-/** CRC gate (data-channel packets) — used internally by submit_frame. */
-ble_gate_result_t ble_tracker_gate_data_pdu(ble_tracker_t *t,
-                                            uint32_t access_address,
-                                            const uint8_t *pdu,
-                                            unsigned int pdu_bytes,
-                                            uint32_t rx_crc,
-                                            uint32_t *crc_init_used_out);
 
 /** Seed a CRCInit candidate from a decoded CONNECT_IND. */
 void ble_tracker_seed_candidate(ble_tracker_t *t,
