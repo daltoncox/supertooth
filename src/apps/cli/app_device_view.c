@@ -160,7 +160,10 @@ static int cmp_identifier(const void *a, const void *b)
 {
     const dev_entity_t *ea = (const dev_entity_t *)a;
     const dev_entity_t *eb = (const dev_entity_t *)b;
-    int t = strcmp(ea->type, eb->type);
+    int t = strcmp(ea->proto, eb->proto);
+    if (t != 0)
+        return t;
+    t = strcmp(ea->type, eb->type);
     if (t != 0)
         return t;
     return strcmp(ea->identifier, eb->identifier);

@@ -34,8 +34,21 @@ static uint32_t sample_to_rx_clk_1600(uint64_t radio_start_sample_index,
 static void format_addr_bredr(char *buf, size_t n, uint32_t lap,
                               uint8_t uap, int uap_found)
 {
-    if (uap_found)
-        snprintf(buf, n, "0x%02X%06X", (unsigned)uap,
+    uint8_t used = uap;
+    int known = uap_found;
+
+    /* The General/Limited Inquiry Access Codes (GIAC 0x9E8B33, LIAC 0x9E8B00)
+     * use the well-known DCI UAP (0x00); they are broadcast discovery LAPs, not
+     * recovered addresses, so always render with a known UAP regardless of the
+     * recovery state. */
+    if (lap == 0x9E8B33u || lap == 0x9E8B00u)
+    {
+        used = 0x00u;
+        known = 1;
+    }
+
+    if (known)
+        snprintf(buf, n, "0x%02X%06X", (unsigned)used,
                  (unsigned)(lap & 0xFFFFFFu));
     else
         snprintf(buf, n, "0x??%06X", (unsigned)(lap & 0xFFFFFFu));

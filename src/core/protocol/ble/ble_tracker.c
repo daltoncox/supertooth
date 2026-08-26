@@ -128,6 +128,7 @@ static ble_adv_record_t *adv_find_or_create(ble_tracker_t *t, uint64_t addr)
     r->adv_addr = addr;
     r->device_id = t->next_id++;
     r->first_seen_ms = now_ms();
+    r->last_seen_ms = r->first_seen_ms;
     return r;
 }
 
@@ -154,6 +155,7 @@ static ble_conn_record_t *conn_find_or_create(ble_tracker_t *t, uint32_t aa)
     r->aa = aa;
     r->piconet_id = t->next_id++;
     r->first_seen_ms = now_ms();
+    r->last_seen_ms = r->first_seen_ms;
     return r;
 }
 

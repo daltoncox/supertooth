@@ -31,8 +31,12 @@ static void bredr_format_piconet_id(char out[16],
     if (pnet)
         lap = pnet->lap & 0xFFFFFFu;
 
-    if (pnet && pnet->uap_found)
-        snprintf(out, 16, "0x%02X%06" PRIX32, pnet->uap, lap);
+    /* The General/Limited Inquiry Access Codes (GIAC 0x9E8B33, LIAC 0x9E8B00)
+     * use the well-known DCI UAP (0x00), so always render with a known UAP. */
+    if (pnet && (pnet->uap_found ||
+                 lap == 0x9E8B33u || lap == 0x9E8B00u))
+        snprintf(out, 16, "0x%02X%06" PRIX32,
+                 (lap == 0x9E8B33u || lap == 0x9E8B00u) ? 0u : pnet->uap, lap);
     else
         snprintf(out, 16, "0x??%06" PRIX32, lap);
 }
