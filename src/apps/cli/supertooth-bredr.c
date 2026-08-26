@@ -12,6 +12,7 @@
 #include "bredr_display.h"
 #include "radio_common.h"
 #include "session.h"
+#include "bredr_bitstream_decoder.h"
 
 #define BREDR_MAX_CHANNEL 79u
 
@@ -35,6 +36,9 @@ static uint32_t g_lap_filter = 0u;
 static unsigned int g_num_bredr_channels = BREDR_SESSION_MAX_CHANNELS;
 static unsigned int g_bottom_bredr_channel = 0u;
 static int g_bottom_channel_explicit = 0;
+/* Maximum access-code bit errors accepted by the BR/EDR bitstream decoder.
+ * Defaults to 0 (strict, byte-perfect access-code match). */
+static unsigned int g_ac_errors = 0u;
 
 /* Counters. */
 static unsigned long g_total_packets = 0UL;
@@ -208,9 +212,10 @@ static void print_usage(const char *argv0)
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|devices] [-l|--lap LAP] "
             "[-c|--channels N] [-b|--bottom-channel CH] "
-            "[-d|--device [<type>:<id>]] [--debug]\n", argv0);
+            "[-d|--device [<type>:<id>]] [--ac-errors N] [--debug]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
     fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
+    fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n", "--ac-errors N");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
             "-c, --channels N",
             BREDR_SESSION_MAX_CHANNELS, g_num_bredr_channels);
@@ -250,6 +255,7 @@ int main(int argc, char *argv[])
         {"channels",       required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
         {"device",         optional_argument, NULL, 'd'},
+        {"ac-errors",      required_argument, NULL, APP_OPT_AC_ERRORS},
         {"version",        no_argument,       NULL, 'V'},
         {"debug",          no_argument,       NULL, APP_OPT_DEBUG},
         {"help",           no_argument,       NULL, 'h'},
@@ -328,6 +334,20 @@ int main(int argc, char *argv[])
             case APP_OPT_DEBUG:
                 g_debug = 1;
                 break;
+            case APP_OPT_AC_ERRORS:
+            {
+                char *end = NULL;
+                unsigned long value = strtoul(optarg, &end, 0);
+                if (end == optarg || *end != '\0' || value > 64ul)
+                {
+                    fprintf(stderr, "Invalid --ac-errors value: %s (expected 0-64)\n",
+                            optarg);
+                    print_usage(argv[0]);
+                    return EXIT_FAILURE;
+                }
+                g_ac_errors = (unsigned int)value;
+                break;
+            }
             case 'V':
                 printf("supertooth-bredr %s\n", supertooth_get_version());
                 return EXIT_SUCCESS;
@@ -440,6 +460,12 @@ int main(int argc, char *argv[])
         g_session = NULL;
         return EXIT_FAILURE;
     }
+
+    /* Apply the global access-code error tolerance before streaming begins.
+     * The bitstream decoder is the sole access-code acceptance gate. */
+    bredr_bitstream_decoder_set_global_max_ac_errors((uint8_t)g_ac_errors);
+
+    printf("AC errors   : %u\n", g_ac_errors);
 
     if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
         g_device_view = app_device_view_start(g_session);

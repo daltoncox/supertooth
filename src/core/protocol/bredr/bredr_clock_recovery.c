@@ -87,9 +87,8 @@ static void state_clear(bredr_piconet_t *pnet)
     pnet->recovery_got_first_packet = 0;
 }
 
-void bredr_recovery_global_init(uint8_t max_ac_errors)
+void bredr_recovery_global_init(void)
 {
-    (void)max_ac_errors;
 }
 
 void bredr_piconet_recovery_reset(bredr_piconet_t *pnet)
@@ -685,8 +684,10 @@ static int narrow_clk6_candidates(const bredr_piconet_t *pnet,
         if ((cur_clk - hist_clk) > CLK1_6_HISTORY_CUTOFF_CLK1600)
             break;
 
-        /* Skip packets without a decodable header inside configured AC tolerance. */
-        if (!hist_frame->has_header || hist_frame->ac_errors > BREDR_AC_ERRORS_DEFAULT)
+        /* Skip packets without a decodable header.  Access-code acceptance
+         * (including its error tolerance) is enforced solely by the bitstream
+         * decoder, so no separate AC filter belongs here. */
+        if (!hist_frame->has_header)
             continue;
 
         /* CLK1-6 advances one tick per rx_clk_1600 slot.  The CLK1-6 at the
@@ -717,7 +718,7 @@ int bredr_clock_recovery_acquire(bredr_piconet_t *pnet,
 {
     const bredr_frame_t *frame = &event->frame;
 
-    if (!pnet || !frame->has_header || frame->ac_errors > BREDR_AC_ERRORS_DEFAULT)
+    if (!pnet || !frame->has_header)
         return 0;
     if (pnet->uap_found && pnet->clk_known)
         return 0;

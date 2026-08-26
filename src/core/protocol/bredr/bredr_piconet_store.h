@@ -106,11 +106,13 @@ void bredr_piconet_store_free(bredr_piconet_store_t *store);
  * Searches the store for a piconet matching event->frame.lap. If not found, a new
  * piconet is heap-allocated, initialised, and appended to the store.
  *
- * After adding the event, if the frame has a clean decoded header
- * (has_header && ac_errors == 0) and the piconet does not yet have both UAP
- * and CLK1-6, the frame is fed to the active BR/EDR recovery backend. Once a
- * UAP is reported, the store scans all 64 CLK1-6 candidates using HEC
- * verification and calls bredr_piconet_set_uap() on the piconet.
+ * After adding the event, if the frame has a decoded header (has_header != 0)
+ * and the piconet does not yet have both UAP and CLK1-6, the frame is fed to
+ * the active BR/EDR recovery backend. Access-code acceptance (and its error
+ * tolerance) is enforced solely by the bitstream decoder, so any frame that
+ * reaches this layer with a header has already passed that gate. Once a UAP is
+ * reported, the store scans all 64 CLK1-6 candidates using HEC verification
+ * and calls bredr_piconet_set_uap() on the piconet.
  *
  * @param store    Initialised store.  Must not be NULL.
  * @param event    BR/EDR event to add. Must not be NULL.

@@ -97,7 +97,8 @@ onPlayPauseToggled: {
                                              count,
                                              bottom,
                                              captureView.backendLeGrid,
-                                             captureView.backendBleAdvChannel)
+                                             captureView.backendBleAdvChannel,
+                                             captureView.acErrors)
                 }
             }
             }

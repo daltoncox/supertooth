@@ -35,6 +35,28 @@
 #define BARKER_MAX_ERRORS 1u
 
 /* ---------------------------------------------------------------------------
+ * Global access-code error tolerance
+ *
+ * Single, process-wide control for the maximum Hamming distance accepted as a
+ * valid access-code match.  Every BR/EDR bitstream decoder reads this value;
+ * there is intentionally no per-decoder or per-layer override, so the decoder
+ * is the sole gate for access-code acceptance.  Defaults to 0 (strict,
+ * byte-perfect access-code match).  Set once before streaming begins.
+ * ---------------------------------------------------------------------------*/
+
+static uint8_t g_max_ac_errors = 0u;
+
+void bredr_bitstream_decoder_set_global_max_ac_errors(uint8_t max_ac_errors)
+{
+    g_max_ac_errors = max_ac_errors;
+}
+
+uint8_t bredr_bitstream_decoder_get_global_max_ac_errors(void)
+{
+    return g_max_ac_errors;
+}
+
+/* ---------------------------------------------------------------------------
  * Internal helpers
  * ---------------------------------------------------------------------------*/
 
@@ -106,8 +128,9 @@ static int barker_ok(uint64_t window)
 /**
  * @brief Reset the collection portion of a processor back to SEARCHING.
  *
- * Does NOT clear sw_window, bits_seen, or max_ac_errors — those run
- * continuously across packet boundaries.
+ * Does NOT clear sw_window or bits_seen — those run
+ * continuously across packet boundaries.  (The access-code error tolerance is
+ * a process-wide global, not per-processor state, so it is not touched here.)
  */
 static void reset_collection(bredr_bitstream_decoder_t *proc)
 {
@@ -165,12 +188,11 @@ static int push_air_payload_bit(bredr_bitstream_decoder_t *proc, uint8_t bit)
  * Public API implementation
  * ---------------------------------------------------------------------------*/
 
-void bredr_bitstream_decoder_init(bredr_bitstream_decoder_t *proc, uint8_t max_ac_errors)
+void bredr_bitstream_decoder_init(bredr_bitstream_decoder_t *proc)
 {
     if (!proc)
         return;
     memset(proc, 0, sizeof(*proc));
-    proc->max_ac_errors = max_ac_errors;
     /* state = STATE_SEARCHING = 0, already zeroed */
 }
 
@@ -209,7 +231,7 @@ bredr_status_t bredr_bitstream_decoder_push_bit(bredr_bitstream_decoder_t *proc,
         uint64_t expected = bredr_gen_syncword(lap);
         uint8_t ac_errors = popcount64(proc->sw_window ^ expected);
 
-        if (ac_errors > proc->max_ac_errors)
+        if (ac_errors > g_max_ac_errors)
             return BREDR_SEARCHING;
 
         /* Access code matched. */

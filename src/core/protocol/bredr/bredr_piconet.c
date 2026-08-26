@@ -232,9 +232,7 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
     if (!frame->has_header)
         return packet_is_newest;
 
-    int hec_ok = 0;
-    if (frame->ac_errors <= 1u)
-        hec_ok = bredr_clock_track_packet(pnet, frame, rx_clk_1600);
+    int hec_ok = bredr_clock_track_packet(pnet, frame, rx_clk_1600);
     if (!hec_ok || isnan(meta->rssi_dbr))
         return packet_is_newest;
 

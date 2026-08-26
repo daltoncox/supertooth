@@ -10,6 +10,9 @@ Rectangle {
     // Drop BLE frames whose CRC fails. Applies to BLE and hybrid sessions.
     // Default on, matching the CLI's --enforce-crc default.
     property bool enforceCrc: true
+    // Maximum BR/EDR access-code bit errors tolerated by the bitstream decoder.
+    // 0 (default) = strict, byte-perfect access-code match.
+    property int acErrors: 0
     property bool running: false
 
     // Channel layout. numChannels is the count of channels in the active
@@ -448,6 +451,31 @@ Rectangle {
 
         Label {
             text: qsTr("When on, BLE frames whose CRC doesn't pass are dropped before display. Applies to BLE and hybrid sessions. Helps suppress spurious devices from bit errors.")
+            color: "#858585"
+            Layout.fillWidth: true
+            wrapMode: Text.WordWrap
+        }
+
+        Label {
+            text: qsTr("Access-Code Errors")
+            color: "#cccccc"
+            font.bold: true
+            Layout.topMargin: 8
+        }
+
+        SpinBox {
+            id: acErrorsSpin
+            enabled: !root.running
+            from: 0
+            to: 8
+            stepSize: 1
+            value: root.acErrors
+
+            onValueChanged: root.acErrors = value
+        }
+
+        Label {
+            text: qsTr("Maximum bit errors tolerated when matching a BR/EDR access code. 0 (default) requires a byte-perfect match and suppresses spurious devices from bit errors; raise it in noisy captures if too few packets are detected.")
             color: "#858585"
             Layout.fillWidth: true
             wrapMode: Text.WordWrap

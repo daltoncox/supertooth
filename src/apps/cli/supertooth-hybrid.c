@@ -13,6 +13,7 @@
 #include "bredr_display.h"
 #include "ble_bitstream_decoder.h"
 #include "session.h"
+#include "bredr_bitstream_decoder.h"
 
 #define BREDR_MAX_CHANNEL 79u
 
@@ -22,6 +23,9 @@ static int g_enforce_crc = 1;   /* drop BLE frames whose CRC fails; default on *
 static unsigned int g_num_bredr_channels = BREDR_SESSION_MAX_CHANNELS;
 static unsigned int g_bottom_bredr_channel = 0u;
 static int g_bottom_channel_explicit = 0;
+/* Maximum access-code bit errors accepted by the BR/EDR bitstream decoder.
+ * Defaults to 0 (strict, byte-perfect access-code match). */
+static unsigned int g_ac_errors = 0u;
 static session_protocol_ref_t g_tune_ref = SESSION_REF_BREDR;
 static session_t *g_session = NULL;
 static app_device_view_t *g_device_view = NULL;
@@ -152,7 +156,7 @@ static void print_usage(const char *argv0)
 {
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
-            "[--tune-ref bredr|ble] [-d|--device [<type>:<id>]] [--debug] [--enforce-crc on|off]\n",
+            "[--tune-ref bredr|ble] [-d|--device [<type>:<id>]] [--ac-errors N] [--debug] [--enforce-crc on|off]\n",
             argv0);
     fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
@@ -161,6 +165,7 @@ static void print_usage(const char *argv0)
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
+    fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n", "--ac-errors N");
     fprintf(stderr, "  %-30s Which protocol's channel window sets the tuning grid (default: bredr)\n",
             "--tune-ref bredr|ble");
     app_print_device_usage_line();
@@ -224,6 +229,7 @@ int main(int argc, char *argv[])
         {"bottom-channel", required_argument, NULL, 'b'},
         {"tune-ref", required_argument, NULL, 'r'},
         {"device", optional_argument, NULL, 'd'},
+        {"ac-errors", required_argument, NULL, APP_OPT_AC_ERRORS},
         {"version", no_argument, NULL, 'V'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
         {"enforce-crc", required_argument, NULL, APP_OPT_ENFORCE_CRC},
@@ -319,6 +325,20 @@ int main(int argc, char *argv[])
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
+            break;
+        }
+        case APP_OPT_AC_ERRORS:
+        {
+            char *end = NULL;
+            unsigned long value = strtoul(optarg, &end, 0);
+            if (end == optarg || *end != '\0' || value > 64ul)
+            {
+                fprintf(stderr, "Invalid --ac-errors value: %s (expected 0-64)\n",
+                        optarg);
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            g_ac_errors = (unsigned int)value;
             break;
         }
         case 'V':
@@ -442,6 +462,11 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    /* Apply the global access-code error tolerance before streaming begins.
+     * The bitstream decoder is the sole access-code acceptance gate. */
+    bredr_bitstream_decoder_set_global_max_ac_errors((uint8_t)g_ac_errors);
+
+    printf("AC errors   : %u\n", g_ac_errors);
     printf("Receiving... Press Ctrl+C to stop.\n");
 
     if (g_output_mode == APP_OUTPUT_MODE_DEVICES)

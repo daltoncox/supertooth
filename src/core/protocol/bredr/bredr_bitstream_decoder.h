@@ -14,7 +14,7 @@
  * -------------
  * @code
  *   bredr_bitstream_decoder_t proc;
- *   bredr_bitstream_decoder_init(&proc, BREDR_AC_ERRORS_DEFAULT);
+ *   bredr_bitstream_decoder_init(&proc);
  *
  *   // For every demodulated bit from the 1-Mbps channel:
  *   bredr_status_t s = bredr_bitstream_decoder_push_bit(&proc, bit);
@@ -38,8 +38,9 @@
  *
  * Limitation: bit errors that fall in the LAP portion of the sync word
  * (bits 34–57) may cause a miss because the extracted LAP will be wrong.
- * This simple approach works well at low BER; use `max_ac_errors=0` for
- * the most reliable (but strictest) detection.
+ * This simple approach works well at low BER; set the global access-code
+ * error tolerance to 0 (the default) for the most reliable (but strictest)
+ * detection.
  *
  * Packet collection
  * -----------------
@@ -92,9 +93,6 @@ extern "C"
 
 // Enough payload bytes to hold BR_MAX_AIR_PAYLOAD_BITS
 #define BR_MAX_AIR_PAYLOAD_BYTES ((BR_MAX_AIR_PAYLOAD_BITS + 7u) / 8u)
-
-/** Default maximum Hamming distance allowed in access-code matching. */
-#define BREDR_AC_ERRORS_DEFAULT    2u
 
 /**
  * General Inquiry Access Code LAP (GIAC).
@@ -232,11 +230,6 @@ typedef enum
  */
 typedef struct
 {
-    /* -- Configuration ----------------------------------------------------- */
-
-    /** Maximum AC Hamming distance accepted as a valid match. */
-    uint8_t  max_ac_errors;
-
     /* -- Sync-word detection ----------------------------------------------- */
 
     /**
@@ -335,13 +328,32 @@ typedef struct
  * Must be called before the first `bredr_bitstream_decoder_push_bit()` on this processor.
  * Safe to call again at any time to reset all state.
  *
- * @param proc           Pointer to the processor.  Must not be NULL.
- * @param max_ac_errors  Maximum Hamming distance accepted as a valid AC
- *                       match.  Use BREDR_AC_ERRORS_DEFAULT (2) for
- *                       normal operation, 0 for strict matching only.
+ * The access-code error tolerance is a single process-wide setting owned by
+ * this module (see bredr_bitstream_decoder_set_global_max_ac_errors); it is
+ * not configured per processor.
+ *
+ * @param proc  Pointer to the processor.  Must not be NULL.
  */
-void           bredr_bitstream_decoder_init(bredr_bitstream_decoder_t *proc,
-                                    uint8_t max_ac_errors);
+void           bredr_bitstream_decoder_init(bredr_bitstream_decoder_t *proc);
+
+/**
+ * @brief Set the process-wide maximum access-code Hamming distance.
+ *
+ * Applies to every BR/EDR bitstream decoder.  This is the sole access-code
+ * acceptance gate; no other layer performs an access-code error filter.
+ * Set once before streaming begins.  Defaults to 0 (strict, byte-perfect
+ * access-code match).
+ *
+ * @param max_ac_errors  Maximum Hamming distance accepted as a valid AC match.
+ */
+void           bredr_bitstream_decoder_set_global_max_ac_errors(uint8_t max_ac_errors);
+
+/**
+ * @brief Return the current process-wide maximum access-code Hamming distance.
+ *
+ * @return  The configured maximum AC error tolerance.
+ */
+uint8_t        bredr_bitstream_decoder_get_global_max_ac_errors(void);
 
 /**
  * @brief Push one demodulated bit into the processor.

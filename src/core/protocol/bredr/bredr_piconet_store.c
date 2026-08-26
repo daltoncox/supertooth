@@ -116,7 +116,7 @@ void bredr_piconet_store_init(bredr_piconet_store_t *store)
     store->entries = (bredr_piconet_store_entry_t *)calloc(
         store->capacity, sizeof(*store->entries));
 
-    bredr_recovery_global_init(BREDR_AC_ERRORS_DEFAULT);
+    bredr_recovery_global_init();
 }
 
 void bredr_piconet_store_free(bredr_piconet_store_t *store)

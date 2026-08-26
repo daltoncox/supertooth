@@ -68,7 +68,7 @@ int bredr_channel_processor_init(bredr_channel_processor_t *proc,
     proc->decimated = malloc(sizeof(float complex) * proc->buf_cap_samples);
     if (!proc->decimated) { bredr_channel_processor_destroy(proc); return -1; }
 
-    bredr_bitstream_decoder_init(&proc->decoder, BREDR_AC_ERRORS_DEFAULT);
+    bredr_bitstream_decoder_init(&proc->decoder);
 
     proc->prev_state               = BREDR_SEARCHING;
     proc->noise_floor_linear       = 0.0f;

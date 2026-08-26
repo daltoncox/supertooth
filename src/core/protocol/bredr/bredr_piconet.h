@@ -192,10 +192,9 @@ extern "C"
     * Copies the event into the ring buffer (overwriting the oldest entry once
      * full) and updates first_seen and last_seen.
      *
-    * If the piconet is in clock-tracking mode (uap_found && clk_known) and the
-    * event carries a clean header frame (has_header != 0, ac_errors == 0),
-     * the central CLK1-6 estimate is verified and corrected by trying expected,
-     * ±1, ±2
+     * If the piconet is in clock-tracking mode (uap_found && clk_known) and the
+     * event carries a decoded header (has_header != 0), the central CLK1-6
+     * estimate is verified and corrected by trying expected, ±1, ±2
      * candidates using
      * the known UAP's HEC.
      *

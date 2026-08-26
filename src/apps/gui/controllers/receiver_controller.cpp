@@ -1,5 +1,7 @@
 #include "receiver_controller.h"
 
+#include "bredr_bitstream_decoder.h"
+
 #include <QByteArray>
 #include <QDebug>
 #include <QLoggingCategory>
@@ -57,9 +59,9 @@ void ReceiverController::setRunning(bool running)
 }
 
 bool ReceiverController::start(int inputType, const QString &deviceId,
-                               int sessionType, bool enforceCrc,
-                               int channelCount, int bottomChannel,
-                               int leGrid, int bleChannel)
+                                int sessionType, bool enforceCrc,
+                                int channelCount, int bottomChannel,
+                                int leGrid, int bleChannel, int acErrors)
 {
     qCInfo(lcSession).nospace().noquote()
         << "start() requested: inputType=" << inputType
@@ -70,6 +72,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         << " bottomChannel=" << bottomChannel
         << " leGrid=" << leGrid
         << " bleChannel=" << bleChannel
+        << " acErrors=" << acErrors
         << " running=" << m_running;
 
     if (m_running)
@@ -97,6 +100,10 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         emit errorOccurred(tr("File replay is not yet supported."));
         return false;
     }
+
+    /* Apply the global access-code error tolerance before streaming begins.
+     * The BR/EDR bitstream decoder is the sole access-code acceptance gate. */
+    bredr_bitstream_decoder_set_global_max_ac_errors((uint8_t)acErrors);
 
     /* A prior run's worker is always joined and released by onFinish() before
      * running() flips back to false, so nothing should be pending here. Guard

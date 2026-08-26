@@ -34,11 +34,12 @@ typedef struct
 /**
  * @brief One-time global init of the recovery module.
  *
- * @param max_ac_errors  Maximum access-code bit errors tolerated by the
- *                       recovery engine (currently advisory; the engine uses
- *                       BREDR_AC_ERRORS_DEFAULT for header acceptance).
+ * The recovery module performs no access-code filtering of its own; access-code
+ * acceptance (and its error tolerance) is owned entirely by the BR/EDR
+ * bitstream decoder.  This hook is retained for future global-recovery
+ * initialisation.
  */
-void bredr_recovery_global_init(uint8_t max_ac_errors);
+void bredr_recovery_global_init(void);
 
 /**
  * @brief Reset the acquisition working state (and only that) of a piconet.
