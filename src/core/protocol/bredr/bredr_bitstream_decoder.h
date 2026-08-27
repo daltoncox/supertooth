@@ -399,20 +399,6 @@ int            bredr_bitstream_decoder_get_frame(bredr_bitstream_decoder_t *proc
  * @param hec   8-bit HEC register; bit 7 is the first bit transmitted.
  * @return      candidate 8-bit UAP.
  */
-uint8_t        bredr_decode_uap_from_hec(uint16_t data, uint8_t hec);
-
-/**
- * @brief Return the maximum on-air payload bits for a given TYPE code.
- *
- * This is the number of on-air payload bits for a decoded packet type,
- * including FEC overhead where applicable. PHY collection should not use it
- * to size capture until header dewhitening has been done with a known CLK1-6.
- *
- * @param type_code  4-bit packet TYPE (0–15).
- * @return           On-air payload bits, or 0 for NULL/POLL.
- */
-unsigned int   bredr_on_air_payload_bits(uint8_t type_code);
-
 #ifdef __cplusplus
 }
 #endif

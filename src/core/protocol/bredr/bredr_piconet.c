@@ -143,7 +143,7 @@ void bredr_piconet_init(bredr_piconet_t *pnet, uint32_t lap)
     for (int i = 0; i < 8; i++)
         rssi_tracker_init(&pnet->slave_rssi_track[i]);
 
-    bredr_piconet_recovery_reset(pnet);
+    bredr_recovery_reset(pnet);
 
     /* GIAC/LIAC: UAP is the well-known DCI value (0x00). */
     if (pnet->lap == BREDR_LAP_GIAC || pnet->lap == BREDR_LAP_LIAC)
@@ -193,14 +193,12 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
     int packet_is_newest;
     int has_active_track;
     uint32_t rx_clk_1600;
-    uint32_t clkn;
 
     if (!pnet || !event)
         return 0;
     const bredr_frame_t *frame = &event->frame;
     const rx_metadata_t *meta = &event->meta;
     rx_clk_1600 = bredr_sample_to_rx_clk_1600(event);
-    clkn = bredr_sample_to_clkn(event);
 
     pnet->total_packets++;
     packet_is_newest = bredr_queue_insert_event(pnet, event);
@@ -216,24 +214,18 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
     if (packet_is_newest && !has_active_track && !isnan(meta->rssi_dbr))
         rssi_tracker_add(&pnet->combined_rssi_track, meta);
 
-    /* Only the newest packet drives acquisition / tracking. */
+    /* Only the newest packet drives recovery / tracking. */
     if (!packet_is_newest)
         return packet_is_newest;
 
-    /* Still acquiring UAP/CLK1-6: feed the recovery engine. */
-    if (!has_active_track)
-    {
-        if (frame->has_header)
-            bredr_clock_recovery_acquire(pnet, event, clkn, rx_clk_1600);
-        return packet_is_newest;
-    }
+    /* Drive UAP/clock recovery.  While the clock is unknown this acquires the
+     * UAP and clock offset; once known it merely corrects for clock drift. */
+    int lock_ok = frame->has_header ? bredr_recovery_process(pnet, event) : 0;
 
-    /* Active track: verify/correct the clock, then accumulate directional RSSI. */
-    if (!frame->has_header)
-        return packet_is_newest;
-
-    int hec_ok = bredr_clock_track_packet(pnet, frame, rx_clk_1600);
-    if (!hec_ok || isnan(meta->rssi_dbr))
+    /* Directional RSSI is accumulated only for packets whose HEC validated on
+     * an already-active track; the packet that first establishes the clock is
+     * not itself routed. */
+    if (!has_active_track || !lock_ok || isnan(meta->rssi_dbr))
         return packet_is_newest;
 
     uint8_t packet_clk6 = bredr_piconet_central_clk_1_6(pnet, rx_clk_1600);

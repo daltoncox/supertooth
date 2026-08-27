@@ -4,7 +4,7 @@
  *
  * This is the Phase 3 harness: with no IQ/file replay path in the radio stack,
  * a real capture is recorded via bredr_piconet_store_set_frame_dump() and
- * replayed here through bredr_recovery_process_packet() to confirm the
+ * replayed here through bredr_recovery_process() to confirm the
  * aligned recovery produces a stable, expected UAP.
  *
  * Usage:
@@ -21,6 +21,7 @@
 
 #include "bredr_bitstream_decoder.h"
 #include "bredr_clock_recovery.h"
+#include "receive_event_models.h"
 #include "bredr_piconet_store.h"
 
 #define FRAME_DUMP_MAGIC   0x53544C44u
@@ -100,12 +101,18 @@ int main(void)
             nbytes = sizeof(fr.air_payload);
         memcpy(fr.air_payload, rec.air_payload, nbytes);
 
-        bredr_recovery_result_t r;
-        if (bredr_recovery_process_packet(pnet, &fr, (int)rec.channel, rec.clkn, &r))
+        bredr_event_t ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.meta.radio_sample_rate_hz = 3200u;
+        ev.meta.radio_start_sample_index = rec.clkn;
+        ev.meta.channel_index = (uint16_t)rec.channel;
+        ev.frame = fr;
+
+        if (bredr_recovery_process(pnet, &ev))
         {
             recovered = 1;
-            got_uap = r.uap;
-            got_clk = r.clk6_hint;
+            got_uap = pnet->uap;
+            got_clk = (uint8_t)pnet->clock_offset;
             break;
         }
         records++;

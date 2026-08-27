@@ -24,6 +24,7 @@
 
 #include "bredr_bitstream_decoder.h"
 #include "bredr_clock_recovery.h"
+#include "receive_event_models.h"
 #include "btbb_test_adapter.h"
 
 /* libbtbb type codes (bluetooth_packet.h) */
@@ -485,13 +486,19 @@ static void run_scenario(const char *name, uint32_t lap, scen_pkt_t *pkts, int n
     {
         bredr_frame_t fr;
         make_bredr_frame(&pkts[i].f, lap, &fr);
-        bredr_recovery_result_t r;
-        if (bredr_recovery_process_packet(pnet, &fr, 0, pkts[i].clkn, &r))
+
+        bredr_event_t ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.meta.radio_sample_rate_hz = 3200u;
+        ev.meta.radio_start_sample_index = pkts[i].clkn;
+        ev.frame = fr;
+
+        if (bredr_recovery_process(pnet, &ev))
         {
             nat_rec = 1;
             nat_idx = i;
-            nat_uap = r.uap;
-            nat_clk = r.clk6_hint;
+            nat_uap = pnet->uap;
+            nat_clk = (uint8_t)pnet->clock_offset;
             break;
         }
     }

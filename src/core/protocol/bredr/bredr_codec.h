@@ -206,8 +206,9 @@ uint16_t bredr_payload_crc(const uint8_t *data,
                             uint8_t uap);
 
 /**
- * @brief Dewhiten (or whiten — the operation is symmetric) on-air payload
- *        bits using the BR/EDR whitening sequence for a given CLK1-6.
+ * @brief Apply (or undo) BR/EDR whitening on on-air payload bits for a given
+ *        CLK1-6.  The operation is a symmetric XOR, so the same routine both
+ *        whitens on transmit and dewhitens on receive.
  *
  * The whitening sequence starts at the bit index that follows
  * @p logical_offset_bits of already-whitened bits (18 for a standard BR/EDR
@@ -223,7 +224,7 @@ uint16_t bredr_payload_crc(const uint8_t *data,
  * @param dst_capacity    Capacity of @p dst, in bytes.
  * @return                Number of bytes written to @p dst.
  */
-unsigned int bredr_dewhiten_air_payload_bytes(const uint8_t *src_air,
+unsigned int bredr_xor_whitening_payload(const uint8_t *src_air,
                                               unsigned int src_air_bits,
                                               uint8_t clk6,
                                               unsigned int logical_offset_bits,

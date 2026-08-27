@@ -146,19 +146,6 @@ static unsigned int bredr_sync_max_air_payload_bits(uint8_t type_code)
     }
 }
 
-static int bredr_acl_payload_uses_fec_2_3(uint8_t type_code)
-{
-    switch (type_code & 0x0Fu)
-    {
-    case 0x03u:
-    case 0x0Au:
-    case 0x0Eu:
-        return 1;
-    default:
-        return 0;
-    }
-}
-
 static uint8_t bredr_fec_2_3_remainder(uint16_t codeword)
 {
     /*
@@ -254,7 +241,7 @@ static unsigned int bredr_whitening_index_after_bits(uint8_t clk6,
     return (unsigned int)((s_whitening_indices[clk6 & 0x3Fu] + logical_bits) % 127u);
 }
 
-unsigned int bredr_dewhiten_air_payload_bytes(const uint8_t *src_air,
+unsigned int bredr_xor_whitening_payload(const uint8_t *src_air,
                                                      unsigned int src_air_bits,
                                                      uint8_t clk6,
                                                      unsigned int logical_offset_bits,
@@ -321,7 +308,7 @@ static unsigned int bredr_decode_acl_payload_from_air(const bredr_frame_t *frame
                                  &decoded_air_bits) < 0)
             return 0u;
 
-        return bredr_dewhiten_air_payload_bytes(decoded_air,
+        return bredr_xor_whitening_payload(decoded_air,
                                                 decoded_air_bits,
                                                 clk6,
                                                 18u,
@@ -332,7 +319,7 @@ static unsigned int bredr_decode_acl_payload_from_air(const bredr_frame_t *frame
     case 0x09u:
     case 0x0Bu:
     case 0x0Fu:
-        return bredr_dewhiten_air_payload_bytes(frame->air_payload,
+        return bredr_xor_whitening_payload(frame->air_payload,
                                                 input_air_bits,
                                                 clk6,
                                                 18u,
@@ -379,7 +366,7 @@ static unsigned int bredr_decode_sync_payload_from_air(const bredr_frame_t *fram
                                  &decoded_air_bits) < 0)
             return 0u;
 
-        return bredr_dewhiten_air_payload_bytes(decoded_air,
+        return bredr_xor_whitening_payload(decoded_air,
                                                 decoded_air_bits,
                                                 clk6,
                                                 18u,
@@ -399,7 +386,7 @@ static unsigned int bredr_decode_sync_payload_from_air(const bredr_frame_t *fram
                                  &decoded_air_bits) < 0)
             return 0u;
 
-        return bredr_dewhiten_air_payload_bytes(decoded_air,
+        return bredr_xor_whitening_payload(decoded_air,
                                                 decoded_air_bits,
                                                 clk6,
                                                 18u,
@@ -408,7 +395,7 @@ static unsigned int bredr_decode_sync_payload_from_air(const bredr_frame_t *fram
 
     case 0x07u:
     case 0x0Du:
-        return bredr_dewhiten_air_payload_bytes(frame->air_payload,
+        return bredr_xor_whitening_payload(frame->air_payload,
                                                 input_air_bits,
                                                 clk6,
                                                 18u,

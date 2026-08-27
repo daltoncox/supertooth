@@ -3,6 +3,7 @@
 #include <string.h>
 #include "bredr_codec.h"
 #include "bredr_clock_recovery.h"
+#include "receive_event_models.h"
 #include "capture_151FC475.h"
 
 int main(void)
@@ -22,9 +23,14 @@ int main(void)
         unsigned nbytes=(p->air_payload_bits+7u)/8u;
         if(nbytes>sizeof(f.air_payload)) nbytes=sizeof(f.air_payload);
         memcpy(f.air_payload,p->air_payload,nbytes);
-        bredr_recovery_result_t r;
-        int rc = bredr_recovery_process_packet(pnet,&f,p->channel,p->clkn,&r);
-        if(rc){ recovered=1; got_uap=r.uap; got_clk=r.clk6_hint; printf("recovered at pkt %d: UAP=0x%02X clk6=%u\n",i,got_uap,got_clk); break; }
+        bredr_event_t ev;
+        memset(&ev,0,sizeof(ev));
+        ev.meta.radio_sample_rate_hz=3200u;
+        ev.meta.radio_start_sample_index=p->clkn;
+        ev.meta.channel_index=(uint16_t)p->channel;
+        ev.frame=f;
+        int rc = bredr_recovery_process(pnet,&ev);
+        if(rc){ recovered=1; got_uap=pnet->uap; got_clk=(uint8_t)pnet->clock_offset; printf("recovered at pkt %d: UAP=0x%02X clk6=%u\n",i,got_uap,got_clk); break; }
     }
     free(pnet);
     if(!recovered){ fprintf(stderr,"FAIL: LAP 0x%08X never recovered (true UAP 0x%02X)\n", CAP_LAP, CAP_TRUE_UAP); return 1; }

@@ -19,6 +19,7 @@
 #include "bredr_bitstream_decoder.h"
 #include "bredr_codec.h"
 #include "bredr_clock_recovery.h"
+#include "receive_event_models.h"
 #include "golden_vectors.h"
 
 static int g_failures = 0;
@@ -65,14 +66,21 @@ static void run_case(const golden_case_t *c)
         /* Feed packet k at its generated clkn.  The golden vectors use the
          * production clock model: clkn advances 2 ticks (one slot) per
          * packet and frames are whitened with CLK1-6 = (clkn >> 1) & 0x3f,
-         * exactly as the recovery module is fed in production. */
-        bredr_recovery_result_t r;
-        int rc = bredr_recovery_process_packet(pnet, &frame, 0, p->clkn, &r);
+         * exactly as the recovery module is fed in production.  A sample rate
+         * of 3200 Hz maps radio_start_sample_index == clkn, so the event
+         * carries the same clock the golden vectors were generated with. */
+        bredr_event_t ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.meta.radio_sample_rate_hz = 3200u;
+        ev.meta.radio_start_sample_index = p->clkn;
+        ev.frame = frame;
+
+        int rc = bredr_recovery_process(pnet, &ev);
         if (rc)
         {
             recovered = 1;
-            got_uap = r.uap;
-            got_clk6 = r.clk6_hint;
+            got_uap = pnet->uap;
+            got_clk6 = (uint8_t)pnet->clock_offset;
             converged_at = k;
         }
     }

@@ -9,7 +9,7 @@
  *   - crcgen        vs bredr_payload_crc                (randomized)
  *   - unfec13       vs bredr_fec_decode_1_3 + header decode (randomized)
  *   - unfec23       vs bredr_fec_decode_2_3             (randomized)
- *   - unwhiten      vs bredr_dewhiten_air_payload_bytes (all clocks)
+ *   - unwhiten      vs bredr_xor_whitening_payload (all clocks)
  */
 
 #include <stdint.h>
@@ -251,7 +251,7 @@ static void test_dewhiten_parity(void)
             oracle_unwhiten(air, oracle_out, (int)clk6, BITS, (int)skips[s]);
 
             memset(packed_out, 0, sizeof(packed_out));
-            bredr_dewhiten_air_payload_bytes(packed_in, BITS, (uint8_t)clk6,
+            bredr_xor_whitening_payload(packed_in, BITS, (uint8_t)clk6,
                                              skips[s], packed_out,
                                              sizeof(packed_out));
 

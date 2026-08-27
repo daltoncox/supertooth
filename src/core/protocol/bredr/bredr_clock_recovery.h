@@ -8,6 +8,10 @@
  * orchestration (the 64 clock-candidate solve) and ongoing clock tracking on
  * top of them.  Every function operates directly on a bredr_piconet_t: the
  * piconet owns the recovery working state and the tracked clock_offset.
+ *
+ * The single entry point is bredr_recovery_process(): while the piconet has no
+ * confirmed clock it acquires the UAP and clock offset, and once those are
+ * known it merely tracks and corrects for clock drift.
  */
 
 #ifndef BREDR_CLOCK_RECOVERY_H
@@ -23,78 +27,27 @@ extern "C" {
 #endif
 
 /**
- * @brief Recovery result returned by bredr_recovery_process_packet().
- */
-typedef struct
-{
-    uint8_t uap;       /* Recovered Upper Address Part. */
-    uint8_t clk6_hint; /* Recovered central CLK1-6 hint (0-63) at this packet. */
-} bredr_recovery_result_t;
-
-/**
- * @brief One-time global init of the recovery module.
- *
- * The recovery module performs no access-code filtering of its own; access-code
- * acceptance (and its error tolerance) is owned entirely by the BR/EDR
- * bitstream decoder.  This hook is retained for future global-recovery
- * initialisation.
- */
-void bredr_recovery_global_init(void);
-
-/**
  * @brief Reset the acquisition working state (and only that) of a piconet.
  *
  * Clears the recovery candidates, tentative UAP/clock fields and clock_offset.
  * The ring buffer, statistics and confirmed clock lock are preserved; callers
  * that want a full reset should instead re-initialise the piconet.
  */
-void bredr_piconet_recovery_reset(bredr_piconet_t *pnet);
+void bredr_recovery_reset(bredr_piconet_t *pnet);
 
 /**
- * @brief Feed one header packet to the acquisition engine while the piconet
- *        has no confirmed clock.
+ * @brief Drive UAP/clock recovery for a single received event.
  *
- * Accumulates candidate UAPs/CLK1-6.  On a confident solve it records the UAP
- * (uap_found) and, via the clk6_hint result, the recovered clock offset.  The
- * clock is not established here — bredr_clock_recovery_acquire() drives the
- * full solve including CLK1-6 disambiguation.
+ * While the piconet has no confirmed clock it acquires the UAP and clock
+ * offset (bredr_piconet_set_uap() is called once both are found).  Once the
+ * UAP and clock offset are known this function only tracks clock drift,
+ * correcting the tracked clock_offset when the two clocks have drifted.
  *
- * @return non-zero once a UAP has been determined for this packet.
+ * @return non-zero if the clock is locked for this packet (acquired, or the
+ *         HEC validated while tracking).
  */
-int bredr_recovery_process_packet(bredr_piconet_t *pnet,
-                                   const bredr_frame_t *frame,
-                                   int channel,
-                                   uint32_t clkn,
-                                   bredr_recovery_result_t *out);
-
-/**
- * @brief Verify and, if necessary, correct the tracked clock_offset for a
- *        header packet received at rx_clk_1600.
- *
- * Tries the current offset, then ±1 and ±2, validating each with the known
- * UAP's HEC.  On a match, clock_offset is corrected for drift and tracking
- * confidence is raised; on failure it is lowered (and cleared at zero).
- *
- * @return non-zero if the HEC validated (the clock was maintained).
- */
-int bredr_clock_track_packet(bredr_piconet_t *pnet,
-                             const bredr_frame_t *frame,
-                             uint32_t rx_clk_1600);
-
-/**
- * @brief Acquisition entry point driven by bredr_piconet_add_packet().
- *
- * Runs the recovery engine and, once a UAP is known, narrows the 64 CLK1-6
- * candidates against the piconet's historical packets, then establishes the
- * clock via bredr_piconet_set_uap() when unambiguous (or via the recovery hint
- * when a single candidate cannot be isolated).
- *
- * @return non-zero if the clock became known as a result of this packet.
- */
-int bredr_clock_recovery_acquire(bredr_piconet_t *pnet,
-                                 const bredr_event_t *event,
-                                 uint32_t clkn,
-                                 uint32_t rx_clk_1600);
+int bredr_recovery_process(bredr_piconet_t *pnet,
+                           const bredr_event_t *event);
 
 /**
  * @brief Enable recording of every acquired frame to a binary dump file.
@@ -105,7 +58,7 @@ int bredr_clock_recovery_acquire(bredr_piconet_t *pnet,
  * caller, who is responsible for opening/closing it; this module never closes
  * it.
  */
-void bredr_clock_recovery_set_frame_dump(FILE *file);
+void bredr_recovery_set_frame_dump(FILE *file);
 
 #ifdef __cplusplus
 }

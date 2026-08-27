@@ -30,7 +30,7 @@
 void bredr_piconet_store_set_frame_dump(bredr_piconet_store_t *store, FILE *file)
 {
     (void)store;
-    bredr_clock_recovery_set_frame_dump(file);
+    bredr_recovery_set_frame_dump(file);
 }
 
 /* ---------------------------------------------------------------------------
@@ -115,8 +115,6 @@ void bredr_piconet_store_init(bredr_piconet_store_t *store)
     store->capacity = BREDR_PICONET_STORE_INIT_CAP;
     store->entries = (bredr_piconet_store_entry_t *)calloc(
         store->capacity, sizeof(*store->entries));
-
-    bredr_recovery_global_init();
 }
 
 void bredr_piconet_store_free(bredr_piconet_store_t *store)
@@ -169,7 +167,7 @@ bredr_piconet_t *bredr_piconet_store_add_packet(bredr_piconet_store_t *store,
         {
             uint32_t idle = clkn - entry->last_clkn;
             if (idle > BTBB_LAP_IDLE_RESET_CLKN)
-                bredr_piconet_recovery_reset(entry->pnet);
+                bredr_recovery_reset(entry->pnet);
 
             entry->last_clkn = clkn;
         }
