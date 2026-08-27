@@ -123,6 +123,16 @@ extern "C"
         /** Non-zero once at least one packet has been fed to acquisition. */
         int recovery_got_first_packet;
 
+        /**
+         * Per CLK1-6 candidate slot (0–63): bitmask of LT_ADDRs (bits 1–7) seen
+         * carrying an eSCO (EV4/EV5) payload, or an ACL (DM/DH/DV) payload,
+         * under that candidate's clock.  Bluetooth dedicates an eSCO-assigned
+         * LT_ADDR to eSCO packets only; a candidate that decodes the same
+         * LT_ADDR as both is invalid and is pruned.
+         */
+        uint8_t recovery_esco_lt_mask[BREDR_CLK6_CANDIDATES];
+        uint8_t recovery_acl_lt_mask[BREDR_CLK6_CANDIDATES];
+
         /* -- Aggregate RSSI (used before tracking lock) ----------------------- */
 
         /** RSSI tracker over the last ~1 s, aggregate (pre-track-lock). */

@@ -83,6 +83,8 @@ void bredr_recovery_reset(bredr_piconet_t *pnet)
         return;
     for (int i = 0; i < BREDR_CLK6_CANDIDATES; i++)
         pnet->recovery_candidates[i] = -1;
+    memset(pnet->recovery_esco_lt_mask, 0, sizeof(pnet->recovery_esco_lt_mask));
+    memset(pnet->recovery_acl_lt_mask, 0, sizeof(pnet->recovery_acl_lt_mask));
     pnet->uap = 0u;
     pnet->uap_found = 0;
     pnet->clock_offset = 0;
@@ -606,6 +608,41 @@ static int verify_payload_crc(const bredr_frame_t *frame, uint8_t clock,
 }
 
 /* ---------------------------------------------------------------------------
+ * eSCO LT_ADDR discipline
+ * --------------------------------------------------------------------------- */
+
+/* Enforce the Bluetooth rule that an LT_ADDR assigned to an eSCO link is used
+ * for eSCO packets only.  For a confident (CRC-verified) decode of candidate
+ * slot @p count, record the LT_ADDR as eSCO (EV4/EV5) or ACL (DM/DH/DV); if the
+ * same LT_ADDR was already recorded under the opposite family, return -1 to
+ * prune the candidate, else update the masks and return @p crc_chk unchanged. */
+static int apply_esco_lt_addr_rule(bredr_piconet_t *pnet, int count,
+                                   uint8_t lt_addr, uint8_t type, int crc_chk)
+{
+    if (crc_chk != 10 || lt_addr == 0u)
+        return crc_chk;
+
+    int is_esco = (type == PT_EV4 || type == PT_EV5);
+    int is_acl  = (type == PT_DV  || type == PT_DM1 || type == PT_DM3 ||
+                   type == PT_DM5 || type == PT_DH1 || type == PT_DH3 ||
+                   type == PT_DH5);
+    if (!is_esco && !is_acl)
+        return crc_chk;
+
+    uint8_t bit = (uint8_t)(1u << lt_addr);
+    uint8_t *self_mask  = is_esco ? pnet->recovery_esco_lt_mask
+                                  : pnet->recovery_acl_lt_mask;
+    uint8_t *other_mask = is_esco ? pnet->recovery_acl_lt_mask
+                                  : pnet->recovery_esco_lt_mask;
+
+    if (other_mask[count] & bit)
+        return -1; /* LT_ADDR already seen as the opposite family */
+
+    self_mask[count] |= bit;
+    return crc_chk;
+}
+
+/* ---------------------------------------------------------------------------
  * Acquisition: 64 CLK1-6 candidate solve
  * --------------------------------------------------------------------------- */
 
@@ -658,6 +695,11 @@ static int solve_uap_clock_candidates(bredr_piconet_t *pnet,
              * regardless of the CRC result. */
             if (sanity_check_header(&hdr, (uint8_t)clock) != 0)
                 crc_chk = -1;
+
+            /* Enforce eSCO LT_ADDR discipline: an LT_ADDR must not be decoded
+             * as both eSCO (EV4/EV5) and ACL (DM/DH) under the same clock. */
+            crc_chk = apply_esco_lt_addr_rule(pnet, count, hdr.lt_addr,
+                                              type, crc_chk);
 
             switch (crc_chk)
             {
