@@ -19,6 +19,7 @@
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
 #include "radio_common.h"
+#include "collector.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -101,9 +102,15 @@ typedef struct session {
     int                  bredr_channelizer_running;
 
     ble_tracker_t       ble_tracker;   /**< owns BLE advertiser + connection
-                                             correlation (incl. piconet store) */
+                                              correlation (incl. piconet store) */
     bredr_tracker_t     bredr_tracker;
-    pthread_mutex_t     bredr_mutex;
+
+    /** Per-protocol collector: channel processors submit decoded events here; a
+     *  dedicated thread drains the queue, runs the tracker, and invokes the
+     *  presentation callback. Keeps BLE and BR/EDR from contending on a shared
+     *  tracker mutex and decouples block lifetime from presentation cost. */
+    collector_t         ble_collector;
+    collector_t         bredr_collector;
 
     ble_channel_processor_t   *ble_channels;
     size_t                     ble_channel_count;

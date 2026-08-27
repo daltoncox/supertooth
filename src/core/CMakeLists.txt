@@ -116,6 +116,7 @@ add_library(supertooth_core STATIC
     service/ble_channel_processor.c service/ble_channel_processor.h
     service/bredr_channel_processor.c service/bredr_channel_processor.h
     service/channelizer_thread.c service/channelizer_thread.h
+    service/collector.c service/collector.h
     service/session.c service/session.h
     ${CMAKE_CURRENT_BINARY_DIR}/version.c
 )

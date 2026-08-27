@@ -126,7 +126,10 @@ static int emit_frame(ble_channel_processor_t *proc,
     ble_event_t event = { .meta = meta, .frame = frame };
 
     if (proc->session)
-        session_process_ble_event(proc->session, &event);
+        /* Hand the decoded event to the BLE collector thread; the worker
+         * releases its sample block immediately after, decoupling block-pool
+         * lifetime from tracking + presentation cost. */
+        collector_submit(&proc->session->ble_collector, &event);
 
     return 0;
 }

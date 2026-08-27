@@ -11,6 +11,7 @@
 #include "bt_assigned_numbers.h"
 #include "channelizer_bank.h"
 #include "radio_common.h"
+#include "collector.h"
 
 static void session_signal_readers(session_t *session)
 {
@@ -70,7 +71,19 @@ int session_init(session_t *session, const session_config_t *cfg)
 
     ble_tracker_init(&session->ble_tracker);
     bredr_tracker_init(&session->bredr_tracker);
-    pthread_mutex_init(&session->bredr_mutex, NULL);
+
+    /* Collector queues: drained by dedicated per-protocol threads spawned in
+     * session_run(). Bounded at 4096 events; overwrite-oldest on overflow keeps
+     * the newest packets (the ones the tracker prefers). */
+    if (collector_init(&session->ble_collector, sizeof(ble_event_t), 4096u,
+                       &session->shutdown_requested) != 0)
+        return -1;
+    if (collector_init(&session->bredr_collector, sizeof(bredr_event_t), 4096u,
+                       &session->shutdown_requested) != 0)
+    {
+        collector_destroy(&session->ble_collector);
+        return -1;
+    }
 
     return 0;
 }
@@ -313,6 +326,28 @@ static void *session_bredr_worker_shim(void *arg)
     return bredr_channel_worker(arg);
 }
 
+/* Drains the BLE collector queue and runs the tracker + presentation callback
+ * for each event. Single consumer, so the BLE tracker has exactly one writer
+ * and never contends with BR/EDR or with the per-channel workers. */
+static void *session_ble_collector_shim(void *arg)
+{
+    session_t *s = (session_t *)arg;
+    ble_event_t ev;
+    while (collector_pop(&s->ble_collector, &ev) == 0)
+        session_process_ble_event(s, &ev);
+    return NULL;
+}
+
+/* Same as the BLE collector but for BR/EDR events. */
+static void *session_bredr_collector_shim(void *arg)
+{
+    session_t *s = (session_t *)arg;
+    bredr_event_t ev;
+    while (collector_pop(&s->bredr_collector, &ev) == 0)
+        session_process_bredr_event(s, &ev);
+    return NULL;
+}
+
 int session_run(session_t *session)
 {
     if (!session || session->workers_running) return -1;
@@ -325,7 +360,9 @@ int session_run(session_t *session)
 
     size_t total = session->ble_channel_count + session->bredr_channel_count +
                    (session->ble_channelizer.active ? 1u : 0u) +
-                   (session->bredr_channelizer.active ? 1u : 0u);
+                   (session->bredr_channelizer.active ? 1u : 0u) +
+                   (session->ble_enabled ? 1u : 0u) +
+                   (session->bredr_enabled ? 1u : 0u);
     session->worker_threads = calloc(total, sizeof(pthread_t));
     if (!session->worker_threads)
     {
@@ -376,6 +413,29 @@ int session_run(session_t *session)
         }
         session->bredr_channelizer_thread = session->worker_threads[started];
         session->bredr_channelizer_running = 1;
+        started++;
+    }
+
+    /* Collector threads are spawned last (joined last) so they drain any
+     * remaining events after the channel workers have stopped producing. */
+    if (session->ble_enabled)
+    {
+        if (pthread_create(&session->worker_threads[started], NULL,
+                           session_ble_collector_shim, session) != 0)
+        {
+            session_destroy(session);
+            return -1;
+        }
+        started++;
+    }
+    if (session->bredr_enabled)
+    {
+        if (pthread_create(&session->worker_threads[started], NULL,
+                           session_bredr_collector_shim, session) != 0)
+        {
+            session_destroy(session);
+            return -1;
+        }
         started++;
     }
 
@@ -439,6 +499,8 @@ void session_request_stop(session_t *session)
     if (!session) return;
     atomic_store_explicit(&session->shutdown_requested, 1u, memory_order_release);
     session_signal_readers(session);
+    collector_wake(&session->ble_collector);
+    collector_wake(&session->bredr_collector);
 }
 
 int session_destroy(session_t *session)
@@ -507,7 +569,8 @@ int session_destroy(session_t *session)
 
     ble_tracker_free(&session->ble_tracker);
     bredr_tracker_free(&session->bredr_tracker);
-    pthread_mutex_destroy(&session->bredr_mutex);
+    collector_destroy(&session->ble_collector);
+    collector_destroy(&session->bredr_collector);
     
     channelizer_destroy(&session->ble_channelizer);
     if (session->ble_chan_dispatcher)
@@ -548,7 +611,8 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
 {
     if (!session || !event) return;
 
-    pthread_mutex_lock(&session->bredr_mutex);
+    /* Sole writer is the BR/EDR collector thread, so no mutex is needed here;
+     * the tracker's own lock still guards the GUI poll readers. */
     int packet_is_newest = 0;
     bredr_piconet_t *pnet = bredr_tracker_add_packet(&session->bredr_tracker,
                                                      event, &packet_is_newest);
@@ -576,7 +640,6 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
             snapshot.clk_known = 0;
         snapshot_ptr = &snapshot;
     }
-    pthread_mutex_unlock(&session->bredr_mutex);
 
     if (session->bredr_cb)
         session->bredr_cb(event, snapshot_ptr, session->bredr_user);

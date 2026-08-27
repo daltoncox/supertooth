@@ -141,7 +141,10 @@ static int emit_frame(bredr_channel_processor_t *proc,
         if (s->bredr_cfg.lap_filter_enabled &&
             ((frame.lap & 0xFFFFFFu) != s->bredr_cfg.lap_filter))
             return 0;
-        session_process_bredr_event(s, &event);
+        /* Hand the decoded event to the BR/EDR collector thread; the worker
+         * releases its sample block immediately after, decoupling block-pool
+         * lifetime from tracking + presentation cost. */
+        collector_submit(&s->bredr_collector, &event);
     }
 
     return 0;
