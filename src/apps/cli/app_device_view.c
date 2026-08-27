@@ -296,10 +296,10 @@ static size_t print_table(app_device_view_t *v, dev_entity_t *e, size_t n)
     (void)v;
     size_t lines = 0u;
 
-    printf("%-8s %-7s %-13s %-24s %-12s %-12s %-9s\n",
-           "RSSI", "Proto", "Type", "Identifier", "First", "Last", "Pkts/s");
+    printf("%-8s %-7s %-13s %-24s %-12s %-12s %-8s %-9s\n",
+           "RSSI", "Proto", "Type", "Identifier", "First", "Last", "Pkts", "Pkts/s");
     lines++;
-    printf("-------- ------- ------------- ------------------------ ------------ ------------ ---------\n");
+    printf("-------- ------- ------------- ------------------------ ------------ ------------ -------- ---------\n");
     lines++;
 
     for (size_t i = 0; i < n; i++)
@@ -309,9 +309,9 @@ static size_t print_table(app_device_view_t *v, dev_entity_t *e, size_t n)
         fmt_ts(e[i].first_seen_ms, first, sizeof(first));
         fmt_ts(e[i].last_seen_ms, last, sizeof(last));
         snprintf(idisp, sizeof(idisp), "%s", e[i].identifier);
-        printf("%-8s %-7s %-13s %-24s %-12s %-12s %-9u\n",
+        printf("%-8s %-7s %-13s %-24s %-12s %-12s %-8lu %-9u\n",
                rssi, e[i].proto, e[i].type, idisp, first, last,
-               e[i].packet_rate);
+               e[i].total_packets, e[i].packet_rate);
         lines++;
     }
     if (n == 0u)
