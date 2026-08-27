@@ -95,11 +95,14 @@ void bredr_recovery_reset(bredr_piconet_t *pnet)
 /* FEC-decode and unwhiten the header for a single CLK1-6 candidate, returning
  * the candidate UAP via the HEC or 0 on decode failure.  When hdr_out is
  * non-NULL the decoded header fields are also returned so callers can run
- * slot-role sanity checks. */
+ * slot-role sanity checks.  When fec_errors_out is non-NULL it receives the
+ * 1/3-FEC error count of the decode (0 == a 100% correct header, which is the
+ * only kind of header we ever drive recovery from). */
 static uint8_t decode_uap_for_clock(const bredr_frame_t *frame,
                                     uint8_t clock,
                                     uint8_t *type_out,
-                                    bredr_decoded_header_t *hdr_out)
+                                    bredr_decoded_header_t *hdr_out,
+                                    int *fec_errors_out)
 {
     uint8_t packed_header[7];
     uint8_t header[18];
@@ -109,9 +112,13 @@ static uint8_t decode_uap_for_clock(const bredr_frame_t *frame,
 
     if (hdr_out)
         memset(hdr_out, 0, sizeof(*hdr_out));
+    if (fec_errors_out)
+        *fec_errors_out = -1;
 
     bredr_pack_header_raw(frame->header_raw, packed_header);
     be = bredr_fec_decode_1_3(packed_header, 54u, header, &decoded_bits);
+    if (fec_errors_out)
+        *fec_errors_out = be;
     if (be < 0 || decoded_bits != 18u || be >= 4)
         return 0;
 
@@ -138,21 +145,32 @@ static uint8_t decode_uap_for_clock(const bredr_frame_t *frame,
 
 /* Reject CLK1-6 candidates whose decoded header is illegal for the implied slot
  * role.  The master transmits in even slots (CLK1 == 0) and the peripheral
- * (slave) in odd slots (CLK1 == 1).  In a peripheral timeslot the slave never
- * originates a broadcast (LT_ADDR == 0) or a POLL packet (master-only), so
- * observing either flags the clock candidate as invalid.  Returns 0 if the
- * candidate is plausible, -1 if it must be pruned. */
+ * (slave) in odd slots (CLK1 == 1).  Returns 0 if the candidate is plausible,
+ * -1 if it must be pruned.  Checks:
+ *   - LT_ADDR == 0 (broadcast) never originates from a peripheral.
+ *   - POLL (0x1) and FHS (0x2) are master-only, so never in a peripheral slot.
+ *   - HV1/HV2/HV3 (0x5/0x6/0x7) reserve FLOW/ARQN/SEQN as 0, so any of those
+ *     bits set indicates a malformed (or mis-clocked) header. */
 static int sanity_check_header(const bredr_decoded_header_t *hdr,
                                uint8_t clk1_6)
 {
-    if ((clk1_6 & 1u) == 0u)
-        return 0; /* master timeslot: peripheral-slot restrictions do not apply */
+    int peripheral_timeslot = (clk1_6 & 1u);
 
-    if (hdr->lt_addr == 0u)
-        return -1; /* broadcast never originates from a peripheral */
+    if (peripheral_timeslot)
+    {
+        if (hdr->lt_addr == 0u)
+            return -1; /* broadcast never originates from a peripheral */
 
-    if (hdr->type == PT_POLL)
-        return -1; /* POLL is a master-only packet */
+        if (hdr->type == PT_POLL)
+            return -1; /* POLL is a master-only packet */
+
+        if (hdr->type == PT_FHS)
+            return -1; /* FHS is a master-only packet */
+    }
+
+    if (hdr->type == PT_HV1 || hdr->type == PT_HV2 || hdr->type == PT_HV3)
+        if (hdr->flow || hdr->arqn || hdr->seqn)
+            return -1; /* SCO header reserves FLOW/ARQN/SEQN as 0 */
 
     return 0;
 }
@@ -617,20 +635,27 @@ static int solve_uap_clock_candidates(bredr_piconet_t *pnet,
 
             uint8_t type = 0u;
             bredr_decoded_header_t hdr;
-            uint8_t UAP = decode_uap_for_clock(frame, (uint8_t)clock, &type, &hdr);
+            int fec_err = 0;
+            uint8_t UAP = decode_uap_for_clock(frame, (uint8_t)clock, &type, &hdr, &fec_err);
 
             int crc_chk = -1;
 
-            if (!pnet->recovery_got_first_packet ||
-                UAP == (uint8_t)pnet->recovery_candidates[count])
+            /* Recovery is only ever driven by a 100% correct header: any FEC
+             * error in the 1/3 decode means the packet is not reliable enough
+             * to update UAP/clock state, so the candidate is pruned. */
+            if (fec_err != 0)
+                crc_chk = -1;
+            else if (!pnet->recovery_got_first_packet ||
+                     UAP == (uint8_t)pnet->recovery_candidates[count])
                 crc_chk = verify_payload_crc(frame, (uint8_t)clock, type, UAP);
 
             if (pnet->uap_found && UAP != pnet->uap)
                 crc_chk = -1;
 
             /* Slot-role sanity checks on the decoded header.  An illegal
-             * combination (e.g. broadcast/POLL in a peripheral timeslot)
-             * invalidates the clock candidate regardless of the CRC result. */
+             * combination (e.g. broadcast/POLL/FHS in a peripheral timeslot, or
+             * a non-zero SCO reserved bit) invalidates the clock candidate
+             * regardless of the CRC result. */
             if (sanity_check_header(&hdr, (uint8_t)clock) != 0)
                 crc_chk = -1;
 
@@ -844,8 +869,9 @@ static int acquire_uap_and_clock(bredr_piconet_t *pnet,
 
 /* Verify (and correct for drift) the tracked clock_offset for a header packet
  * received at rx_clk_1600.  Tries the current offset, then ±1 and ±2,
- * validating each with the known UAP's HEC.  On a match the offset is
- * corrected for drift and tracking confidence is raised; on failure it is
+ * validating each with the known UAP's HEC.  The header must be 100% correct
+ * (zero FEC errors) before any clock state is touched.  On a match the offset
+ * is corrected for drift and tracking confidence is raised; on failure it is
  * lowered (and cleared at zero).  Returns 1 if the HEC validated. */
 static int recover_clock_drift(bredr_piconet_t *pnet,
                                const bredr_frame_t *frame,
@@ -861,7 +887,7 @@ static int recover_clock_drift(bredr_piconet_t *pnet,
     for (int k = 0; k < 5; k++)
     {
         int candidate = ((base + offsets[k]) + 64) % 64;
-        if (bredr_hec_ok_for_clk6(frame, pnet->uap, (uint8_t)candidate))
+        if (bredr_hec_ok_for_clk6_clean(frame, pnet->uap, (uint8_t)candidate))
         {
             /* Correct the offset for any drift detected between the two clocks. */
             pnet->clock_offset = (uint8_t)((candidate - (int)rx_clk_1600) & 0x3Fu);

@@ -919,6 +919,44 @@ int bredr_hec_ok_for_clk6(const bredr_frame_t *frame, uint8_t uap, uint8_t clk6)
     return (int)(bredr_decode_uap_from_hec(hdr_data, received_hec) == uap);
 }
 
+int bredr_hec_ok_for_clk6_clean(const bredr_frame_t *frame, uint8_t uap, uint8_t clk6)
+{
+    if (!frame || !frame->has_header)
+        return 0;
+
+    uint8_t packed_header[7];
+    uint8_t decoded_header[3] = {0};
+    unsigned int decoded_bits = 0u;
+
+    bredr_pack_header_raw(frame->header_raw, packed_header);
+    int be = bredr_fec_decode_1_3(packed_header, 54u, decoded_header, &decoded_bits);
+    /* Recovery is only driven by a 100% correct header: reject any header that
+     * required even a single 1/3-FEC error correction. */
+    if (be != 0 || decoded_bits != 18u)
+        return 0;
+
+    uint8_t bits[18];
+    for (unsigned int i = 0u; i < 18u; i++)
+        bits[i] = (uint8_t)bredr_get_packed_bit(decoded_header, i);
+
+    int index = (int)s_whitening_indices[clk6 & 0x3fu];
+    for (int i = 0; i < 18; i++)
+    {
+        bits[i] ^= s_whitening_data[index];
+        index = (index + 1) % 127;
+    }
+
+    uint16_t hdr_data = 0;
+    for (int i = 0; i < 10; i++)
+        hdr_data |= (uint16_t)(bits[i] << i);
+
+    uint8_t received_hec = 0;
+    for (int i = 0; i < 8; i++)
+        received_hec |= (uint8_t)(bits[10 + i] << i);
+
+    return (int)(bredr_decode_uap_from_hec(hdr_data, received_hec) == uap);
+}
+
 const char *bredr_packet_type_name(uint8_t type_code)
 {
     return s_bredr_type_names[type_code & 0x0Fu];

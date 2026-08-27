@@ -343,6 +343,21 @@ uint64_t bredr_gen_syncword(uint32_t lap);
  * @return       1 if the HEC matches, 0 otherwise.
  */
 int bredr_hec_ok_for_clk6(const bredr_frame_t *frame, uint8_t uap, uint8_t clk6);
+
+/**
+ * @brief Verify the HEC of a header for a given CLK1-6 and UAP, requiring the
+ *        header to have decoded with zero 1/3-FEC bit errors.
+ *
+ * This is the strict variant of bredr_hec_ok_for_clk6 used by recovery: it
+ * returns 0 unless the header was 100% correct (no FEC correction applied), so
+ * recovery is never driven by a possibly-corrupted header.
+ *
+ * @param frame  Captured frame with a valid `header_raw` field.
+ * @param uap    8-bit Upper Address Part.
+ * @param clk6   CLK1-6 whitening key (0–63).
+ * @return       1 if the HEC matched on an error-free decode, 0 otherwise.
+ */
+int bredr_hec_ok_for_clk6_clean(const bredr_frame_t *frame, uint8_t uap, uint8_t clk6);
 const char *bredr_packet_type_name(uint8_t type_code);
 const char *bredr_payload_family_name(bredr_payload_family_t family);
 const char *bredr_decode_limit_desc(bredr_decode_limit_t limit);
