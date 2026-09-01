@@ -80,4 +80,12 @@ int app_validate_device_spec(const char *argv0, const app_device_spec_t *spec);
  */
 void app_print_device_usage_line(void);
 
+/**
+ * Print a per-pool breakdown of dropped blocks from a session summary
+ * (see session_dropped_blocks_breakdown). Each pool reports producer-side
+ * (pool exhausted) vs consumer-side (reader queue full) drops so the user
+ * can see WHERE in the pipeline blocks were lost.
+ */
+void app_print_drop_breakdown(const session_drop_breakdown_t *b);
+
 #endif

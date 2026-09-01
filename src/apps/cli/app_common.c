@@ -170,3 +170,29 @@ void app_print_device_usage_line(void)
     fprintf(stderr, "  %-30s List available devices, or open a specific one\n",
             "-d, --device [<type>:<id>]");
 }
+
+void app_print_drop_breakdown(const session_drop_breakdown_t *b)
+{
+    if (!b)
+        return;
+
+    /* Each pool reports two sub-reasons:
+     *   pool_exhausted : a producer could not allocate a block.
+     *   consumer_full  : a reader's queue was full (a consumer fell behind). */
+    printf("  Dropped blocks by pool:\n");
+    printf("    rf (radio input, shared by both channelizers):\n");
+    printf("        pool exhausted : %lu   (radio could not allocate an RF block)\n",
+           b->rf_pool_exhausted);
+    printf("        consumer full  : %lu   (a channelizer RF queue fell behind)\n",
+           b->rf_consumer_full);
+    printf("    bredr_out (BR/EDR channelizer -> channel workers):\n");
+    printf("        pool exhausted : %lu   (BR/EDR channelizer could not allocate a frame block)\n",
+           b->bredr_out_pool_exhausted);
+    printf("        consumer full  : %lu   (a BR/EDR channel worker fell behind)\n",
+           b->bredr_out_consumer_full);
+    printf("    ble_out (BLE channelizer -> channel workers):\n");
+    printf("        pool exhausted : %lu   (BLE channelizer could not allocate a frame block)\n",
+           b->ble_out_pool_exhausted);
+    printf("        consumer full  : %lu   (a BLE channel worker fell behind)\n",
+           b->ble_out_consumer_full);
+}

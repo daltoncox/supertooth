@@ -503,6 +503,19 @@ void session_request_stop(session_t *session)
     collector_wake(&session->bredr_collector);
 }
 
+/* Accumulate a dispatcher's drop counts into pool-exhausted / consumer-full
+ * subtotals (the latter is the sum of every reader's dropped_blocks). */
+static void dispatcher_accumulate(const sample_dispatcher_t *d,
+                                  unsigned long *pool_exhausted,
+                                  unsigned long *consumer_full)
+{
+    if (!d)
+        return;
+    *pool_exhausted += d->dropped_blocks;
+    for (unsigned int i = 0u; i < d->reader_count; i++)
+        *consumer_full += d->readers[i]->dropped_blocks;
+}
+
 int session_destroy(session_t *session)
 {
     if (!session) return -1;
@@ -524,6 +537,21 @@ int session_destroy(session_t *session)
         session->dropped_blocks_total += sample_dispatcher_total_dropped(session->ble_chan_dispatcher);
     if (session->bredr_chan_dispatcher)
         session->dropped_blocks_total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
+
+    /* Snapshot the per-pool breakdown so the session summary can report WHERE
+     * blocks were dropped (the live counters are zeroed by the reset below). */
+    memset(&session->dropped_breakdown, 0, sizeof(session->dropped_breakdown));
+    dispatcher_accumulate(session->dispatcher,
+                           &session->dropped_breakdown.rf_pool_exhausted,
+                           &session->dropped_breakdown.rf_consumer_full);
+    if (session->ble_chan_dispatcher)
+        dispatcher_accumulate(session->ble_chan_dispatcher,
+                               &session->dropped_breakdown.ble_out_pool_exhausted,
+                               &session->dropped_breakdown.ble_out_consumer_full);
+    if (session->bredr_chan_dispatcher)
+        dispatcher_accumulate(session->bredr_chan_dispatcher,
+                               &session->dropped_breakdown.bredr_out_pool_exhausted,
+                               &session->dropped_breakdown.bredr_out_consumer_full);
 
     if (session->workers_running)
         session_request_stop(session);
@@ -718,6 +746,30 @@ unsigned long session_dropped_blocks(const session_t *session)
     if (session->bredr_chan_dispatcher)
         total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
     return total;
+}
+
+void session_dropped_blocks_breakdown(const session_t *session,
+                                      session_drop_breakdown_t *out)
+{
+    if (!session || !out) return;
+    /* After teardown the live counters have been reset to zero, so report the
+     * snapshot taken just before reset (see session_destroy). */
+    if (session->torn_down)
+        *out = session->dropped_breakdown;
+    else
+    {
+        memset(out, 0, sizeof(*out));
+        dispatcher_accumulate(session->dispatcher,
+                               &out->rf_pool_exhausted, &out->rf_consumer_full);
+        if (session->ble_chan_dispatcher)
+            dispatcher_accumulate(session->ble_chan_dispatcher,
+                                   &out->ble_out_pool_exhausted,
+                                   &out->ble_out_consumer_full);
+        if (session->bredr_chan_dispatcher)
+            dispatcher_accumulate(session->bredr_chan_dispatcher,
+                                   &out->bredr_out_pool_exhausted,
+                                   &out->bredr_out_consumer_full);
+    }
 }
 
 int session_create_channels_for_test(session_t *session,

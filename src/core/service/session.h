@@ -61,6 +61,25 @@ typedef struct {
     int lap_filter_enabled;
 } session_bredr_config_t;
 
+/** Per-pool breakdown of where blocks were dropped during a session. Read this
+ *  (not the live dispatcher counters) after a run: session_run() resets the
+ *  live counters on teardown, and the snapshot is taken just before that.
+ *  For each pool, two sub-reasons are tracked:
+ *    - *_pool_exhausted : a producer could not allocate a block from the pool
+ *      (e.g. the radio could not allocate an RF block, or a channelizer could
+ *      not allocate its output frame block).
+ *    - *_consumer_full   : a reader's queue was full, i.e. a consumer reading
+ *      from this pool was not keeping up (a channelizer for the RF pool, or a
+ *      channel worker for an output pool). */
+typedef struct {
+    unsigned long rf_pool_exhausted;
+    unsigned long rf_consumer_full;
+    unsigned long bredr_out_pool_exhausted;
+    unsigned long bredr_out_consumer_full;
+    unsigned long ble_out_pool_exhausted;
+    unsigned long ble_out_consumer_full;
+} session_drop_breakdown_t;
+
 typedef struct session {
     uint32_t lo_frequency_hz;
     uint32_t sample_rate_hz;
@@ -139,6 +158,10 @@ typedef struct session {
      * dispatchers are reset during session_destroy().  The live counters are
      * zeroed by the reset, so this is what callers must read after a run. */
     unsigned long dropped_blocks_total;
+
+    /* Per-pool breakdown of dropped blocks (see session_drop_breakdown_t).
+     * Snapshotted at the same point as dropped_blocks_total. */
+    session_drop_breakdown_t dropped_breakdown;
 } session_t;
 
 int  session_init(session_t *session, const session_config_t *cfg);
@@ -180,6 +203,8 @@ size_t session_get_ble_piconets(const session_t *session,
                                ble_piconet_snapshot_t *out, size_t max);
 
 unsigned long session_dropped_blocks(const session_t *session);
+void session_dropped_blocks_breakdown(const session_t *session,
+                                      session_drop_breakdown_t *out);
 
 /* Test-only helper: build the BLE/BR/EDR channel processors for the current
  * tune + enable state (without opening the radio) and report the counts.

@@ -485,8 +485,11 @@ int main(int argc, char *argv[])
     else
         printf("  LAP filter     : (none)\n");
     if (g_debug)
-        printf("  Dropped blocks : %lu\n",
-                session_dropped_blocks(g_session));
+    {
+        session_drop_breakdown_t drops;
+        session_dropped_blocks_breakdown(g_session, &drops);
+        app_print_drop_breakdown(&drops);
+    }
     printf("\n");
     print_session_piconets();
     session_destroy(g_session);

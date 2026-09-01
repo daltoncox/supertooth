@@ -370,5 +370,13 @@ int main(int argc, char *argv[])
     printf("  Enforce CRC    : %s\n", g_enforce_crc ? "on" : "off");
     printf("  Total packets  : %lu\n", g_packet_count);
 
+    if (g_debug)
+    {
+        printf("\n=== Debug Summary ===\n");
+        session_drop_breakdown_t drops;
+        session_dropped_blocks_breakdown(&g_session, &drops);
+        app_print_drop_breakdown(&drops);
+    }
+
     return 0;
 }

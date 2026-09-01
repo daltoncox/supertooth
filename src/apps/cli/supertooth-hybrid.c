@@ -489,8 +489,9 @@ int main(int argc, char *argv[])
     if (g_debug)
     {
         printf("\n=== Debug Summary ===\n");
-        printf("  Dropped blocks : %lu\n",
-                session_dropped_blocks(g_session));
+        session_drop_breakdown_t drops;
+        session_dropped_blocks_breakdown(g_session, &drops);
+        app_print_drop_breakdown(&drops);
     }
 
     session_destroy(g_session);
