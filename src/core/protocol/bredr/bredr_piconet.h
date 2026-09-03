@@ -7,7 +7,7 @@
  * --------
  * A `bredr_piconet_t` represents a single observed Bluetooth piconet,
  * identified by its 24-bit LAP.  It maintains a circular ring buffer of the
- * 1024 most recently received BR/EDR events.
+ * 128 most recently received BR/EDR events.
  *
  * UAP and initial clock resolution is performed natively by the recovery
  * module (bredr_clock_recovery.c) operating directly on these fields.  Once
@@ -27,7 +27,7 @@
  *
  * Memory notes
  * ------------
- * Each `bredr_piconet_t` is approximately 380 KB in size (1024-packet ring
+ * Each `bredr_piconet_t` is approximately 60 KB in size (128-packet ring
  * buffer dominates).  Always allocate piconets on the heap; never declare
  * them as local variables.  The store manages allocation automatically.
  *
@@ -58,7 +58,7 @@ extern "C"
  * ---------------------------------------------------------------------------*/
 
 /** Number of packets retained in each piconet's ring buffer. */
-#define BREDR_PICONET_QUEUE_SIZE 1024u
+#define BREDR_PICONET_QUEUE_SIZE 128u
 
 /** Number of CLK1-6 candidates tracked during UAP/clock acquisition. */
 #define BREDR_CLK6_CANDIDATES 64
@@ -95,10 +95,26 @@ extern "C"
          * Offset between the piconet's central clock and the receiver clock.
          * The central CLK1-6 of any received packet is:
          *   (rx_clk_1600 + clock_offset) mod 64.
-         * Tracking tries this offset, then ±1 and ±2, correcting clock_offset
-         * when the two clocks have drifted.
+         * Tracking tries this offset first; a neighbouring offset (±1, ±2)
+         * that validates is only a drift *suspicion* (see drift_candidate)
+         * and is applied to clock_offset once a second consecutive packet
+         * confirms the same delta.
          */
         int clock_offset;
+
+        /**
+         * Unconfirmed clock-drift delta (0 when none is pending).
+         *
+         * When the tracked clock_offset misses but a neighbour (+1, -1, +2
+         * or -2) validates, the delta is parked here WITHOUT touching
+         * clock_offset or tracking_state: a single glitch packet must move
+         * neither.  The next packet is still tried against the original
+         * clock_offset first.  Only when it misses again with the SAME
+         * delta is the drift confirmed (clock_offset updated); a base hit
+         * or a conflicting delta clears the suspicion, and a packet that
+         * matches nothing clears it and decays tracking_state as before.
+         */
+        int drift_candidate;
 
         /**
          * Clock tracking confidence:
@@ -151,7 +167,7 @@ extern "C"
 
         /* -- Frames: ring buffer ---------------------------------------------- */
 
-        /** Circular queue of the 1024 most recently received BR/EDR events. */
+        /** Circular queue of the 128 most recently received BR/EDR events. */
         bredr_event_t queue[BREDR_PICONET_QUEUE_SIZE];
 
         /** Index of the next slot to overwrite (0 … QUEUE_SIZE-1). */
@@ -204,9 +220,10 @@ extern "C"
      *
      * If the piconet is in clock-tracking mode (uap_found && clk_known) and the
      * event carries a decoded header (has_header != 0), the central CLK1-6
-     * estimate is verified and corrected by trying expected, ±1, ±2
-     * candidates using
-     * the known UAP's HEC.
+     * estimate is verified: the tracked offset is tried first, then its ±1,
+     * ±2 neighbours.  A neighbouring hit is only drift suspicion until a
+     * second consecutive packet confirms the same delta (see drift_candidate);
+     * only a packet matching no candidate decays tracking confidence.
      *
      * If event metadata includes a valid RSSI value and the clock is known,
      * the latest role RSSI is updated: master (CLK1 == 0) or slave

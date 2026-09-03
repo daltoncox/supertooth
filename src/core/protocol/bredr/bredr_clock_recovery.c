@@ -88,6 +88,7 @@ void bredr_recovery_reset(bredr_piconet_t *pnet)
     pnet->uap = 0u;
     pnet->uap_found = 0;
     pnet->clock_offset = 0;
+    pnet->drift_candidate = 0;
     pnet->recovery_first_pkt_time = 0u;
     pnet->recovery_got_first_packet = 0;
 }
@@ -753,7 +754,9 @@ static int solve_uap_clock_candidates(bredr_piconet_t *pnet,
 
 /* Narrow the @p n CLK1-6 candidates in @p candidates against the piconet's
  * historical packets (which advance one CLK1-6 tick per rx_clk_1600 slot),
- * returning the number of surviving candidates. */
+ * returning the number of surviving candidates.  The scan is bounded both by
+ * the history age cutoff and by the ring-buffer depth
+ * (BREDR_PICONET_QUEUE_SIZE recent packets). */
 static int narrow_clock_via_history(const bredr_piconet_t *pnet,
                                     const bredr_event_t *cur_event,
                                     uint8_t uap,
@@ -910,11 +913,15 @@ static int acquire_uap_and_clock(bredr_piconet_t *pnet,
  * --------------------------------------------------------------------------- */
 
 /* Verify (and correct for drift) the tracked clock_offset for a header packet
- * received at rx_clk_1600.  Tries the current offset, then ±1 and ±2,
- * validating each with the known UAP's HEC.  The header must be 100% correct
- * (zero FEC errors) before any clock state is touched.  On a match the offset
- * is corrected for drift and tracking confidence is raised; on failure it is
- * lowered (and cleared at zero).  Returns 1 if the HEC validated. */
+ * received at rx_clk_1600.  The tracked offset is always tried first; a base
+ * hit clears any pending drift suspicion and builds confidence.  A ±1/±2 hit
+ * is only suspicion: it is parked in drift_candidate with clock_offset and
+ * tracking_state left untouched, and applied only when the next packet misses
+ * the base offset again with the SAME delta.  A conflicting delta clears the
+ * suspicion without touching tracking state.  Only a packet matching no
+ * candidate at all decays tracking_state (cleared at zero, as before).
+ * The header must be 100% correct (zero FEC errors) before any clock state
+ * is touched.  Returns 1 if the HEC validated on any tried candidate. */
 static int recover_clock_drift(bredr_piconet_t *pnet,
                                const bredr_frame_t *frame,
                                uint32_t rx_clk_1600)
@@ -926,27 +933,65 @@ static int recover_clock_drift(bredr_piconet_t *pnet,
     uint8_t base = (uint8_t)((rx_clk_1600 + pnet->clock_offset) & 0x3Fu);
 
     static const int offsets[] = {0, 1, -1, 2, -2};
+    int hit_delta = 0;
+    int found = 0;
     for (int k = 0; k < 5; k++)
     {
         int candidate = ((base + offsets[k]) + 64) % 64;
         if (bredr_hec_ok_for_clk6_clean(frame, pnet->uap, (uint8_t)candidate))
         {
-            /* Correct the offset for any drift detected between the two clocks. */
-            pnet->clock_offset = (uint8_t)((candidate - (int)rx_clk_1600) & 0x3Fu);
-            if (pnet->tracking_state < 5)
-                pnet->tracking_state++;
-            pnet->clk_known = 1;
-            return 1;
+            hit_delta = offsets[k];
+            found = 1;
+            break;
         }
     }
 
-    if (pnet->tracking_state > 0)
-        pnet->tracking_state--;
+    if (!found)
+    {
+        /* No valid clock for this packet: drop any pending suspicion and
+         * decay lock confidence as before. */
+        pnet->drift_candidate = 0;
+        if (pnet->tracking_state > 0)
+            pnet->tracking_state--;
 
-    if (pnet->tracking_state == 0)
-        pnet->clk_known = 0;
+        if (pnet->tracking_state == 0)
+            pnet->clk_known = 0;
 
-    return 0;
+        return 0;
+    }
+
+    if (hit_delta == 0)
+    {
+        /* Tracked clock still correct: any prior suspicion is disproven. */
+        pnet->drift_candidate = 0;
+        if (pnet->tracking_state < 5)
+            pnet->tracking_state++;
+        pnet->clk_known = 1;
+        return 1;
+    }
+
+    if (pnet->drift_candidate == 0)
+    {
+        /* First sighting of this drift: record it, but hold the tracked
+         * offset and confidence steady until a second packet confirms. */
+        pnet->drift_candidate = hit_delta;
+        return 1;
+    }
+
+    if (pnet->drift_candidate == hit_delta)
+    {
+        /* Same delta on two consecutive packets: confirmed drift. */
+        pnet->clock_offset = ((pnet->clock_offset + hit_delta) + 64) % 64;
+        pnet->drift_candidate = 0;
+        if (pnet->tracking_state < 5)
+            pnet->tracking_state++;
+        pnet->clk_known = 1;
+        return 1;
+    }
+
+    /* Conflicting drift evidence: discard the suspicion, keep tracking. */
+    pnet->drift_candidate = 0;
+    return 1;
 }
 
 /* ---------------------------------------------------------------------------

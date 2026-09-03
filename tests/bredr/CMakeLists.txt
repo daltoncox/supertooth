@@ -92,3 +92,13 @@ add_test(NAME test_recovery_btbb_parity COMMAND test_recovery_btbb_parity)
 add_executable(test_replay_frame_dump test_replay_frame_dump.c)
 target_link_libraries(test_replay_frame_dump PRIVATE supertooth_core)
 add_test(NAME test_replay_frame_dump COMMAND test_replay_frame_dump)
+
+add_executable(test_drift_confirm
+    test_drift_confirm.c
+)
+
+target_link_libraries(test_drift_confirm
+    supertooth_core
+)
+
+add_test(NAME test_drift_confirm COMMAND test_drift_confirm)

@@ -137,6 +137,7 @@ void bredr_piconet_init(bredr_piconet_t *pnet, uint32_t lap)
     memset(pnet, 0, sizeof(*pnet));
     pnet->lap = lap & 0xFFFFFFu;
     pnet->tracking_state = -1;
+    pnet->drift_candidate = 0;
 
     rssi_tracker_init(&pnet->combined_rssi_track);
     rssi_tracker_init(&pnet->master_rssi_track);
@@ -165,6 +166,7 @@ void bredr_piconet_set_uap(bredr_piconet_t *pnet, uint8_t uap,
     pnet->clock_offset = (int)((central_clk_1_6 - rx_clk_1600) & 0x3Fu);
     pnet->clk_known = 1;
     pnet->tracking_state = 1;
+    pnet->drift_candidate = 0;
 }
 
 void bredr_piconet_set_uap_only(bredr_piconet_t *pnet, uint8_t uap)
@@ -176,6 +178,7 @@ void bredr_piconet_set_uap_only(bredr_piconet_t *pnet, uint8_t uap)
     pnet->uap_found = 1;
     pnet->clk_known = 0;
     pnet->tracking_state = -1;
+    pnet->drift_candidate = 0;
 }
 
 uint8_t bredr_piconet_central_clk_1_6(const bredr_piconet_t *pnet,
