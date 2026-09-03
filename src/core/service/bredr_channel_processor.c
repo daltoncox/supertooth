@@ -211,10 +211,6 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
         if (status == BREDR_VALID_PACKET)
         {
             proc->valid_packets++;
-            if (dbg)
-                fprintf(stderr,
-                        "[bredr_proc ch=%u] VALID_PACKET #%lu (decim_out=%u)\n",
-                        proc->rf_channel_index, proc->valid_packets, decim_out);
             emit_frame(proc, sample_index, decim_out, blk->block_base_sample);
         }
     }

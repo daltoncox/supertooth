@@ -489,6 +489,7 @@ int main(int argc, char *argv[])
         session_drop_breakdown_t drops;
         session_dropped_blocks_breakdown(g_session, &drops);
         app_print_drop_breakdown(&drops);
+        printf("  BR/EDR frames emitted: %lu\n", session_bredr_frame_count(g_session));
     }
     printf("\n");
     print_session_piconets();

@@ -492,6 +492,11 @@ int main(int argc, char *argv[])
         session_drop_breakdown_t drops;
         session_dropped_blocks_breakdown(g_session, &drops);
         app_print_drop_breakdown(&drops);
+        unsigned long emitted = 0ul, confirmed = 0ul;
+        session_ble_frame_counts(g_session, &emitted, &confirmed);
+        printf("  BLE frames emitted   : %lu\n", emitted);
+        printf("  BLE frames confirmed : %lu\n", confirmed);
+        printf("  BR/EDR frames emitted: %lu\n", session_bredr_frame_count(g_session));
     }
 
     session_destroy(g_session);

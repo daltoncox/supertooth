@@ -630,7 +630,10 @@ void session_process_ble_event(session_t *session, const ble_event_t *event)
      * data frames against its piconet store. It returns whether the frame
      * is surfaced to presentation layers (advertising, or a CRC-valid data
      * frame); pure correlation frames are consumed silently. */
+    session->ble_frames_emitted++;
     int surface = ble_tracker_submit_frame(&session->ble_tracker, event);
+    if (surface)
+        session->ble_frames_confirmed++;
     if (surface && session->ble_cb)
         session->ble_cb(event, session->ble_user);
 }
@@ -641,6 +644,7 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
 
     /* Sole writer is the BR/EDR collector thread, so no mutex is needed here;
      * the tracker's own lock still guards the GUI poll readers. */
+    session->bredr_frames_emitted++;
     int packet_is_newest = 0;
     bredr_piconet_t *pnet = bredr_tracker_add_packet(&session->bredr_tracker,
                                                      event, &packet_is_newest);
@@ -746,6 +750,19 @@ unsigned long session_dropped_blocks(const session_t *session)
     if (session->bredr_chan_dispatcher)
         total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
     return total;
+}
+
+void session_ble_frame_counts(const session_t *session,
+                              unsigned long *emitted,
+                              unsigned long *confirmed)
+{
+    if (emitted) *emitted = session ? session->ble_frames_emitted : 0ul;
+    if (confirmed) *confirmed = session ? session->ble_frames_confirmed : 0ul;
+}
+
+unsigned long session_bredr_frame_count(const session_t *session)
+{
+    return session ? session->bredr_frames_emitted : 0ul;
 }
 
 void session_dropped_blocks_breakdown(const session_t *session,

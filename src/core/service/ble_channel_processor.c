@@ -176,10 +176,6 @@ int ble_channel_processor_process_block(ble_channel_processor_t *proc, sample_bl
         if (status == BLE_VALID_PACKET)
         {
             proc->valid_packets++;
-            if (dbg)
-                fprintf(stderr,
-                        "[ble_proc rf=%u] VALID_PACKET #%lu (decim_out=%u)\n",
-                        proc->rf_channel_index, proc->valid_packets, decim_out);
             emit_frame(proc, block_start_decim_sample, sample_index,
                        decim_out, blk->block_base_sample);
         }

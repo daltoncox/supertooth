@@ -162,6 +162,21 @@ typedef struct session {
     /* Per-pool breakdown of dropped blocks (see session_drop_breakdown_t).
      * Snapshotted at the same point as dropped_blocks_total. */
     session_drop_breakdown_t dropped_breakdown;
+
+    /* BLE frame counts: emitted = every event reaching
+     * session_process_ble_event (i.e. every VALID_PACKET the BLE processors
+     * forwarded); confirmed = subset the tracker surfaced
+     * (ble_tracker_submit_frame returned 1: accepted advertising frame or
+     * CRC-gated data frame). Sole writer is the single BLE collector thread. */
+    unsigned long ble_frames_emitted;
+    unsigned long ble_frames_confirmed;
+
+    /* BR/EDR frame count: emitted = every event reaching
+     * session_process_bredr_event (i.e. every valid packet the BR/EDR
+     * processors forwarded). No confirmation stage exists for BR/EDR, so
+     * emitted is the only metric. Sole writer is the single BR/EDR
+     * collector thread. */
+    unsigned long bredr_frames_emitted;
 } session_t;
 
 int  session_init(session_t *session, const session_config_t *cfg);
@@ -204,7 +219,13 @@ size_t session_get_ble_piconets(const session_t *session,
 
 unsigned long session_dropped_blocks(const session_t *session);
 void session_dropped_blocks_breakdown(const session_t *session,
-                                      session_drop_breakdown_t *out);
+                                       session_drop_breakdown_t *out);
+
+void session_ble_frame_counts(const session_t *session,
+                              unsigned long *emitted,
+                              unsigned long *confirmed);
+
+unsigned long session_bredr_frame_count(const session_t *session);
 
 /* Test-only helper: build the BLE/BR/EDR channel processors for the current
  * tune + enable state (without opening the radio) and report the counts.
