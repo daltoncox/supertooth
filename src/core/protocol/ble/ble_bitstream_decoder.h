@@ -17,13 +17,17 @@
  *     on the access address, regardless of channel.
  *  3. COLLECT_PDU: the dewhitened header length determines the candidate
  *     size (2 + len + 3 CRC bytes).
- *  4. Every candidate is emitted as captured. Advertising frames (and any
- *     CONNECT_IND they carry) are handed to the consumer ungate; data
- *     candidates are emitted raw too. Confirming a data candidate is a real
- *     packet — and recovering its CRCInit from CONNECT_IND seeding — is the
- *     consumer's job (the per-session piconet store owns CRC gating and
- *     CRCInit recovery). This keeps the decoder a pure PHY/framing stage,
- *     mirroring the BR/EDR path.
+ *  4. Every candidate that passes stateless spec-conformance checks is
+ *     emitted as captured: preamble/AA-LSB correlation for all candidates,
+ *     plus data-AA structural rules (never all-zero/all-one, max run of six
+ *     identical bits) and LL header rules (LLID != 00, RFU == 0) for data
+ *     candidates. Advertising frames (and any CONNECT_IND they carry) are
+ *     handed to the consumer ungated; data candidates are emitted raw too.
+ *     Confirming a data candidate is a real packet — and recovering its
+ *     CRCInit from CONNECT_IND seeding — is the consumer's job (the
+ *     per-session piconet store owns CRC gating and CRCInit recovery). This
+ *     keeps the decoder a pure PHY/framing stage, mirroring the BR/EDR
+ *     path.
  *
  * Resync rule: a candidate that is not a real packet is detected later by
  * the consumer's CRC gate. To avoid false negatives when a false preamble

@@ -134,11 +134,76 @@ static void ble_finish_candidate(ble_bitstream_decoder_t *proc)
     proc->pdu_target_bits = 0u;
 }
 
-static void ble_classify(ble_bitstream_decoder_t *proc)
+/* Stateless spec-conformance pre-filters (pure functions of the candidate
+ * bits: no shared store, no back-query, forward-only). Rejects rescan from
+ * the next preamble inside the buffered candidate, never dropping bits. */
+
+/* Preamble/AA-LSB correlation (Core Vol 6 2.1.1): the preamble's last
+ * air bit is the complement of the AA's first air bit, guaranteeing an
+ * edge into the access address — 0xAA (ends in 1) iff AA bit0 is 0,
+ * 0x55 (ends in 0) iff AA bit0 is 1. */
+static int ble_preamble_matches_aa(uint8_t preamble, uint32_t aa)
+{
+    uint8_t expected =
+        (aa & 1u) ? BLE_PREAMBLE_PATTERN_1 : BLE_PREAMBLE_PATTERN_2;
+    return preamble == expected;
+}
+
+/* Longest run of identical bits in @p aa (LSB-first air order). */
+static unsigned int ble_aa_max_run(uint32_t aa)
+{
+    unsigned int best = 1u, cur = 1u;
+    for (unsigned int i = 1u; i < 32u; i++)
+    {
+        if (((aa >> i) & 1u) == ((aa >> (i - 1u)) & 1u))
+        {
+            cur++;
+            if (cur > best)
+                best = cur;
+        }
+        else
+            cur = 1u;
+    }
+    return best;
+}
+
+/* Data AA structural rules (Core Vol 6 2.1.2): never all-zero/all-one and
+ * never more than six consecutive zeros or ones. */
+static int ble_data_aa_plausible(uint32_t aa)
+{
+    if (aa == 0u || aa == 0xFFFFFFFFu)
+        return 0;
+    if (ble_aa_max_run(aa) > 6u)
+        return 0;
+    return 1;
+}
+
+/* Dewhitened LL header plausibility for the classified kind. Data: LLID 00
+ * is reserved and RFU bits 7:5 must be zero. Advertising headers are left
+ * unfiltered (junk adv frames stay visible for diagnostics). */
+static int ble_data_header_plausible(const uint8_t header[2])
+{
+    if ((header[0] & 0x03u) == 0u)
+        return 0;
+    if (header[0] & 0xE0u)
+        return 0;
+    return 1;
+}
+
+/* Returns 1 when the candidate survives local checks, 0 when it was
+ * rejected (rescan already performed). */
+static int ble_classify(ble_bitstream_decoder_t *proc)
 {
     proc->access_address =
         (uint32_t)proc->cand[1] | ((uint32_t)proc->cand[2] << 8u) |
         ((uint32_t)proc->cand[3] << 16u) | ((uint32_t)proc->cand[4] << 24u);
+
+    if (!ble_preamble_matches_aa(proc->detected_preamble,
+                                 proc->access_address))
+    {
+        ble_reject_and_rescan(proc);
+        return 0;
+    }
 
     /* Classification is purely on the access address, regardless of
      * channel: the advertising AA always takes the advertising path,
@@ -147,7 +212,16 @@ static void ble_classify(ble_bitstream_decoder_t *proc)
      * worth diagnosing) and must stay visible rather than being masked. */
     proc->is_data_candidate =
         (proc->access_address != BLE_ADVERTISING_AA) ? 1 : 0;
+
+    if (proc->is_data_candidate &&
+        !ble_data_aa_plausible(proc->access_address))
+    {
+        ble_reject_and_rescan(proc);
+        return 0;
+    }
+
     proc->state = BLE_DEC_COLLECT_PDU;
+    return 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -247,7 +321,8 @@ static ble_status_t ble_drain(ble_bitstream_decoder_t *proc)
         {
             if (proc->cand_bits < BLE_AA_END_BITS)
                 return BLE_COLLECTING;
-            ble_classify(proc);
+            if (!ble_classify(proc))
+                continue;
             continue;
         }
 
@@ -262,6 +337,13 @@ static ble_status_t ble_drain(ble_bitstream_decoder_t *proc)
             header[0] = proc->cand[5];
             header[1] = proc->cand[6];
             ble_dewhiten(header, sizeof(header), proc->channel_index);
+            if (proc->is_data_candidate &&
+                !ble_data_header_plausible(header))
+            {
+                /* Spec-impossible header: rescan, never drop bits. */
+                ble_reject_and_rescan(proc);
+                continue;
+            }
             proc->pdu_target_bits =
                 (2u + ble_payload_length_from_header(header) + BLE_CRC_BYTES) * 8u;
             proc->header_decoded = 1;

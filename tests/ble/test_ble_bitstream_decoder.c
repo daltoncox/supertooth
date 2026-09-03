@@ -230,8 +230,8 @@ static void test_adv_regression(void)
     bts_reset(&s);
     stream_zeros(&s, 37u);          /* unaligned start, no false preambles */
     stream_adv_packet(&s, BLE_PDU_ADV_IND, payload, sizeof(payload), CH_ADV);
-    /* The 0x55 preamble preceded by a 0 bit spawns an overlap candidate;
-     * it must complete and reject before the rescan reaches the packet. */
+    /* The 0xAA preamble preceded by a 0 bit spawns no overlap candidate;
+     * trailing zeros let any rescan chain resolve as on a live stream. */
     stream_zeros(&s, FLUSH_ZEROS);
 
     ble_test_out_t out;
@@ -243,7 +243,7 @@ static void test_adv_regression(void)
     {
         TEST_ASSERT(f->kind == BLE_FRAME_ADVERTISING);
         TEST_ASSERT(f->access_address == BLE_ADVERTISING_AA);
-        TEST_ASSERT(f->preamble == 0x55u);
+        TEST_ASSERT(f->preamble == 0xAAu);
         TEST_ASSERT(f->crc_init == BLE_CRC_INIT_ADV);
         TEST_ASSERT(f->raw_pdu_bytes == (2u + 8u + 3u));
 
@@ -512,17 +512,20 @@ static void test_rescan_swallowed_packet(void)
     TEST_ASSERT(real.count == 144u);
 
     /* False candidate: zero AA + header with a large clean length. Its
-     * body starts with the real packet, zero-filled after. */
+     * body starts with the real packet, zero-filled after. An 8-zero gap
+     * separates the false header from the real packet so no straddle
+     * window into the real preamble forms a phantom preamble. */
     bts_reset(&s);
     unsigned int len = stream_false_prefix(&s, CH_DATA, 20u);
     TEST_ASSERT(len >= 20u);
     unsigned int body_bits = (2u + len + BLE_CRC_BYTES) * 8u;
+    stream_zeros(&s, 8u);
     for (unsigned int i = 0; i < real.count; i++)
         bts_push_bit(&s, (uint8_t)((real.bytes[i / 8u] >> (i % 8u)) & 1u));
-    stream_zeros(&s, body_bits - 16u - real.count);
+    stream_zeros(&s, body_bits - 16u - 8u - real.count);
 
     /* Sanity: the first preamble after the false one is the real one. */
-    EXPECT_FIRST_PREAMBLE(&s, 56u);
+    EXPECT_FIRST_PREAMBLE(&s, 64u);
 
     ble_test_out_t out;
     bts_feed(&dec, &s, &out);
@@ -763,14 +766,13 @@ static void test_rescan_adv_aa_visible(void)
     ble_test_stream_t s;
     bts_reset(&s);
     /* Outer false candidate (zero AA, big clean length) whose body holds a
-     * junk candidate (preamble + adv AA + garbage header). The junk 0x55
-     * is preceded by a zero bit, so the rescan detours through the overlap
-     * candidate first — generous trailing zeros let the chain resolve as
-     * it would on a continuous stream. */
+     * junk candidate (preamble + adv AA + garbage header). The junk 0xAA
+     * is preceded by a zero bit (no overlap candidate) — generous trailing
+     * zeros let the chain resolve as it would on a continuous stream. */
     unsigned int len = stream_false_prefix(&s, CH_DATA, 60u);
     TEST_ASSERT(len >= 60u);
     stream_zeros(&s, 64u);
-    bts_push_preamble(&s, 0x55u);
+    bts_push_preamble(&s, 0xAAu);
     bts_push_aa(&s, BLE_ADVERTISING_AA);
     stream_whitened_header(&s, 0x0Eu, 30u, CH_DATA);
     stream_zeros(&s, (2u + 30u + BLE_CRC_BYTES) * 8u - 16u);
