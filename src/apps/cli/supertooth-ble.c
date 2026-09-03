@@ -31,7 +31,7 @@ static const app_output_mode_option_t s_output_modes[] = {
     {APP_OUTPUT_MODE_DEVICES, "devices"},
 };
 
-static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
+static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_SUMMARY;
 
 static void handle_sigint(int sig)
 {
@@ -75,7 +75,7 @@ static void print_usage(const char *argv0)
             "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
             "[-d|--device [<type>:<id>]] [--debug] "
             "[--enforce-crc on|off]\n", argv0);
-    fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
+    fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of consecutive LE RF channels (1-%u, default: %u)\n",
             "-c, --channels N",
             BLE_SESSION_MAX_CHANNELS, BLE_SESSION_MAX_CHANNELS);

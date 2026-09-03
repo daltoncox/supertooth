@@ -25,7 +25,7 @@ typedef void (*packet_formatter_fn)(unsigned long packet_no,
                                      const bredr_event_t *event,
                                      const bredr_piconet_snapshot_t *pnet);
 
-static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
+static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_SUMMARY;
 
 /* Live device/piconet table view (started/stopped around session_run). */
 static app_device_view_t *g_device_view = NULL;
@@ -214,7 +214,7 @@ static void print_usage(const char *argv0)
             "Usage: %s [-v|--view full|summary|devices] [-l|--lap LAP] "
             "[-c|--channels N] [-b|--bottom-channel CH] "
             "[-d|--device [<type>:<id>]] [--ac-errors N] [--debug]\n", argv0);
-    fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
+    fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
     fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n", "--ac-errors N");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
