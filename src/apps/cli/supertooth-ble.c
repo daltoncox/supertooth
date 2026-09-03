@@ -9,6 +9,7 @@
 #include "session.h"
 #include "app_common.h"
 #include "app_device_view.h"
+#include "app_summary_view.h"
 #include "version.h"
 #include "ble_display.h"
 #include "ble_bitstream_decoder.h"
@@ -110,23 +111,9 @@ static void print_ble_packet_full(unsigned long packet_no,
 }
 
 static void print_ble_packet_summary(unsigned long packet_no,
-                                      const ble_event_t *event)
+                                       const ble_event_t *event)
 {
-    ble_packet_t packet;
-    if (ble_decode_frame(&event->frame, event->meta.channel_index, &packet) == 0)
-    {
-        ble_print_packet_summary_line(packet_no, &packet, &event->meta);
-        return;
-    }
-
-    printf("pkt=%-6lu type=BLE pdu=%-14s ch=%02u addr=%s len=%-3u crc=%s rssi=%.1f\n",
-           packet_no,
-           "DECODE_FAIL",
-           event->meta.channel_index,
-           "--",
-           0u,
-           "FAIL",
-           event->meta.rssi_dbr);
+    app_summary_view_print_ble(packet_no, event);
 }
 
 static void handle_ble_packet(const ble_event_t *event,
@@ -339,6 +326,9 @@ int main(int argc, char *argv[])
            g_num_le_channels, g_num_le_channels == 1u ? "" : "s",
            g_bottom_le_channel);
     printf("Press Ctrl+C to exit\n\n");
+
+    if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
+        app_summary_view_print_header();
 
     if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
         g_device_view = app_device_view_start(&g_session);

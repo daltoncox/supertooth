@@ -8,6 +8,7 @@
 
 #include "app_common.h"
 #include "app_device_view.h"
+#include "app_summary_view.h"
 #include "version.h"
 #include "ble_display.h"
 #include "bredr_display.h"
@@ -61,21 +62,7 @@ static void print_ble_packet_full(unsigned long packet_no,
 static void print_ble_packet_summary(unsigned long packet_no,
                                      const ble_event_t *event)
 {
-    ble_packet_t packet;
-    if (ble_decode_frame(&event->frame, event->meta.channel_index, &packet) == 0)
-    {
-        ble_print_packet_summary_line(packet_no, &packet, &event->meta);
-        return;
-    }
-
-    printf("pkt=%-6lu type=BLE pdu=%-14s ch=%02u addr=%s len=%-3u crc=%s rssi=%.1f\n",
-           packet_no,
-           "DECODE_FAIL",
-           event->meta.channel_index,
-           "--",
-           0u,
-           "FAIL",
-           event->meta.rssi_dbr);
+    app_summary_view_print_ble(packet_no, event);
 }
 
 static void print_bredr_packet_full(unsigned long packet_no,
@@ -101,7 +88,7 @@ static void print_bredr_packet_summary(unsigned long packet_no,
                                         const bredr_event_t *event,
                                         const bredr_piconet_snapshot_t *pnet)
 {
-    bredr_print_packet_summary_line(packet_no, &event->frame, pnet, &event->meta);
+    app_summary_view_print_bredr(packet_no, event, pnet);
 }
 
 static int parse_channel_count(const char *arg, unsigned int *out_channels)
@@ -468,6 +455,9 @@ int main(int argc, char *argv[])
 
     printf("AC errors   : %u\n", g_ac_errors);
     printf("Receiving... Press Ctrl+C to stop.\n");
+
+    if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
+        app_summary_view_print_header();
 
     if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
         g_device_view = app_device_view_start(g_session);

@@ -8,6 +8,7 @@
 #include <getopt.h>
 #include "app_common.h"
 #include "app_device_view.h"
+#include "app_summary_view.h"
 #include "version.h"
 #include "bredr_display.h"
 #include "radio_common.h"
@@ -103,7 +104,7 @@ static void print_packet_summary(unsigned long packet_no,
                                   const bredr_event_t *event,
                                   const bredr_piconet_snapshot_t *pnet)
 {
-    bredr_print_packet_summary_line(packet_no, &event->frame, pnet, &event->meta);
+    app_summary_view_print_bredr(packet_no, event, pnet);
 }
 
 static void print_packet_rssi(unsigned long packet_no,
@@ -466,6 +467,9 @@ int main(int argc, char *argv[])
     bredr_bitstream_decoder_set_global_max_ac_errors((uint8_t)g_ac_errors);
 
     printf("AC errors   : %u\n", g_ac_errors);
+
+    if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
+        app_summary_view_print_header();
 
     if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
         g_device_view = app_device_view_start(g_session);
