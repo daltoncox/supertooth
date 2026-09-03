@@ -10,7 +10,8 @@ typedef enum
 {
     APP_OUTPUT_MODE_FULL = 0,
     APP_OUTPUT_MODE_SUMMARY = 1,
-    APP_OUTPUT_MODE_RSSI = 2
+    APP_OUTPUT_MODE_RSSI = 2,
+    APP_OUTPUT_MODE_DEVICES = 3
 } app_output_mode_t;
 
 typedef struct
@@ -26,6 +27,7 @@ enum
 {
     APP_OPT_DEBUG = 0x100,
     APP_OPT_ENFORCE_CRC,
+    APP_OPT_AC_ERRORS,
 };
 
 /* Parsed "<type>:<id>" device spec, e.g. "hackrf:b25062dc22113a0b".
@@ -77,5 +79,13 @@ int app_validate_device_spec(const char *argv0, const app_device_spec_t *spec);
  * Print the `--device` usage line for `print_usage` blocks.
  */
 void app_print_device_usage_line(void);
+
+/**
+ * Print a per-pool breakdown of dropped blocks from a session summary
+ * (see session_dropped_blocks_breakdown). Each pool reports producer-side
+ * (pool exhausted) vs consumer-side (reader queue full) drops so the user
+ * can see WHERE in the pipeline blocks were lost.
+ */
+void app_print_drop_breakdown(const session_drop_breakdown_t *b);
 
 #endif

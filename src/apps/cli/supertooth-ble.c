@@ -8,6 +8,8 @@
 #include <signal.h>
 #include "session.h"
 #include "app_common.h"
+#include "app_device_view.h"
+#include "app_summary_view.h"
 #include "version.h"
 #include "ble_display.h"
 #include "ble_bitstream_decoder.h"
@@ -20,12 +22,16 @@ static unsigned int g_bottom_le_channel = BLE_CH37_INDEX;
 static session_t g_session;
 static int g_session_initialized = 0;
 
+/* Live device/piconet table view (started/stopped around session_run). */
+static app_device_view_t *g_device_view = NULL;
+
 static const app_output_mode_option_t s_output_modes[] = {
     {APP_OUTPUT_MODE_FULL, "full"},
     {APP_OUTPUT_MODE_SUMMARY, "summary"},
+    {APP_OUTPUT_MODE_DEVICES, "devices"},
 };
 
-static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
+static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_SUMMARY;
 
 static void handle_sigint(int sig)
 {
@@ -66,10 +72,10 @@ static int parse_bottom_channel(const char *arg, unsigned int *out_bottom_channe
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [-v|--view full|summary] [-c|--channels N] [-b|--bottom-channel CH] "
+            "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
             "[-d|--device [<type>:<id>]] [--debug] "
             "[--enforce-crc on|off]\n", argv0);
-    fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
+    fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of consecutive LE RF channels (1-%u, default: %u)\n",
             "-c, --channels N",
             BLE_SESSION_MAX_CHANNELS, BLE_SESSION_MAX_CHANNELS);
@@ -105,29 +111,19 @@ static void print_ble_packet_full(unsigned long packet_no,
 }
 
 static void print_ble_packet_summary(unsigned long packet_no,
-                                      const ble_event_t *event)
+                                       const ble_event_t *event)
 {
-    ble_packet_t packet;
-    if (ble_decode_frame(&event->frame, event->meta.channel_index, &packet) == 0)
-    {
-        ble_print_packet_summary_line(packet_no, &packet, &event->meta);
-        return;
-    }
-
-    printf("pkt=%-6lu type=BLE pdu=%-14s ch=%02u addr=%s len=%-3u crc=%s rssi=%.1f\n",
-           packet_no,
-           "DECODE_FAIL",
-           event->meta.channel_index,
-           "--",
-           0u,
-           "FAIL",
-           event->meta.rssi_dbr);
+    app_summary_view_print_ble(packet_no, event);
 }
 
 static void handle_ble_packet(const ble_event_t *event,
-                               void *user)
+                                void *user)
 {
     (void)user;
+
+    /* In devices mode the live table thread owns all output. */
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        return;
 
     if (g_enforce_crc)
     {
@@ -331,7 +327,19 @@ int main(int argc, char *argv[])
            g_bottom_le_channel);
     printf("Press Ctrl+C to exit\n\n");
 
+    if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
+        app_summary_view_print_header();
+
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        g_device_view = app_device_view_start(&g_session);
+
     int result = session_run(&g_session);
+
+    if (g_device_view)
+    {
+        app_device_view_stop(g_device_view);
+        g_device_view = NULL;
+    }
     session_destroy(&g_session);
     g_session_initialized = 0;
 
@@ -351,6 +359,18 @@ int main(int argc, char *argv[])
            g_bottom_le_channel, bottom_rf, bottom_rf + g_num_le_channels - 1u);
     printf("  Enforce CRC    : %s\n", g_enforce_crc ? "on" : "off");
     printf("  Total packets  : %lu\n", g_packet_count);
+
+    if (g_debug)
+    {
+        printf("\n=== Debug Summary ===\n");
+        session_drop_breakdown_t drops;
+        session_dropped_blocks_breakdown(&g_session, &drops);
+        app_print_drop_breakdown(&drops);
+        unsigned long emitted = 0ul, confirmed = 0ul;
+        session_ble_frame_counts(&g_session, &emitted, &confirmed);
+        printf("  BLE frames emitted   : %lu\n", emitted);
+        printf("  BLE frames confirmed : %lu\n", confirmed);
+    }
 
     return 0;
 }

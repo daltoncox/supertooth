@@ -71,9 +71,8 @@ int ble_channel_processor_init(ble_channel_processor_t *proc,
                                unsigned int chan_bin,
                                unsigned int bank_M,
                                unsigned int bank_M2,
-                               unsigned int frame_stride,
-                               float rssi_cal_db,
-                               struct ble_piconet_store *store);
+                                unsigned int frame_stride,
+                                float rssi_cal_db);
 
 void ble_channel_processor_destroy(ble_channel_processor_t *proc);
 

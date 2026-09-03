@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "ble_codec.h"
-#include "ble_piconet.h"
 #include "session.h"
 #include "rssi_measurements.h"
 
@@ -17,9 +16,8 @@ int ble_channel_processor_init(ble_channel_processor_t *proc,
                                unsigned int chan_bin,
                                unsigned int bank_M,
                                unsigned int bank_M2,
-                               unsigned int frame_stride,
-                               float rssi_cal_db,
-                               struct ble_piconet_store *store)
+                                unsigned int frame_stride,
+                                float rssi_cal_db)
 {
     if (!proc || !dispatcher || rf_channel_index >= BLE_RF_CHANNEL_COUNT) return -1;
     memset(proc, 0, sizeof(*proc));
@@ -55,7 +53,7 @@ int ble_channel_processor_init(ble_channel_processor_t *proc,
                              : 1u;
 
     uint8_t le_ch = ble_rf_to_le_channel(rf_channel_index);
-    ble_bitstream_decoder_init(&proc->decoder, le_ch, store);
+    ble_bitstream_decoder_init(&proc->decoder, le_ch);
 
     proc->prev_state       = BLE_SEARCHING;
     proc->pkt_start_decim_sample = -1L;
@@ -128,7 +126,10 @@ static int emit_frame(ble_channel_processor_t *proc,
     ble_event_t event = { .meta = meta, .frame = frame };
 
     if (proc->session)
-        session_process_ble_event(proc->session, &event);
+        /* Hand the decoded event to the BLE collector thread; the worker
+         * releases its sample block immediately after, decoupling block-pool
+         * lifetime from tracking + presentation cost. */
+        collector_submit(&proc->session->ble_collector, &event);
 
     return 0;
 }
@@ -175,10 +176,6 @@ int ble_channel_processor_process_block(ble_channel_processor_t *proc, sample_bl
         if (status == BLE_VALID_PACKET)
         {
             proc->valid_packets++;
-            if (dbg)
-                fprintf(stderr,
-                        "[ble_proc rf=%u] VALID_PACKET #%lu (decim_out=%u)\n",
-                        proc->rf_channel_index, proc->valid_packets, decim_out);
             emit_frame(proc, block_start_decim_sample, sample_index,
                        decim_out, blk->block_base_sample);
         }

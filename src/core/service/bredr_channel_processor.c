@@ -68,7 +68,7 @@ int bredr_channel_processor_init(bredr_channel_processor_t *proc,
     proc->decimated = malloc(sizeof(float complex) * proc->buf_cap_samples);
     if (!proc->decimated) { bredr_channel_processor_destroy(proc); return -1; }
 
-    bredr_bitstream_decoder_init(&proc->decoder, BREDR_AC_ERRORS_DEFAULT);
+    bredr_bitstream_decoder_init(&proc->decoder);
 
     proc->prev_state               = BREDR_SEARCHING;
     proc->noise_floor_linear       = 0.0f;
@@ -141,7 +141,10 @@ static int emit_frame(bredr_channel_processor_t *proc,
         if (s->bredr_cfg.lap_filter_enabled &&
             ((frame.lap & 0xFFFFFFu) != s->bredr_cfg.lap_filter))
             return 0;
-        session_process_bredr_event(s, &event);
+        /* Hand the decoded event to the BR/EDR collector thread; the worker
+         * releases its sample block immediately after, decoupling block-pool
+         * lifetime from tracking + presentation cost. */
+        collector_submit(&s->bredr_collector, &event);
     }
 
     return 0;
@@ -208,10 +211,6 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
         if (status == BREDR_VALID_PACKET)
         {
             proc->valid_packets++;
-            if (dbg)
-                fprintf(stderr,
-                        "[bredr_proc ch=%u] VALID_PACKET #%lu (decim_out=%u)\n",
-                        proc->rf_channel_index, proc->valid_packets, decim_out);
             emit_frame(proc, sample_index, decim_out, blk->block_base_sample);
         }
     }

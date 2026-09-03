@@ -14,7 +14,7 @@
  * -------------
  * @code
  *   bredr_bitstream_decoder_t proc;
- *   bredr_bitstream_decoder_init(&proc, BREDR_AC_ERRORS_DEFAULT);
+ *   bredr_bitstream_decoder_init(&proc);
  *
  *   // For every demodulated bit from the 1-Mbps channel:
  *   bredr_status_t s = bredr_bitstream_decoder_push_bit(&proc, bit);
@@ -38,8 +38,9 @@
  *
  * Limitation: bit errors that fall in the LAP portion of the sync word
  * (bits 34–57) may cause a miss because the extracted LAP will be wrong.
- * This simple approach works well at low BER; use `max_ac_errors=0` for
- * the most reliable (but strictest) detection.
+ * This simple approach works well at low BER; set the global access-code
+ * error tolerance to 0 (the default) for the most reliable (but strictest)
+ * detection.
  *
  * Packet collection
  * -----------------
@@ -92,9 +93,6 @@ extern "C"
 
 // Enough payload bytes to hold BR_MAX_AIR_PAYLOAD_BITS
 #define BR_MAX_AIR_PAYLOAD_BYTES ((BR_MAX_AIR_PAYLOAD_BITS + 7u) / 8u)
-
-/** Default maximum Hamming distance allowed in access-code matching. */
-#define BREDR_AC_ERRORS_DEFAULT    2u
 
 /**
  * General Inquiry Access Code LAP (GIAC).
@@ -232,11 +230,6 @@ typedef enum
  */
 typedef struct
 {
-    /* -- Configuration ----------------------------------------------------- */
-
-    /** Maximum AC Hamming distance accepted as a valid match. */
-    uint8_t  max_ac_errors;
-
     /* -- Sync-word detection ----------------------------------------------- */
 
     /**
@@ -335,13 +328,32 @@ typedef struct
  * Must be called before the first `bredr_bitstream_decoder_push_bit()` on this processor.
  * Safe to call again at any time to reset all state.
  *
- * @param proc           Pointer to the processor.  Must not be NULL.
- * @param max_ac_errors  Maximum Hamming distance accepted as a valid AC
- *                       match.  Use BREDR_AC_ERRORS_DEFAULT (2) for
- *                       normal operation, 0 for strict matching only.
+ * The access-code error tolerance is a single process-wide setting owned by
+ * this module (see bredr_bitstream_decoder_set_global_max_ac_errors); it is
+ * not configured per processor.
+ *
+ * @param proc  Pointer to the processor.  Must not be NULL.
  */
-void           bredr_bitstream_decoder_init(bredr_bitstream_decoder_t *proc,
-                                    uint8_t max_ac_errors);
+void           bredr_bitstream_decoder_init(bredr_bitstream_decoder_t *proc);
+
+/**
+ * @brief Set the process-wide maximum access-code Hamming distance.
+ *
+ * Applies to every BR/EDR bitstream decoder.  This is the sole access-code
+ * acceptance gate; no other layer performs an access-code error filter.
+ * Set once before streaming begins.  Defaults to 0 (strict, byte-perfect
+ * access-code match).
+ *
+ * @param max_ac_errors  Maximum Hamming distance accepted as a valid AC match.
+ */
+void           bredr_bitstream_decoder_set_global_max_ac_errors(uint8_t max_ac_errors);
+
+/**
+ * @brief Return the current process-wide maximum access-code Hamming distance.
+ *
+ * @return  The configured maximum AC error tolerance.
+ */
+uint8_t        bredr_bitstream_decoder_get_global_max_ac_errors(void);
 
 /**
  * @brief Push one demodulated bit into the processor.
@@ -373,30 +385,20 @@ bredr_status_t bredr_bitstream_decoder_push_bit(bredr_bitstream_decoder_t *proc,
 int            bredr_bitstream_decoder_get_frame(bredr_bitstream_decoder_t *proc, bredr_frame_t *out);
 
 /**
- * @brief Compute the 8-bit HEC for a 10-bit header value and a known UAP.
+ * @brief Recover the candidate UAP from a 10-bit header value and the 8-bit HEC.
  *
- * Exposed publicly so that external modules (e.g. bredr_piconet) can
- * verify HEC without duplicating the LFSR logic.
+ * This is the Bluetooth HEC *decode* (the inverse of the hardware HEC
+ * generation).  It is exposed publicly so that external modules (e.g.
+ * bredr_piconet) can recover the UAP without duplicating the LFSR logic.
+ *
+ * The HEC only narrows the UAP to one of (up to) 36 reachable values for a
+ * given header; the payload CRC must be used to disambiguate the true UAP.
  *
  * @param data  10 header bits: bit 0 = LT_ADDR[0] (first transmitted),
  *              bit 9 = SEQN (last transmitted before HEC).
- * @param uap   8-bit Upper Address Part used to seed the LFSR.
- * @return      8-bit HEC register; bit 7 is the first bit transmitted.
+ * @param hec   8-bit HEC register; bit 7 is the first bit transmitted.
+ * @return      candidate 8-bit UAP.
  */
-uint8_t        bredr_compute_hec(uint16_t data, uint8_t uap);
-
-/**
- * @brief Return the maximum on-air payload bits for a given TYPE code.
- *
- * This is the number of on-air payload bits for a decoded packet type,
- * including FEC overhead where applicable. PHY collection should not use it
- * to size capture until header dewhitening has been done with a known CLK1-6.
- *
- * @param type_code  4-bit packet TYPE (0–15).
- * @return           On-air payload bits, or 0 for NULL/POLL.
- */
-unsigned int   bredr_on_air_payload_bits(uint8_t type_code);
-
 #ifdef __cplusplus
 }
 #endif

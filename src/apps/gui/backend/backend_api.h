@@ -44,6 +44,8 @@ extern "C" {
 #define BACKEND_INFO_TEXT_LEN   160
 #define BACKEND_TIME_TEXT_LEN   32
 #define BACKEND_PROTO_TEXT_LEN  8
+#define BACKEND_NAME_TEXT_LEN   72
+#define BACKEND_MANUF_TEXT_LEN  40
 #define BACKEND_DETAIL_KEY_LEN  40
 #define BACKEND_DETAIL_VAL_LEN  192
 #define BACKEND_DETAIL_MAX      32
@@ -85,6 +87,35 @@ typedef struct
 typedef void (*backend_row_fn)(const backend_row_t *row, void *user);
 
 /**
+ * A polled, display-ready device/piconet entity (one row in the device list).
+ * Produced by backend_session_poll_entities() from the core trackers. All
+ * strings are NUL-terminated. The callback receives a pointer valid only for
+ * the duration of the call; copy out anything needed.
+ */
+typedef struct
+{
+    uint64_t id;                       /**< stable entity id (matches core) */
+    int      kind;                    /**< entity_kind_t: 0=BR/EDR dev,
+                                          1=BR/EDR piconet, 2=BLE dev,
+                                          3=BLE piconet */
+    char     proto[BACKEND_PROTO_TEXT_LEN];   /**< "BR/EDR" or "LE" */
+    char     addr[BACKEND_ADDR_TEXT_LEN];     /**< core addr_str */
+    char     device[BACKEND_TYPE_TEXT_LEN];   /**< core label */
+    char     addr_type[BACKEND_TYPE_TEXT_LEN];/**< BLE address subtype */
+    char     name[BACKEND_NAME_TEXT_LEN];     /**< BLE local name (if any) */
+    char     manufacturer[BACKEND_MANUF_TEXT_LEN]; /**< BLE manufacturer */
+    float    rssi_db;                  /**< 1 s average RSSI (NaN if invalid) */
+    int      rssi_valid;              /**< 0 => no signal yet */
+    uint64_t first_seen_ms;
+    uint64_t last_seen_ms;
+    unsigned long total_packets;
+    unsigned int   packet_rate;
+    uint32_t crc_init;              /**< BLE connection CRCInit (0 if not found) */
+    int      crc_init_confirmed;    /**< 0 while CRCInit is still unconfirmed */
+    unsigned int crc_init_candidates; /**< distinct CRCInit candidates accumulated */
+} backend_entity_t;
+
+/**
  * Invoked (on the session worker thread) the moment the capture loop ends,
  * BEFORE the blocking radio teardown. Lets the GUI flip to "stopped"
  * immediately rather than waiting on device shutdown.
@@ -96,6 +127,10 @@ typedef struct backend_session backend_session_t;
 
 backend_session_t *backend_session_create(void);
 void backend_session_destroy(backend_session_t *session);
+
+/** Enable verbose backend/session debug logging (channel-processor frame
+ *  emits, etc.). Must be called before starting a session. */
+void backend_set_debug(int on);
 
 /**
  * Register the capture-stopped callback. @p on_stopped is invoked on the
@@ -179,6 +214,15 @@ int backend_session_run_hybrid(backend_session_t *session,
 
 /** Request a running session to stop (safe to call from another thread). */
 void backend_session_request_stop(backend_session_t *session);
+
+/**
+ * Snapshot the current device/piconet entities from the core trackers into
+ * @p out (capacity @p max). Returns the number of entities written. Caller
+ * provides the buffer; safe to call from the GUI thread while a capture runs
+ * (the core getters lock internally).
+ */
+size_t backend_session_poll_entities(backend_session_t *session,
+                                     backend_entity_t *out, size_t max);
 
 #ifdef __cplusplus
 }

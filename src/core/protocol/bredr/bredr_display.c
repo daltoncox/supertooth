@@ -20,7 +20,7 @@ static const char *bredr_tracking_state_desc(int tracking_state)
 
 static int bredr_piconet_has_active_track(const bredr_piconet_snapshot_t *pnet)
 {
-    return pnet && pnet->uap_found && pnet->clk_known && pnet->tracking_state > 0;
+    return pnet && pnet->uap_valid && pnet->clk_known && pnet->tracking_state > 0;
 }
 
 static void bredr_format_piconet_id(char out[16],
@@ -31,8 +31,12 @@ static void bredr_format_piconet_id(char out[16],
     if (pnet)
         lap = pnet->lap & 0xFFFFFFu;
 
-    if (pnet && pnet->uap_found)
-        snprintf(out, 16, "0x%02X%06" PRIX32, pnet->uap, lap);
+    /* The General/Limited Inquiry Access Codes (GIAC 0x9E8B33, LIAC 0x9E8B00)
+     * use the well-known DCI UAP (0x00), so always render with a known UAP. */
+    if (pnet && (pnet->uap_valid ||
+                 lap == 0x9E8B33u || lap == 0x9E8B00u))
+        snprintf(out, 16, "0x%02X%06" PRIX32,
+                 (lap == 0x9E8B33u || lap == 0x9E8B00u) ? 0u : pnet->uap, lap);
     else
         snprintf(out, 16, "0x??%06" PRIX32, lap);
 }
@@ -81,13 +85,10 @@ static uint32_t bredr_sample_to_rx_clk_1600(uint64_t radio_start_sample_index,
 }
 
 static int bredr_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
-                                     const rx_metadata_t *meta,
-                                     uint8_t *uap_out,
-                                     uint8_t *clk1_6_out)
+                                      const rx_metadata_t *meta,
+                                      uint8_t *uap_out,
+                                      uint8_t *clk1_6_out)
 {
-    uint32_t rx_clk_1600;
-    uint32_t delta;
-
     if (!uap_out || !clk1_6_out)
         return 0;
 
@@ -97,17 +98,12 @@ static int bredr_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
     if (!pnet)
         return 0;
 
-    if (pnet->uap_found)
+    if (pnet->uap_valid)
         *uap_out = pnet->uap;
     if (pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u)
-    {
-        rx_clk_1600 = bredr_sample_to_rx_clk_1600(meta->radio_start_sample_index,
-                                                  meta->radio_sample_rate_hz);
-        delta = rx_clk_1600 - pnet->last_successful_rx_clk_1600;
-        *clk1_6_out = (uint8_t)((pnet->central_clk_1_6 + delta) & 0x3Fu);
-    }
+        *clk1_6_out = pnet->central_clk_1_6;
 
-    return pnet->uap_found && pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u;
+    return pnet->uap_valid && pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u;
 }
 
 static void bredr_print_hex_line(const char *label,
@@ -306,7 +302,7 @@ void bredr_print_packet_details(const bredr_frame_t *frame,
     {
         printf("\n[Piconet Info]\n");
         printf("Packets      : %lu\n", pnet->total_packets);
-        if (pnet->uap_found)
+        if (pnet->uap_valid)
             printf("UAP          : 0x%02X\n", pnet->uap);
         else
             printf("UAP          : 0x??\n");
@@ -328,7 +324,7 @@ void bredr_print_packet_summary_line(unsigned long packet_no,
     {
         char uap_buf[8];
         char clk_buf[8];
-        if (pnet && pnet->uap_found)
+        if (pnet && pnet->uap_valid)
             snprintf(uap_buf, sizeof(uap_buf), "%02X", pnet->uap);
         else
             snprintf(uap_buf, sizeof(uap_buf), "??");
@@ -367,13 +363,14 @@ void bredr_print_piconet_snapshot(const bredr_piconet_snapshot_t *pnet)
         return;
 
     printf("  LAP: 0x%06" PRIX32, pnet->lap & 0xFFFFFFu);
-    if (pnet->uap_found)
+    if (pnet->uap_valid)
         printf("  UAP: 0x%02X", pnet->uap);
     else
         printf("  UAP: ??");
 
     if (pnet->clk_known)
-        printf("  CLK1-6: %02u [state=%d]", pnet->central_clk_1_6, pnet->tracking_state);
+        printf("  CLK1-6: %02u [state=%d]", pnet->central_clk_1_6,
+               pnet->tracking_state);
     else
         printf("  CLK1-6: ?? [state=%d]", pnet->tracking_state);
 

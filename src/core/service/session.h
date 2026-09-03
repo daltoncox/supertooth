@@ -14,10 +14,12 @@
 #include "ble_piconet.h"
 #include "bredr_piconet.h"
 #include "bredr_display.h"
-#include "bredr_piconet_store.h"
+#include "ble_tracker.h"
+#include "bredr_tracker.h"
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
 #include "radio_common.h"
+#include "collector.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,7 +30,6 @@ extern "C" {
 #define SESSION_BLE_LNA_GAIN   24u
 #define SESSION_BLE_VGA_GAIN   18u
 
-#define BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW 16u
 #define BREDR_SESSION_MAX_CHANNELS 79u
 
 /** Protocol whose channel window defines the radio tuning. */
@@ -56,10 +57,28 @@ typedef struct {
 } session_ble_config_t;
 
 typedef struct {
-    unsigned int rssi_averaging_window;
     uint32_t lap_filter;
     int lap_filter_enabled;
 } session_bredr_config_t;
+
+/** Per-pool breakdown of where blocks were dropped during a session. Read this
+ *  (not the live dispatcher counters) after a run: session_run() resets the
+ *  live counters on teardown, and the snapshot is taken just before that.
+ *  For each pool, two sub-reasons are tracked:
+ *    - *_pool_exhausted : a producer could not allocate a block from the pool
+ *      (e.g. the radio could not allocate an RF block, or a channelizer could
+ *      not allocate its output frame block).
+ *    - *_consumer_full   : a reader's queue was full, i.e. a consumer reading
+ *      from this pool was not keeping up (a channelizer for the RF pool, or a
+ *      channel worker for an output pool). */
+typedef struct {
+    unsigned long rf_pool_exhausted;
+    unsigned long rf_consumer_full;
+    unsigned long bredr_out_pool_exhausted;
+    unsigned long bredr_out_consumer_full;
+    unsigned long ble_out_pool_exhausted;
+    unsigned long ble_out_consumer_full;
+} session_drop_breakdown_t;
 
 typedef struct session {
     uint32_t lo_frequency_hz;
@@ -101,9 +120,16 @@ typedef struct session {
     pthread_t            bredr_channelizer_thread;
     int                  bredr_channelizer_running;
 
-    ble_piconet_store_t   ble_piconet_store;
-    bredr_piconet_store_t bredr_piconet_store;
-    pthread_mutex_t       bredr_mutex;
+    ble_tracker_t       ble_tracker;   /**< owns BLE advertiser + connection
+                                              correlation (incl. piconet store) */
+    bredr_tracker_t     bredr_tracker;
+
+    /** Per-protocol collector: channel processors submit decoded events here; a
+     *  dedicated thread drains the queue, runs the tracker, and invokes the
+     *  presentation callback. Keeps BLE and BR/EDR from contending on a shared
+     *  tracker mutex and decouples block lifetime from presentation cost. */
+    collector_t         ble_collector;
+    collector_t         bredr_collector;
 
     ble_channel_processor_t   *ble_channels;
     size_t                     ble_channel_count;
@@ -132,6 +158,25 @@ typedef struct session {
      * dispatchers are reset during session_destroy().  The live counters are
      * zeroed by the reset, so this is what callers must read after a run. */
     unsigned long dropped_blocks_total;
+
+    /* Per-pool breakdown of dropped blocks (see session_drop_breakdown_t).
+     * Snapshotted at the same point as dropped_blocks_total. */
+    session_drop_breakdown_t dropped_breakdown;
+
+    /* BLE frame counts: emitted = every event reaching
+     * session_process_ble_event (i.e. every VALID_PACKET the BLE processors
+     * forwarded); confirmed = subset the tracker surfaced
+     * (ble_tracker_submit_frame returned 1: accepted advertising frame or
+     * CRC-gated data frame). Sole writer is the single BLE collector thread. */
+    unsigned long ble_frames_emitted;
+    unsigned long ble_frames_confirmed;
+
+    /* BR/EDR frame count: emitted = every event reaching
+     * session_process_bredr_event (i.e. every valid packet the BR/EDR
+     * processors forwarded). No confirmation stage exists for BR/EDR, so
+     * emitted is the only metric. Sole writer is the single BR/EDR
+     * collector thread. */
+    unsigned long bredr_frames_emitted;
 } session_t;
 
 int  session_init(session_t *session, const session_config_t *cfg);
@@ -160,7 +205,27 @@ size_t       session_bredr_piconet_count(const session_t *session);
 int          session_bredr_piconet_snapshot(const session_t *session,
                                            size_t index,
                                            bredr_piconet_snapshot_t *out);
+
+/** Snapshot polling API for the device/piconet list (caller-provided array,
+ *  core fills up to @p max entries and returns the number written). */
+size_t session_get_bredr_devices(const session_t *session,
+                                 bredr_device_snapshot_t *out, size_t max);
+size_t session_get_bredr_piconets(const session_t *session,
+                                 bredr_piconet_snapshot_t *out, size_t max);
+size_t session_get_ble_devices(const session_t *session,
+                               ble_device_snapshot_t *out, size_t max);
+size_t session_get_ble_piconets(const session_t *session,
+                               ble_piconet_snapshot_t *out, size_t max);
+
 unsigned long session_dropped_blocks(const session_t *session);
+void session_dropped_blocks_breakdown(const session_t *session,
+                                       session_drop_breakdown_t *out);
+
+void session_ble_frame_counts(const session_t *session,
+                              unsigned long *emitted,
+                              unsigned long *confirmed);
+
+unsigned long session_bredr_frame_count(const session_t *session);
 
 /* Test-only helper: build the BLE/BR/EDR channel processors for the current
  * tune + enable state (without opening the radio) and report the counts.

@@ -7,11 +7,14 @@
 #include <inttypes.h>
 
 #include "app_common.h"
+#include "app_device_view.h"
+#include "app_summary_view.h"
 #include "version.h"
 #include "ble_display.h"
 #include "bredr_display.h"
 #include "ble_bitstream_decoder.h"
 #include "session.h"
+#include "bredr_bitstream_decoder.h"
 
 #define BREDR_MAX_CHANNEL 79u
 
@@ -21,14 +24,19 @@ static int g_enforce_crc = 1;   /* drop BLE frames whose CRC fails; default on *
 static unsigned int g_num_bredr_channels = BREDR_SESSION_MAX_CHANNELS;
 static unsigned int g_bottom_bredr_channel = 0u;
 static int g_bottom_channel_explicit = 0;
+/* Maximum access-code bit errors accepted by the BR/EDR bitstream decoder.
+ * Defaults to 0 (strict, byte-perfect access-code match). */
+static unsigned int g_ac_errors = 0u;
 static session_protocol_ref_t g_tune_ref = SESSION_REF_BREDR;
 static session_t *g_session = NULL;
+static app_device_view_t *g_device_view = NULL;
 static const app_output_mode_option_t s_output_modes[] = {
     {APP_OUTPUT_MODE_FULL, "full"},
     {APP_OUTPUT_MODE_SUMMARY, "summary"},
+    {APP_OUTPUT_MODE_DEVICES, "devices"},
 };
 
-static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_FULL;
+static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_SUMMARY;
 
 static void print_ble_packet_full(unsigned long packet_no,
                                   const ble_event_t *event)
@@ -54,21 +62,7 @@ static void print_ble_packet_full(unsigned long packet_no,
 static void print_ble_packet_summary(unsigned long packet_no,
                                      const ble_event_t *event)
 {
-    ble_packet_t packet;
-    if (ble_decode_frame(&event->frame, event->meta.channel_index, &packet) == 0)
-    {
-        ble_print_packet_summary_line(packet_no, &packet, &event->meta);
-        return;
-    }
-
-    printf("pkt=%-6lu type=BLE pdu=%-14s ch=%02u addr=%s len=%-3u crc=%s rssi=%.1f\n",
-           packet_no,
-           "DECODE_FAIL",
-           event->meta.channel_index,
-           "--",
-           0u,
-           "FAIL",
-           event->meta.rssi_dbr);
+    app_summary_view_print_ble(packet_no, event);
 }
 
 static void print_bredr_packet_full(unsigned long packet_no,
@@ -94,7 +88,7 @@ static void print_bredr_packet_summary(unsigned long packet_no,
                                         const bredr_event_t *event,
                                         const bredr_piconet_snapshot_t *pnet)
 {
-    bredr_print_packet_summary_line(packet_no, &event->frame, pnet, &event->meta);
+    app_summary_view_print_bredr(packet_no, event, pnet);
 }
 
 static int parse_channel_count(const char *arg, unsigned int *out_channels)
@@ -148,16 +142,17 @@ static unsigned int ble_channels_in_window(uint64_t lo_hz, uint32_t sample_rate,
 static void print_usage(const char *argv0)
 {
     fprintf(stderr,
-            "Usage: %s [-v|--view full|summary] [-c|--channels N] [-b|--bottom-channel CH] "
-            "[--tune-ref bredr|ble] [-d|--device [<type>:<id>]] [--debug] [--enforce-crc on|off]\n",
+            "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
+            "[--tune-ref bredr|ble] [-d|--device [<type>:<id>]] [--ac-errors N] [--debug] [--enforce-crc on|off]\n",
             argv0);
-    fprintf(stderr, "  %-30s Packet view style (default: full)\n", "-v, --view");
+    fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
             "-c, --channels N",
             BREDR_SESSION_MAX_CHANNELS, g_num_bredr_channels);
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
+    fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n", "--ac-errors N");
     fprintf(stderr, "  %-30s Which protocol's channel window sets the tuning grid (default: bredr)\n",
             "--tune-ref bredr|ble");
     app_print_device_usage_line();
@@ -168,10 +163,12 @@ static void print_usage(const char *argv0)
 }
 
 static void handle_hybrid_bredr_packet(const bredr_event_t *event,
-                                        const bredr_piconet_snapshot_t *pnet,
-                                        void *user)
+                                         const bredr_piconet_snapshot_t *pnet,
+                                         void *user)
 {
     (void)user;
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        return;
     app_output_lock();
     unsigned long packet_no = ++g_packet_count;
     if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
@@ -183,9 +180,12 @@ static void handle_hybrid_bredr_packet(const bredr_event_t *event,
 }
 
 static void handle_hybrid_ble_packet(const ble_event_t *event,
-                                      void *user)
+                                       void *user)
 {
     (void)user;
+
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        return;
 
     /* When CRC enforcement is on, drop BLE frames whose CRC fails (or that
      * fail to decode) before emitting anything. BR/EDR frames are unaffected
@@ -216,6 +216,7 @@ int main(int argc, char *argv[])
         {"bottom-channel", required_argument, NULL, 'b'},
         {"tune-ref", required_argument, NULL, 'r'},
         {"device", optional_argument, NULL, 'd'},
+        {"ac-errors", required_argument, NULL, APP_OPT_AC_ERRORS},
         {"version", no_argument, NULL, 'V'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
         {"enforce-crc", required_argument, NULL, APP_OPT_ENFORCE_CRC},
@@ -311,6 +312,20 @@ int main(int argc, char *argv[])
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
+            break;
+        }
+        case APP_OPT_AC_ERRORS:
+        {
+            char *end = NULL;
+            unsigned long value = strtoul(optarg, &end, 0);
+            if (end == optarg || *end != '\0' || value > 64ul)
+            {
+                fprintf(stderr, "Invalid --ac-errors value: %s (expected 0-64)\n",
+                        optarg);
+                print_usage(argv[0]);
+                return EXIT_FAILURE;
+            }
+            g_ac_errors = (unsigned int)value;
             break;
         }
         case 'V':
@@ -420,9 +435,7 @@ int main(int argc, char *argv[])
      * actually reaches a valid session and stops the capture loop. */
     app_install_sigint_handler(g_session);
 
-    session_bredr_config_t bredr_cfg = {
-        .rssi_averaging_window = BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW,
-    };
+    session_bredr_config_t bredr_cfg = { 0 };
     session_enable_bredr(g_session, &bredr_cfg, handle_hybrid_bredr_packet, NULL);
     session_ble_config_t ble_cfg = { .enforce_crc = g_enforce_crc ? 1u : 0u };
     session_enable_ble(g_session, &ble_cfg, handle_hybrid_ble_packet, NULL);
@@ -436,8 +449,26 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    /* Apply the global access-code error tolerance before streaming begins.
+     * The bitstream decoder is the sole access-code acceptance gate. */
+    bredr_bitstream_decoder_set_global_max_ac_errors((uint8_t)g_ac_errors);
+
+    printf("AC errors   : %u\n", g_ac_errors);
     printf("Receiving... Press Ctrl+C to stop.\n");
+
+    if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
+        app_summary_view_print_header();
+
+    if (g_output_mode == APP_OUTPUT_MODE_DEVICES)
+        g_device_view = app_device_view_start(g_session);
+
     int result = session_run(g_session);
+
+    if (g_device_view)
+    {
+        app_device_view_stop(g_device_view);
+        g_device_view = NULL;
+    }
 
     printf("\n\n=== Session Summary ===\n");
     printf("  Output mode    : %s\n",
@@ -448,8 +479,14 @@ int main(int argc, char *argv[])
     if (g_debug)
     {
         printf("\n=== Debug Summary ===\n");
-        printf("  Dropped blocks : %lu\n",
-                session_dropped_blocks(g_session));
+        session_drop_breakdown_t drops;
+        session_dropped_blocks_breakdown(g_session, &drops);
+        app_print_drop_breakdown(&drops);
+        unsigned long emitted = 0ul, confirmed = 0ul;
+        session_ble_frame_counts(g_session, &emitted, &confirmed);
+        printf("  BLE frames emitted   : %lu\n", emitted);
+        printf("  BLE frames confirmed : %lu\n", confirmed);
+        printf("  BR/EDR frames emitted: %lu\n", session_bredr_frame_count(g_session));
     }
 
     session_destroy(g_session);

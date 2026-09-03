@@ -7,6 +7,8 @@
 
 #include <string.h>
 
+#include "bt_assigned_numbers.h"
+
 static void ble_copy_address(ble_address_t *out,
                              const uint8_t *src,
                              ble_addr_kind_t kind)
@@ -387,3 +389,77 @@ uint8_t ble_rf_to_le_channel(unsigned int rf_channel_index)
     if (rf_channel_index < 12u)   return (uint8_t)(rf_channel_index - 1u);
     return (uint8_t)(rf_channel_index - 2u);
 }
+
+/* ---------------------------------------------------------------------------
+ * Advertising PDU access helpers
+ * ---------------------------------------------------------------------------*/
+
+void ble_addr_bytes_to_u64(const uint8_t a[BLE_ADDR_LEN], uint64_t *out)
+{
+    uint64_t v = 0;
+    for (int i = 0; i < (int)BLE_ADDR_LEN; i++)
+        v |= (uint64_t)a[i] << (8 * i);
+    *out = v;
+}
+
+const uint8_t *ble_adv_addr_bytes(const ble_adv_pdu_t *adv)
+{
+    if (!adv)
+        return NULL;
+    switch (adv->pdu_type) {
+        case BLE_PDU_ADV_IND:         return adv->payload.adv_ind.adv_addr.addr;
+        case BLE_PDU_ADV_NONCONN_IND: return adv->payload.adv_nonconn_ind.adv_addr.addr;
+        case BLE_PDU_ADV_SCAN_IND:    return adv->payload.adv_scan_ind.adv_addr.addr;
+        case BLE_PDU_SCAN_RSP:        return adv->payload.scan_rsp.adv_addr.addr;
+        case BLE_PDU_ADV_DIRECT_IND:  return adv->payload.adv_direct_ind.adv_addr.addr;
+        case BLE_PDU_SCAN_REQ:        return adv->payload.scan_req.adv_addr.addr;
+        case BLE_PDU_CONNECT_IND:     return adv->payload.connect_ind.adv_addr.addr;
+        default:                      return NULL;
+    }
+}
+
+const uint8_t *ble_adv_data_bytes(const ble_adv_pdu_t *adv, unsigned int *len_out)
+{
+    if (!adv || !len_out)
+        return NULL;
+    switch (adv->pdu_type) {
+        case BLE_PDU_ADV_IND:         *len_out = adv->payload.adv_ind.adv_data_len; return adv->payload.adv_ind.adv_data;
+        case BLE_PDU_ADV_NONCONN_IND: *len_out = adv->payload.adv_nonconn_ind.adv_data_len; return adv->payload.adv_nonconn_ind.adv_data;
+        case BLE_PDU_ADV_SCAN_IND:    *len_out = adv->payload.adv_scan_ind.adv_data_len; return adv->payload.adv_scan_ind.adv_data;
+        case BLE_PDU_SCAN_RSP:        *len_out = adv->payload.scan_rsp.adv_data_len; return adv->payload.scan_rsp.adv_data;
+        default:                      *len_out = 0; return NULL;
+    }
+}
+
+void ble_adv_parse_name_manuf(const uint8_t *data, unsigned int len,
+                              char *name_out, size_t name_cap,
+                              char *manuf_out, size_t manuf_cap)
+{
+    if (name_cap)  name_out[0] = '\0';
+    if (manuf_cap) manuf_out[0] = '\0';
+    if (!data || len == 0) return;
+
+    unsigned int i = 0;
+    while (i + 1 < len) {
+        uint8_t ad_len = data[i];
+        if (ad_len == 0) break;
+        if (i + 1 + ad_len > len) break;
+        uint8_t type = data[i + 1];
+        const uint8_t *ad = data + i + 2;
+        uint8_t ad_dlen = (uint8_t)(ad_len - 1);
+        if (type == 0x08 || type == 0x09) {
+            size_t n = ad_dlen < name_cap - 1 ? ad_dlen : name_cap - 1;
+            memcpy(name_out, ad, n);
+            name_out[n] = '\0';
+        } else if (type == 0xFF && ad_dlen >= 2) {
+            uint16_t cid = (uint16_t)ad[0] | ((uint16_t)ad[1] << 8);
+            const char *mn = bt_assigned_company_name(cid);
+            if (mn) {
+                strncpy(manuf_out, mn, manuf_cap - 1);
+                manuf_out[manuf_cap - 1] = '\0';
+            }
+        }
+        i += 1u + ad_len;
+    }
+}
+

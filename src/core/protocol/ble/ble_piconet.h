@@ -45,9 +45,15 @@ extern "C" {
  * ---------------------------------------------------------------------------*/
 
 /** Maximum number of tracked connections (LRU eviction beyond this). */
-#define BLE_PICONET_STORE_CAPACITY 16u
+#define BLE_PICONET_STORE_CAPACITY 512u
 /** CRCInit candidates kept per access address (dedup, FIFO). */
 #define BLE_PICONET_MAX_CANDIDATES 4u
+/** Pending (not-yet-promoted) access addresses tallied before they earn a
+ *  store slot (promote-on-promise gating). Bounded to bound memory. */
+#define BLE_PICONET_PENDING_CAP 1024u
+/** An access address must be seen this many times (or seed a CRCInit
+ *  candidate via CONNECT_IND) before it may occupy a store entry. */
+#define BLE_PICONET_PROMOTE_THRESHOLD 3u
 
 /* ---------------------------------------------------------------------------
  * Types
@@ -71,11 +77,23 @@ typedef struct
     uint64_t last_used_seq;      /* LRU clock */
 } ble_piconet_t;
 
+/** Lightweight tally for an access address not yet promoted to a store entry.
+ *  Counts raw frames so one-off junk never consumes a slot. */
+typedef struct
+{
+    uint32_t aa;
+    unsigned long count;
+    uint64_t seq;   /**< LRU clock for pending eviction */
+} ble_piconet_pending_t;
+
 typedef struct ble_piconet_store
 {
     ble_piconet_t entries[BLE_PICONET_STORE_CAPACITY];
     unsigned int count;
     uint64_t seq;
+    ble_piconet_pending_t pending[BLE_PICONET_PENDING_CAP];
+    unsigned int pending_count;
+    uint64_t pending_seq;
     pthread_mutex_t lock;
     unsigned int initialized;
 } ble_piconet_store_t;

@@ -7,6 +7,7 @@
 #define BLE_CODEC_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include "ble_bitstream_decoder.h"
 #include "phy.h"
@@ -126,6 +127,25 @@ typedef struct
         ble_adv_unknown_t unknown;
     } payload;
 } ble_adv_pdu_t;
+
+/* ---------------------------------------------------------------------------
+ * Advertising PDU access helpers (shared by tracking / presentation code)
+ * ---------------------------------------------------------------------------*/
+
+/** Pack a 6-byte (LE, LSB-first) address into a uint64 key. */
+void ble_addr_bytes_to_u64(const uint8_t a[BLE_ADDR_LEN], uint64_t *out);
+
+/** Advertiser address bytes for any advertising PDU type (NULL if none). */
+const uint8_t *ble_adv_addr_bytes(const ble_adv_pdu_t *adv);
+
+/** Advertising-data bytes + length for PDU types that carry them. */
+const uint8_t *ble_adv_data_bytes(const ble_adv_pdu_t *adv, unsigned int *len_out);
+
+/** Extract local name (AD 0x08/0x09) and manufacturer (AD 0xFF) from adv data. */
+void ble_adv_parse_name_manuf(const uint8_t *data, unsigned int len,
+                              char *name_out, size_t name_cap,
+                              char *manuf_out, size_t manuf_cap);
+
 
 /** Decoded data-channel (LL) PDU: header fields + raw payload. The payload
  * includes the 4-byte MIC when the link is encrypted (not parsed). */

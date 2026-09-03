@@ -8,7 +8,6 @@ endif()
 if(PkgConfig_FOUND)
     pkg_check_modules(HACKRF libhackrf)
     pkg_check_modules(LIQUID liquid-dsp)
-    pkg_check_modules(BTBB libbtbb)
 endif()
 
 if(HACKRF_FOUND)
@@ -17,15 +16,6 @@ if(HACKRF_FOUND)
         NO_DEFAULT_PATH)
     if(HACKRF_LIBRARY_PATH)
         set(HACKRF_LIBRARIES ${HACKRF_LIBRARY_PATH})
-    endif()
-endif()
-
-if(BTBB_FOUND)
-    find_library(BTBB_LIBRARY_PATH NAMES btbb libbtbb
-        PATHS ${BTBB_LIBRARY_DIRS}
-        NO_DEFAULT_PATH)
-    if(BTBB_LIBRARY_PATH)
-        set(BTBB_LIBRARIES ${BTBB_LIBRARY_PATH})
     endif()
 endif()
 
@@ -53,48 +43,12 @@ if(NOT HACKRF_FOUND)
     endif()
 endif()
 
-if(NOT BTBB_FOUND)
-    find_library(BTBB_LIBRARIES NAMES btbb libbtbb
-        PATHS
-            /opt/homebrew/lib
-            /usr/local/lib
-            /usr/lib
-            /opt/local/lib)
-    find_path(BTBB_INCLUDE_DIRS btbb.h
-        PATHS
-            /opt/homebrew/include
-            /usr/local/include
-            /usr/include
-            /opt/local/include)
-
-    if(BTBB_LIBRARIES AND BTBB_INCLUDE_DIRS)
-        set(BTBB_FOUND TRUE)
-        message(STATUS "Found BTBB manually: ${BTBB_LIBRARIES}")
-    else()
-        find_path(BTBB_INCLUDE_DIRS btbb.h
-            PATHS
-                /opt/homebrew/include/libbtbb
-                /usr/local/include/libbtbb
-                /usr/include/libbtbb
-                /opt/local/include/libbtbb)
-
-        if(BTBB_INCLUDE_DIRS)
-            set(BTBB_FOUND TRUE)
-            message(STATUS "Found BTBB headers in subdirectory: ${BTBB_INCLUDE_DIRS}")
-        endif()
-    endif()
-endif()
-
 if(NOT HACKRF_FOUND)
     message(FATAL_ERROR "HackRF library not found. Please install with: brew install hackrf")
 endif()
 
 if(NOT LIQUID_FOUND)
     message(FATAL_ERROR "Liquid DSP library not found. Please install with: brew install liquid-dsp")
-endif()
-
-if(NOT BTBB_FOUND)
-    message(FATAL_ERROR "BTBB library is required for this project")
 endif()
 
 find_package(Threads REQUIRED)
@@ -141,25 +95,28 @@ add_library(supertooth_core STATIC
     dsp/channelizer_bank.h
     models/receive_event_models.h
     models/phy.h
+    models/rssi_tracker.c
+    models/rssi_tracker.h
     protocol/ble/ble_display.c protocol/ble/ble_display.h
     protocol/ble/ble_codec.c protocol/ble/ble_codec.h
     protocol/ble/ble_bitstream_decoder.c protocol/ble/ble_bitstream_decoder.h
     protocol/ble/ble_piconet.c protocol/ble/ble_piconet.h
+    protocol/ble/ble_tracker.c protocol/ble/ble_tracker.h
     protocol/ble/bt_assigned_numbers.c protocol/ble/bt_assigned_numbers.h
     protocol/bredr/bredr_display.c protocol/bredr/bredr_display.h
     protocol/bredr/bredr_codec.c protocol/bredr/bredr_codec.h
     protocol/bredr/bredr_bitstream_decoder.c protocol/bredr/bredr_bitstream_decoder.h
     protocol/bredr/bredr_piconet.c protocol/bredr/bredr_piconet.h
     protocol/bredr/bredr_piconet_store.c protocol/bredr/bredr_piconet_store.h
-    protocol/bredr/bredr_recovery.c protocol/bredr/bredr_recovery.h
-    protocol/bredr/bredr_recovery_backend.h
-    protocol/bredr/bredr_recovery_btbb.c protocol/bredr/bredr_recovery_btbb.h
+    protocol/bredr/bredr_tracker.c protocol/bredr/bredr_tracker.h
+    protocol/bredr/bredr_clock_recovery.c protocol/bredr/bredr_clock_recovery.h
     radio/radio_common.c radio/radio_common.h
     radio/sample_dispatcher.c radio/sample_dispatcher.h
     radio/hackrf.c radio/hackrf.h
     service/ble_channel_processor.c service/ble_channel_processor.h
     service/bredr_channel_processor.c service/bredr_channel_processor.h
     service/channelizer_thread.c service/channelizer_thread.h
+    service/collector.c service/collector.h
     service/session.c service/session.h
     ${CMAKE_CURRENT_BINARY_DIR}/version.c
 )
@@ -167,14 +124,12 @@ add_library(supertooth_core STATIC
 target_link_libraries(supertooth_core
     ${HACKRF_LIBRARIES}
     ${LIQUID_LIBRARIES}
-    ${BTBB_LIBRARIES}
     Threads::Threads
 )
 
 target_include_directories(supertooth_core PUBLIC
     ${HACKRF_INCLUDE_DIRS}
     ${LIQUID_INCLUDE_DIRS}
-    ${BTBB_INCLUDE_DIRS}
     ${CORE_INCLUDE_DIRS}
 )
 
@@ -184,10 +139,6 @@ endif()
 
 if(LIQUID_CFLAGS_OTHER)
     target_compile_options(supertooth_core PRIVATE ${LIQUID_CFLAGS_OTHER})
-endif()
-
-if(BTBB_CFLAGS_OTHER)
-    target_compile_options(supertooth_core PRIVATE ${BTBB_CFLAGS_OTHER})
 endif()
 
 if(UNIX AND NOT APPLE)

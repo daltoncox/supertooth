@@ -66,10 +66,12 @@ static inline void bts_push_preamble(ble_test_stream_t *s, uint8_t preamble)
     bts_push_byte(s, preamble);
 }
 
-/* Realistic preamble for an access address: 0xAA when AA bit0 is 1. */
+/* Realistic preamble for an access address (Core Vol 6 2.1.1): the
+ * preamble's last air bit complements the AA's first air bit, forcing an
+ * edge — 0xAA (ends in 1) when AA bit0 is 0, 0x55 (ends in 0) when 1. */
 static inline uint8_t bts_preamble_for_aa(uint32_t aa)
 {
-    return (aa & 1u) ? 0xAAu : 0x55u;
+    return (aa & 1u) ? 0x55u : 0xAAu;
 }
 
 static inline void bts_push_aa(ble_test_stream_t *s, uint32_t aa)
@@ -127,13 +129,18 @@ static inline void bts_feed(ble_bitstream_decoder_t *proc,
     for (unsigned int i = 0; i < s->count; i++)
     {
         uint8_t b = (uint8_t)((s->bytes[i / 8u] >> (i % 8u)) & 1u);
-        if (ble_bitstream_decoder_push_bit(proc, b) == BLE_VALID_PACKET &&
-            out->count < BTS_MAX_FRAMES)
+        if (ble_bitstream_decoder_push_bit(proc, b) == BLE_VALID_PACKET)
         {
-            if (ble_bitstream_decoder_get_frame(proc, &out->frames[out->count]) == 0)
+            while (out->count < BTS_MAX_FRAMES &&
+                   ble_bitstream_decoder_get_frame(proc,
+                        &out->frames[out->count]) == 0)
                 out->count++;
         }
     }
+    /* Drain any frames still queued after the final bit. */
+    while (out->count < BTS_MAX_FRAMES &&
+           ble_bitstream_decoder_get_frame(proc, &out->frames[out->count]) == 0)
+        out->count++;
 }
 
 #endif /* BLE_TEST_STREAM_H */

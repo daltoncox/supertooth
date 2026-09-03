@@ -3,7 +3,9 @@
 
 #include <QObject>
 #include <QString>
+#include <QVariantList>
 #include <QVariantMap>
+#include <QTimer>
 
 #include <memory>
 #include <thread>
@@ -60,17 +62,21 @@ public:
      *                   the window (hybrid BLE worker idles). Hybrid only;
      *                   BLE sessions decode whichever advertising channels
      *                   fall inside their LE window.
+     * @param acErrors   Maximum BR/EDR access-code bit errors tolerated by the
+     *                   bitstream decoder (0 = strict, byte-perfect match).
+     *                   Defaults to 0; applies to BR/EDR and hybrid sessions.
      * @return true if the session was started (or already running).
      */
     Q_INVOKABLE bool start(int inputType, const QString &deviceId,
                            int sessionType, bool enforceCrc,
                            int channelCount, int bottomChannel,
-                           int leGrid, int bleChannel);
+                           int leGrid, int bleChannel, int acErrors);
     /** Request the running session to stop and join the worker thread. */
     Q_INVOKABLE void stop();
 
 signals:
     void frameDecoded(const QVariantMap &row);
+    void devicesUpdated(const QVariantList &entities);
     void runningChanged();
     void errorOccurred(const QString &message);
 
@@ -82,10 +88,13 @@ private:
     // and releases the session, then flips running() to false.
     void onFinish(int result);
     void setRunning(bool running);
+    // 4 Hz poll: snapshot the core trackers and emit devicesUpdated().
+    void pollDevices();
 
     backend_session_t *m_session = nullptr;
     std::unique_ptr<std::thread> m_thread;
     bool m_running = false;
+    QTimer m_poll;
 };
 
 #endif // RECEIVER_CONTROLLER_H

@@ -7,8 +7,11 @@
 
 #include "ble_piconet.h"
 #include "bredr_piconet.h"
+#include "ble_codec.h"
+#include "bt_assigned_numbers.h"
 #include "channelizer_bank.h"
 #include "radio_common.h"
+#include "collector.h"
 
 static void session_signal_readers(session_t *session)
 {
@@ -66,11 +69,21 @@ int session_init(session_t *session, const session_config_t *cfg)
     memset(&session->ble_channelizer, 0, sizeof(session->ble_channelizer));
     session->ble_channelizer_running = 0;
 
-    ble_piconet_store_init(&session->ble_piconet_store);
-    bredr_piconet_store_init(&session->bredr_piconet_store);
-    bredr_piconet_store_set_rssi_averaging(&session->bredr_piconet_store,
-                                           BREDR_SESSION_DEFAULT_RSSI_AVERAGING_WINDOW);
-    pthread_mutex_init(&session->bredr_mutex, NULL);
+    ble_tracker_init(&session->ble_tracker);
+    bredr_tracker_init(&session->bredr_tracker);
+
+    /* Collector queues: drained by dedicated per-protocol threads spawned in
+     * session_run(). Bounded at 4096 events; overwrite-oldest on overflow keeps
+     * the newest packets (the ones the tracker prefers). */
+    if (collector_init(&session->ble_collector, sizeof(ble_event_t), 4096u,
+                       &session->shutdown_requested) != 0)
+        return -1;
+    if (collector_init(&session->bredr_collector, sizeof(bredr_event_t), 4096u,
+                       &session->shutdown_requested) != 0)
+    {
+        collector_destroy(&session->ble_collector);
+        return -1;
+    }
 
     return 0;
 }
@@ -81,6 +94,8 @@ void session_enable_ble(session_t *session,
 {
     if (!session) return;
     if (cfg) session->ble_cfg = *cfg;
+    ble_tracker_set_enforce_crc(&session->ble_tracker,
+                                cfg ? (int)cfg->enforce_crc : 0);
     session->ble_cb   = cb;
     session->ble_user = user;
     session->ble_enabled = 1;
@@ -209,14 +224,15 @@ static int session_create_channels(session_t *session)
             if (bin < 0)
                 continue;
 
+            /* The decoder is a pure framing stage; the per-session tracker's
+             * piconet store owns CRC gating and CRCInit recovery. */
             int ok = ble_channel_processor_init(
                 proc, session->ble_chan_dispatcher, rf, center,
                 session->sample_rate_hz, (unsigned int)bin,
                 session->ble_channelizer.bank.M,
                 session->ble_channelizer.bank.M2,
                 ble_frame_stride,
-                CHANNELIZER_BANK_RSSI_CAL_DB,
-                &session->ble_piconet_store);
+                CHANNELIZER_BANK_RSSI_CAL_DB);
 
             if (ok != 0)
                 continue;
@@ -310,6 +326,28 @@ static void *session_bredr_worker_shim(void *arg)
     return bredr_channel_worker(arg);
 }
 
+/* Drains the BLE collector queue and runs the tracker + presentation callback
+ * for each event. Single consumer, so the BLE tracker has exactly one writer
+ * and never contends with BR/EDR or with the per-channel workers. */
+static void *session_ble_collector_shim(void *arg)
+{
+    session_t *s = (session_t *)arg;
+    ble_event_t ev;
+    while (collector_pop(&s->ble_collector, &ev) == 0)
+        session_process_ble_event(s, &ev);
+    return NULL;
+}
+
+/* Same as the BLE collector but for BR/EDR events. */
+static void *session_bredr_collector_shim(void *arg)
+{
+    session_t *s = (session_t *)arg;
+    bredr_event_t ev;
+    while (collector_pop(&s->bredr_collector, &ev) == 0)
+        session_process_bredr_event(s, &ev);
+    return NULL;
+}
+
 int session_run(session_t *session)
 {
     if (!session || session->workers_running) return -1;
@@ -322,7 +360,9 @@ int session_run(session_t *session)
 
     size_t total = session->ble_channel_count + session->bredr_channel_count +
                    (session->ble_channelizer.active ? 1u : 0u) +
-                   (session->bredr_channelizer.active ? 1u : 0u);
+                   (session->bredr_channelizer.active ? 1u : 0u) +
+                   (session->ble_enabled ? 1u : 0u) +
+                   (session->bredr_enabled ? 1u : 0u);
     session->worker_threads = calloc(total, sizeof(pthread_t));
     if (!session->worker_threads)
     {
@@ -373,6 +413,29 @@ int session_run(session_t *session)
         }
         session->bredr_channelizer_thread = session->worker_threads[started];
         session->bredr_channelizer_running = 1;
+        started++;
+    }
+
+    /* Collector threads are spawned last (joined last) so they drain any
+     * remaining events after the channel workers have stopped producing. */
+    if (session->ble_enabled)
+    {
+        if (pthread_create(&session->worker_threads[started], NULL,
+                           session_ble_collector_shim, session) != 0)
+        {
+            session_destroy(session);
+            return -1;
+        }
+        started++;
+    }
+    if (session->bredr_enabled)
+    {
+        if (pthread_create(&session->worker_threads[started], NULL,
+                           session_bredr_collector_shim, session) != 0)
+        {
+            session_destroy(session);
+            return -1;
+        }
         started++;
     }
 
@@ -436,6 +499,21 @@ void session_request_stop(session_t *session)
     if (!session) return;
     atomic_store_explicit(&session->shutdown_requested, 1u, memory_order_release);
     session_signal_readers(session);
+    collector_wake(&session->ble_collector);
+    collector_wake(&session->bredr_collector);
+}
+
+/* Accumulate a dispatcher's drop counts into pool-exhausted / consumer-full
+ * subtotals (the latter is the sum of every reader's dropped_blocks). */
+static void dispatcher_accumulate(const sample_dispatcher_t *d,
+                                  unsigned long *pool_exhausted,
+                                  unsigned long *consumer_full)
+{
+    if (!d)
+        return;
+    *pool_exhausted += d->dropped_blocks;
+    for (unsigned int i = 0u; i < d->reader_count; i++)
+        *consumer_full += d->readers[i]->dropped_blocks;
 }
 
 int session_destroy(session_t *session)
@@ -459,6 +537,21 @@ int session_destroy(session_t *session)
         session->dropped_blocks_total += sample_dispatcher_total_dropped(session->ble_chan_dispatcher);
     if (session->bredr_chan_dispatcher)
         session->dropped_blocks_total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
+
+    /* Snapshot the per-pool breakdown so the session summary can report WHERE
+     * blocks were dropped (the live counters are zeroed by the reset below). */
+    memset(&session->dropped_breakdown, 0, sizeof(session->dropped_breakdown));
+    dispatcher_accumulate(session->dispatcher,
+                           &session->dropped_breakdown.rf_pool_exhausted,
+                           &session->dropped_breakdown.rf_consumer_full);
+    if (session->ble_chan_dispatcher)
+        dispatcher_accumulate(session->ble_chan_dispatcher,
+                               &session->dropped_breakdown.ble_out_pool_exhausted,
+                               &session->dropped_breakdown.ble_out_consumer_full);
+    if (session->bredr_chan_dispatcher)
+        dispatcher_accumulate(session->bredr_chan_dispatcher,
+                               &session->dropped_breakdown.bredr_out_pool_exhausted,
+                               &session->dropped_breakdown.bredr_out_consumer_full);
 
     if (session->workers_running)
         session_request_stop(session);
@@ -502,9 +595,10 @@ int session_destroy(session_t *session)
     session->bredr_channelizer_running = 0;
     atomic_store_explicit(&session->shutdown_requested, 0u, memory_order_release);
 
-    ble_piconet_store_free(&session->ble_piconet_store);
-    bredr_piconet_store_free(&session->bredr_piconet_store);
-    pthread_mutex_destroy(&session->bredr_mutex);
+    ble_tracker_free(&session->ble_tracker);
+    bredr_tracker_free(&session->bredr_tracker);
+    collector_destroy(&session->ble_collector);
+    collector_destroy(&session->bredr_collector);
     
     channelizer_destroy(&session->ble_channelizer);
     if (session->ble_chan_dispatcher)
@@ -525,44 +619,59 @@ int session_destroy(session_t *session)
     return 0;
 }
 
+/* --- BLE advertiser tracking: owned by the BLE tracker (see ble_tracker) --- */
+
 void session_process_ble_event(session_t *session, const ble_event_t *event)
 {
-    if (!session || !event || !session->ble_cb) return;
-    session->ble_cb(event, session->ble_user);
+    if (!session || !event) return;
+
+    /* The tracker owns all BLE correlation: it parses advertising PDUs
+     * (advertiser name/manufacturer, CONNECT_IND linkage) and CRC-gates
+     * data frames against its piconet store. It returns whether the frame
+     * is surfaced to presentation layers (advertising, or a CRC-valid data
+     * frame); pure correlation frames are consumed silently. */
+    session->ble_frames_emitted++;
+    int surface = ble_tracker_submit_frame(&session->ble_tracker, event);
+    if (surface)
+        session->ble_frames_confirmed++;
+    if (surface && session->ble_cb)
+        session->ble_cb(event, session->ble_user);
 }
 
 void session_process_bredr_event(session_t *session, const bredr_event_t *event)
 {
     if (!session || !event) return;
 
-    pthread_mutex_lock(&session->bredr_mutex);
+    /* Sole writer is the BR/EDR collector thread, so no mutex is needed here;
+     * the tracker's own lock still guards the GUI poll readers. */
+    session->bredr_frames_emitted++;
     int packet_is_newest = 0;
-    bredr_piconet_t *pnet = bredr_piconet_store_add_packet(&session->bredr_piconet_store,
-                                                          event, &packet_is_newest);
+    bredr_piconet_t *pnet = bredr_tracker_add_packet(&session->bredr_tracker,
+                                                     event, &packet_is_newest);
     bredr_piconet_snapshot_t snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
     const bredr_piconet_snapshot_t *snapshot_ptr = NULL;
     if (pnet)
     {
         snapshot.lap            = pnet->lap;
-        snapshot.uap_found      = pnet->uap_found;
+        snapshot.uap_valid      = pnet->uap_valid;
         snapshot.uap            = pnet->uap;
         snapshot.clk_known      = pnet->clk_known;
-        snapshot.central_clk_1_6        = pnet->central_clk_1_6;
-        snapshot.last_successful_rx_clk_1600 = pnet->last_successful_rx_clk_1600;
+        snapshot.central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);
         snapshot.tracking_state = pnet->tracking_state;
         snapshot.total_packets  = pnet->total_packets;
-        snapshot.combined_rssi_seen = pnet->combined_rssi_seen;
-        snapshot.combined_rssi      = pnet->combined_rssi;
-        snapshot.master_rssi_seen    = pnet->master_rssi_seen;
-        snapshot.master_rssi         = pnet->master_rssi;
-        memcpy(snapshot.slave_rssi_seen, pnet->slave_rssi_seen, sizeof(snapshot.slave_rssi_seen));
-        memcpy(snapshot.slave_rssi, pnet->slave_rssi, sizeof(snapshot.slave_rssi));
+        snapshot.combined_rssi_seen =
+            rssi_tracker_average(&pnet->combined_rssi_track, &snapshot.combined_rssi);
+        snapshot.master_rssi_seen =
+            rssi_tracker_average(&pnet->master_rssi_track, &snapshot.master_rssi);
+        for (int lt = 0; lt < 8; lt++)
+            snapshot.slave_rssi_seen[lt] =
+                rssi_tracker_average(&pnet->slave_rssi_track[lt],
+                                     &snapshot.slave_rssi[lt]);
         if (!packet_is_newest)
             snapshot.clk_known = 0;
         snapshot_ptr = &snapshot;
     }
-    pthread_mutex_unlock(&session->bredr_mutex);
 
     if (session->bredr_cb)
         session->bredr_cb(event, snapshot_ptr, session->bredr_user);
@@ -571,7 +680,7 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
 size_t session_bredr_piconet_count(const session_t *session)
 {
     if (!session) return 0u;
-    return bredr_piconet_store_count(&session->bredr_piconet_store);
+    return bredr_piconet_store_count(&session->bredr_tracker.store);
 }
 
 int session_bredr_piconet_snapshot(const session_t *session,
@@ -579,24 +688,53 @@ int session_bredr_piconet_snapshot(const session_t *session,
                                   bredr_piconet_snapshot_t *out)
 {
     if (!session || !out) return -1;
-    const bredr_piconet_t *pnet = bredr_piconet_store_get(&session->bredr_piconet_store, index);
+    const bredr_piconet_t *pnet = bredr_piconet_store_get(&session->bredr_tracker.store, index);
     if (!pnet) return -1;
     memset(out, 0, sizeof(*out));
     out->lap            = pnet->lap;
-    out->uap_found      = pnet->uap_found;
+    out->uap_valid      = pnet->uap_valid;
     out->uap            = pnet->uap;
     out->clk_known      = pnet->clk_known;
-    out->central_clk_1_6        = pnet->central_clk_1_6;
-    out->last_successful_rx_clk_1600 = pnet->last_successful_rx_clk_1600;
+    out->central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);
     out->tracking_state = pnet->tracking_state;
     out->total_packets  = pnet->total_packets;
-    out->combined_rssi_seen = pnet->combined_rssi_seen;
-    out->combined_rssi      = pnet->combined_rssi;
-    out->master_rssi_seen    = pnet->master_rssi_seen;
-    out->master_rssi         = pnet->master_rssi;
-    memcpy(out->slave_rssi_seen, pnet->slave_rssi_seen, sizeof(out->slave_rssi_seen));
-    memcpy(out->slave_rssi, pnet->slave_rssi, sizeof(out->slave_rssi));
+    out->combined_rssi_seen =
+        rssi_tracker_average(&pnet->combined_rssi_track, &out->combined_rssi);
+    out->master_rssi_seen =
+        rssi_tracker_average(&pnet->master_rssi_track, &out->master_rssi);
+    for (int lt = 0; lt < 8; lt++)
+        out->slave_rssi_seen[lt] =
+            rssi_tracker_average(&pnet->slave_rssi_track[lt],
+                                 &out->slave_rssi[lt]);
     return 0;
+}
+
+size_t session_get_bredr_devices(const session_t *session,
+                                 bredr_device_snapshot_t *out, size_t max)
+{
+    if (!session) return 0u;
+    return bredr_tracker_get_devices(&session->bredr_tracker, out, max);
+}
+
+size_t session_get_bredr_piconets(const session_t *session,
+                                  bredr_piconet_snapshot_t *out, size_t max)
+{
+    if (!session) return 0u;
+    return bredr_tracker_get_piconets(&session->bredr_tracker, out, max);
+}
+
+size_t session_get_ble_devices(const session_t *session,
+                               ble_device_snapshot_t *out, size_t max)
+{
+    if (!session) return 0u;
+    return ble_tracker_get_devices(&session->ble_tracker, out, max);
+}
+
+size_t session_get_ble_piconets(const session_t *session,
+                                ble_piconet_snapshot_t *out, size_t max)
+{
+    if (!session) return 0u;
+    return ble_tracker_get_piconets(&session->ble_tracker, out, max);
 }
 
 unsigned long session_dropped_blocks(const session_t *session)
@@ -612,6 +750,43 @@ unsigned long session_dropped_blocks(const session_t *session)
     if (session->bredr_chan_dispatcher)
         total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
     return total;
+}
+
+void session_ble_frame_counts(const session_t *session,
+                              unsigned long *emitted,
+                              unsigned long *confirmed)
+{
+    if (emitted) *emitted = session ? session->ble_frames_emitted : 0ul;
+    if (confirmed) *confirmed = session ? session->ble_frames_confirmed : 0ul;
+}
+
+unsigned long session_bredr_frame_count(const session_t *session)
+{
+    return session ? session->bredr_frames_emitted : 0ul;
+}
+
+void session_dropped_blocks_breakdown(const session_t *session,
+                                      session_drop_breakdown_t *out)
+{
+    if (!session || !out) return;
+    /* After teardown the live counters have been reset to zero, so report the
+     * snapshot taken just before reset (see session_destroy). */
+    if (session->torn_down)
+        *out = session->dropped_breakdown;
+    else
+    {
+        memset(out, 0, sizeof(*out));
+        dispatcher_accumulate(session->dispatcher,
+                               &out->rf_pool_exhausted, &out->rf_consumer_full);
+        if (session->ble_chan_dispatcher)
+            dispatcher_accumulate(session->ble_chan_dispatcher,
+                                   &out->ble_out_pool_exhausted,
+                                   &out->ble_out_consumer_full);
+        if (session->bredr_chan_dispatcher)
+            dispatcher_accumulate(session->bredr_chan_dispatcher,
+                                   &out->bredr_out_pool_exhausted,
+                                   &out->bredr_out_consumer_full);
+    }
 }
 
 int session_create_channels_for_test(session_t *session,

@@ -13,3 +13,13 @@ target_link_libraries(test_rssi_window
 )
 
 add_test(NAME test_rssi_window COMMAND test_rssi_window)
+
+add_executable(test_rssi_tracker
+    test_rssi_tracker.c
+)
+
+target_link_libraries(test_rssi_tracker
+    supertooth_core
+)
+
+add_test(NAME test_rssi_tracker COMMAND test_rssi_tracker)

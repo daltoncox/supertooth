@@ -138,7 +138,20 @@ typedef struct
 } bredr_packet_t;
 
 uint8_t bredr_reverse_byte(uint8_t b);
-uint8_t bredr_compute_hec(uint16_t data, uint8_t uap);
+uint8_t bredr_decode_uap_from_hec(uint16_t data, uint8_t hec);
+
+/* --- packed bit-buffer helpers (LSB-first within each byte) --- */
+
+uint8_t bredr_get_packed_bit(const uint8_t *data, unsigned int bit_pos);
+void bredr_set_packed_bit(uint8_t *data, unsigned int bit_pos, uint8_t bit);
+uint32_t bredr_read_packed_field(const uint8_t *data,
+                                 unsigned int bit_offset,
+                                 unsigned int bit_count);
+void bredr_copy_packed_bits(const uint8_t *src,
+                            unsigned int bit_off,
+                            unsigned int nbits,
+                            uint8_t *dst);
+void bredr_pack_header_raw(uint64_t header_raw, uint8_t packed[7]);
 
 /**
  * @brief Decode 1/3-rate FEC bits packed LSB-first.
@@ -189,8 +202,36 @@ int bredr_fec_decode_2_3(const uint8_t *input_bits,
  * @return            16-bit CRC.
  */
 uint16_t bredr_payload_crc(const uint8_t *data,
-                           unsigned int bit_count,
-                           uint8_t uap);
+                            unsigned int bit_count,
+                            uint8_t uap);
+
+/**
+ * @brief Apply (or undo) BR/EDR whitening on on-air payload bits for a given
+ *        CLK1-6.  The operation is a symmetric XOR, so the same routine both
+ *        whitens on transmit and dewhitens on receive.
+ *
+ * The whitening sequence starts at the bit index that follows
+ * @p logical_offset_bits of already-whitened bits (18 for a standard BR/EDR
+ * payload, i.e. after the access code and packet header).  Because whitening
+ * is an XOR, the same routine is used to reconstruct the payload on receive
+ * and to build it on transmit.
+ *
+ * @param src_air         Packed on-air bits (LSB-first within each byte).
+ * @param src_air_bits    Number of valid bits in @p src_air.
+ * @param clk6            CLK1-6 whitening key (0-63).
+ * @param logical_offset_bits  Whitening start offset, in bits (18 for payload).
+ * @param dst             Output buffer.
+ * @param dst_capacity    Capacity of @p dst, in bytes.
+ * @return                Number of bytes written to @p dst.
+ */
+unsigned int bredr_xor_whitening_payload(const uint8_t *src_air,
+                                              unsigned int src_air_bits,
+                                              uint8_t clk6,
+                                              unsigned int logical_offset_bits,
+                                              uint8_t *dst,
+                                              unsigned int dst_capacity);
+
+
 
 /**
  * @brief Return the FEC mode used by the on-air payload of the given
@@ -302,6 +343,21 @@ uint64_t bredr_gen_syncword(uint32_t lap);
  * @return       1 if the HEC matches, 0 otherwise.
  */
 int bredr_hec_ok_for_clk6(const bredr_frame_t *frame, uint8_t uap, uint8_t clk6);
+
+/**
+ * @brief Verify the HEC of a header for a given CLK1-6 and UAP, requiring the
+ *        header to have decoded with zero 1/3-FEC bit errors.
+ *
+ * This is the strict variant of bredr_hec_ok_for_clk6 used by recovery: it
+ * returns 0 unless the header was 100% correct (no FEC correction applied), so
+ * recovery is never driven by a possibly-corrupted header.
+ *
+ * @param frame  Captured frame with a valid `header_raw` field.
+ * @param uap    8-bit Upper Address Part.
+ * @param clk6   CLK1-6 whitening key (0–63).
+ * @return       1 if the HEC matched on an error-free decode, 0 otherwise.
+ */
+int bredr_hec_ok_for_clk6_clean(const bredr_frame_t *frame, uint8_t uap, uint8_t clk6);
 const char *bredr_packet_type_name(uint8_t type_code);
 const char *bredr_payload_family_name(bredr_payload_family_t family);
 const char *bredr_decode_limit_desc(bredr_decode_limit_t limit);

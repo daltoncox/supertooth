@@ -15,35 +15,23 @@
 /**
  * @brief QML-facing list model backing the DeviceListView table.
  *
- * Each row represents a single observed radio entity: a BLE device, a
- * broken-out BR/EDR device (clock known), or an un-broken-out BR/EDR
- * piconet (clock unknown) — in which case the device column reads
- * "piconet".
+ * Each row is a single observed radio entity: a BLE advertiser, a BR/EDR
+ * piconet member (master or a specific slave slot), a BR/EDR piconet, or an
+ * LE connection. Rows are produced by the core trackers and delivered via
+ * setRows() on a 4 Hz poll driven by ReceiverController (which calls
+ * backend_session_poll_entities). The core supplies a stable entity id, a
+ * 1-second average RSSI, and first/last-seen timestamps.
  *
- * The model aggregates frames pushed via onFrameDecoded() by (proto, addr,
- * device). For each device it tracks:
- *   - a 1-second trailing window of per-frame RSSI samples (floats),
- *   - a longer-lived smoothed-average series for the chart,
- *   - cumulative packet count, periodic packet rate, last-seen time.
+ * The displayed RSSI (rssiDb) is the core's rolling 1-second average. The
+ * RSSI chart shows that average sampled at the poll rate (the faint raw
+ * per-frame series is no longer collected).
  *
- * A 1 Hz QTimer tick re-renders the displayed average/rate/last-seen; this
- * is independent of frame arrivals so an idle device's "packet rate"
- * correctly decays to 0. The displayed RSSI is the mean of the 1s trailing
- * window; when the window empties out (no frames in the last second) the
- * last computed average is held until new frames arrive.
- *
- * roles exposed via data() return comparable primitive values so that a
- * QSortFilterProxyModel can sort them numerically/lexically rather than on
- * formatted display strings:
+ * roles exposed via data() return comparable primitive values so a
+ * QSortFilterProxyModel can sort them numerically/lexically:
  *   - RssiRole      double; -999.0 sentinel means "no signal yet"
- *   - FirstSeenRole QDateTime; set once when a device is first observed, frozen thereafter for the row's lifetime (mirrors core bredr_piconet idiom of seeding on first packet)
- *   - LastSeenRole  QDateTime; invalid QDateTime means "never seen"
- *   - PacketRateRole int   (packets/second)
- * String formatting of these values for the table live is the rendering
- * layer's job (DeviceListView.qml).
- *
- * see formatLastSeen below for the historical format iteration the QML
- * formatter reproduces.
+ *   - FirstSeenRole QDateTime; invalid means "never seen"
+ *   - LastSeenRole  QDateTime; invalid means "never seen"
+ *   - PacketRateRole int (packets/second, derived from the poll delta)
  */
 class DeviceListModel : public QAbstractListModel
 {
@@ -80,50 +68,30 @@ public:
 
     int count() const { return m_rows.size(); }
 
-    /// Current sort state. The model keeps its rows physically ordered by
-    /// these and re-sorts in place whenever a sort-affecting value changes
-    /// (see maybeResort), so the QML-facing index IS the display row — no
-    /// proxy model, no second index space.
     QString sortRoleName() const { return m_sortRoleName; }
     void setSortRoleName(const QString &name);
 
     Qt::SortOrder sortOrder() const { return m_sortOrder; }
     void setSortOrder(Qt::SortOrder order);
 
-    /// Set both sort role and order in one call (one re-sort rather than
-    /// two). Unknown role names leave the previous sort state intact.
     Q_INVOKABLE void sortBy(const QString &roleName, Qt::SortOrder order);
 
-    /// Resolve a stable device ID to its current display row. O(1) via
-    /// m_rowById. Returns -1 if the device is not present (removed/cleared).
-    /// The view uses this to keep a selection highlighted across re-sorts.
     Q_INVOKABLE int rowForDeviceId(int id) const;
 
-    /// Sentinel exposed via RssiRole for "no RSSI yet". lessThan pins it to
-    /// the bottom of any RSSI sort without duplicating the literal. Far below
-    /// any real HackRF reading in either sort direction.
+    /// Sentinel for "no RSSI yet" (pinned to bottom of any RSSI sort).
     static constexpr double kRssiSentinel = -999.0;
 
-    /// Feed a decoded frame (proto/addr/src/dst/rssiDb/detail) into the
-    /// aggregator. Finds-or-creates the relevant device row and folds the
-    /// frame's sample into the trailing 1s window. Called from the
-    /// controller's queued slot, always on the main thread.
-    Q_INVOKABLE void onFrameDecoded(const QVariantMap &frame);
+    /// Replace the model contents with the polled entity list (4 Hz).
+    Q_INVOKABLE void setRows(const QVariantList &rows);
 
     /// Clear all rows (called when a new capture starts).
     Q_INVOKABLE void clear();
 
-    /// Detail key/value pairs for the selected device (Device Info pane),
-    /// rebuilt live from current row state.
     Q_INVOKABLE QVariantList detailFor(int index) const;
-    /// Smoothed-average RSSI time series for the selected device, as a list
-    /// of QPointF that can be fed straight to a QtGraphs LineSeries.
+    /// Smoothed-average RSSI time series (1 s average sampled per poll).
     Q_INVOKABLE QVariantList rssiSeriesFor(int index) const;
-    /// Raw per-frame RSSI samples still inside the chart history window, for
-    /// the faint scatter series.
+    /// Raw per-frame RSSI series (no longer collected; returns empty).
     Q_INVOKABLE QVariantList rssiRawSeriesFor(int index) const;
-    /// Wall-clock ms of the first frame for this device — the chart x=0
-    /// anchor. Returns 0 if the index is invalid.
     Q_INVOKABLE qint64 firstFrameMsFor(int index) const;
 
 signals:
@@ -134,74 +102,43 @@ signals:
 private:
     struct Row
     {
-        int id = 0;                     // stable per-session identity (for selection tracking)
-        QString proto;
-        QString addr;
-        QString device;                 // resolved: BLE src / "Central" / "LT_ADDR N" / "piconet" / "Unknown"
-        QString addrType;               // BLE adv address subtype: PUBLIC/STATIC/RESOLVABLE/NONRESOLVABLE/RESERVED; "" otherwise
-        QString displayName;            // BLE local name extracted from adv packets (if any)
-        QString manufacturer;            // BLE manufacturer (Company ID) from adv packets (if any)
+        int id = 0;                     // stable per-session identity (from core)
+        QString proto;                  // "BR/EDR" / "LE"
+        QString addr;                   // core addr_str
+        QString device;                 // core label ("Central"/"LT_ADDR N"/...)
+        QString addrType;               // BLE adv subtype / ""
+        QString displayName;            // BLE local name (if any)
+        QString manufacturer;           // BLE manufacturer (if any)
 
-        double rssiDb = qQNaN();        // displayed 1s avg; held when idle
-        double lastFrameRssiDb = qQNaN();// most recent raw sample (used for series tail)
-
-        qint64 firstFrameMs = 0;   // anchor for chart x-axis (t=0)
-        qint64 lastSeenMs = 0;      // refreshed each observed frame; epoch ms
-        qint64 firstSeenMs = 0;     // set once at row creation, frozen thereafter
+        double rssiDb = qQNaN();       // 1 s average
+        int    rssiValid = 0;
+        qint64 firstFrameMs = 0;       // chart x=0 anchor
+        qint64 lastSeenMs = 0;
+        qint64 firstSeenMs = 0;
         unsigned long packetsSeen = 0;
-        int packetsThisSecond = 0;      // reset each tick
-        int lastRate = 0;               // rate reported by the most recent tick
+        int lastRate = 0;               // packets/sec (poll delta)
 
-        QVector<QPair<qint64, double>> samples; // (t_ms, rssi_db) in trailing 1s
-        QVector<QPointF> avgSeries;     // smooth line: (seconds, dB)
-        QVector<QPointF> rawSeries;     // faint per-frame points: (seconds, dB)
+        uint32_t crcInit = 0;           // BLE connection CRCInit
+        int crcInitConfirmed = 0;       // 0 while still unconfirmed
+        int crcInitCandidates = 0;      // distinct CRCInit candidates accumulated
 
-        QVariantList lastFrameDetail;   // {field, value} pairs from the most recent frame
+        QVector<QPointF> avgSeries;     // (seconds, dB)
     };
 
-    void tickRows();
-    static QString makeKey(const QString &proto, const QString &addr,
-                           const QString &device);
-    static QString deviceLabelFor(const QString &proto, const QString &src,
-                           const QString &dst);
     static QString typeLabelFor(const QString &proto, const QString &device,
-                                 const QString &addrType);
+                                const QString &addrType);
     static QString identifierLabelFor(const Row &r);
     static QString formatLastSeen(qint64 ms);
-    void recomputeAverage(Row &r, qint64 now);
-    void evictWindow(Row &r, qint64 now);
-    void evictChartHistory(Row &r, qint64 now);
-    void removeRow(int index);
-
-    /// True when \a a should be displayed before \a b under the current
-    /// sort state. Mirrors the removed sort-proxy's ordering (RSSI sentinel
-    /// pinned to the bottom in both directions; identifier grouped by proto
-    /// then type), but reads Row fields directly instead of via data().
     bool lessThan(const Row &a, const Row &b) const;
-
-    /// Comparable value of \a r under the current sort role, used to cheaply
-    /// decide whether a single-row update could have changed the order.
     QVariant sortKey(const Row &r) const;
-
-    /// Stable-sort m_rows in place and emit layoutChanged only when the
-    /// order actually changed. The single re-sort path for insertions,
-    /// value updates and sort-state changes.
     void maybeResort();
-
-    /// Rebuild m_indexByKey / m_rowById from the current m_rows. Call after
-    /// any physical reorder or removal.
     void rebuildLookup();
 
-    static constexpr int kWindowMs = 1000;
-    static constexpr int kChartHistoryMs = 300 * 1000;   // 5 min (max range)
-    static constexpr int kMaxSeriesPoints = 12000;       // backstop cap
+    static constexpr int kMaxSeriesPoints = 600;   // ~150 s at 4 Hz
 
     QVector<Row> m_rows;
-    QHash<QString, int> m_indexByKey;
     QHash<int, int> m_rowById;          // stable device id -> display row
-    QSet<QString> m_brokenOutPiconets;   // LAP-keyed; "BR/EDR\x1F<lap>"
-    QTimer m_tick;
-    int m_nextId = 1;                    // monotonic device ID counter (0 = invalid)
+    QHash<int, qulonglong> m_prevPackets; // id -> last total_packets (for rate)
 
     QString m_sortRoleName = QStringLiteral("identifier");
     Qt::SortOrder m_sortOrder = Qt::AscendingOrder;
