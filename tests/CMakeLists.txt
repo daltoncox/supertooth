@@ -16,8 +16,8 @@ set(_supertooth_test_targets
     test_recovery
     test_capture_151FC475
     test_codec_oracle
-    test_recovery_btbb_parity
     test_replay_frame_dump
+    test_drift_confirm
     test_ble_crc_reverse
     test_ble_data_codec
     test_ble_bitstream_decoder
@@ -26,6 +26,12 @@ set(_supertooth_test_targets
     test_rssi_window
     test_rssi_tracker
 )
+
+# Oracle parity test exists only when the optional libbtbb checkout is present
+# (see tests/bredr/CMakeLists.txt).
+if(TARGET test_recovery_btbb_parity)
+    list(APPEND _supertooth_test_targets test_recovery_btbb_parity)
+endif()
 
 add_custom_target(tests)
 add_dependencies(tests ${_supertooth_test_targets})

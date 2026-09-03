@@ -14,8 +14,10 @@ Layout:
   /opt/supertooth/lib/      bundled shared libraries (Qt, ICU, radio)
   /opt/supertooth/plugins/  Qt platform/imageformat/... plugins
   /opt/supertooth/qml/      QML modules
-  /usr/bin/supertooth       shell wrapper -> /opt/supertooth/bin/supertooth-bin
+  /usr/bin/supertooth       thin wrapper (exec) -> /opt/supertooth/bin/supertooth-bin
   /usr/bin/supertooth-*     symlinks -> /opt/supertooth/bin/
+  /usr/share/applications/  supertooth.desktop (via cmake --install, left in place)
+  /usr/share/icons/...      supertooth-app.png (via cmake --install, left in place)
 
 All linkage is private: RPATH (\$ORIGIN/../lib) on every binary, \$ORIGIN
 on bundled libraries, and qt.conf for plugin/QML paths.  The bundled

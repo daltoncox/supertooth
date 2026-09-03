@@ -10,21 +10,34 @@
 # libbtbb is GPL; it is linked EXCLUSIVELY into test executables as a
 # differential oracle and is NEVER linked into supertooth_core or any
 # shipped product binary.
+#
+# The libbtbb checkout is optional and gitignored. When it is absent, the
+# oracle parity test is skipped so the rest of the suite still configures.
 # ---------------------------------------------------------------------------
 set(BTBB_SRC_DIR ${CMAKE_SOURCE_DIR}/libbtbb/lib/src)
 
-add_library(btbb_oracle STATIC
-    ${BTBB_SRC_DIR}/bluetooth_packet.c
-    ${BTBB_SRC_DIR}/bluetooth_piconet.c
-)
+if(EXISTS "${BTBB_SRC_DIR}/bluetooth_packet.c"
+   AND EXISTS "${BTBB_SRC_DIR}/bluetooth_piconet.c")
+    set(BTBB_ORACLE_AVAILABLE TRUE)
+else()
+    set(BTBB_ORACLE_AVAILABLE FALSE)
+    message(STATUS "libbtbb not found at ${BTBB_SRC_DIR}; skipping btbb oracle tests")
+endif()
 
-target_include_directories(btbb_oracle PUBLIC
-    ${BTBB_SRC_DIR}
-)
+if(BTBB_ORACLE_AVAILABLE)
+    add_library(btbb_oracle STATIC
+        ${BTBB_SRC_DIR}/bluetooth_packet.c
+        ${BTBB_SRC_DIR}/bluetooth_piconet.c
+    )
 
-set_target_properties(btbb_oracle PROPERTIES
-    C_STANDARD 99
-)
+    target_include_directories(btbb_oracle PUBLIC
+        ${BTBB_SRC_DIR}
+    )
+
+    set_target_properties(btbb_oracle PROPERTIES
+        C_STANDARD 99
+    )
+endif()
 
 add_executable(test_fec_2_3
     test_fec_2_3.c
@@ -77,17 +90,19 @@ target_link_libraries(test_codec_oracle
 
 add_test(NAME test_codec_oracle COMMAND test_codec_oracle)
 
-add_executable(test_recovery_btbb_parity
-    test_recovery_btbb_parity.c
-    btbb_test_adapter.c
-)
+if(BTBB_ORACLE_AVAILABLE)
+    add_executable(test_recovery_btbb_parity
+        test_recovery_btbb_parity.c
+        btbb_test_adapter.c
+    )
 
-target_link_libraries(test_recovery_btbb_parity
-    supertooth_core
-    btbb_oracle
-)
+    target_link_libraries(test_recovery_btbb_parity
+        supertooth_core
+        btbb_oracle
+    )
 
-add_test(NAME test_recovery_btbb_parity COMMAND test_recovery_btbb_parity)
+    add_test(NAME test_recovery_btbb_parity COMMAND test_recovery_btbb_parity)
+endif()
 
 add_executable(test_replay_frame_dump test_replay_frame_dump.c)
 target_link_libraries(test_replay_frame_dump PRIVATE supertooth_core)

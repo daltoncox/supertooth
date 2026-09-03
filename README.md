@@ -14,7 +14,7 @@ It includes four runtime binaries:
 
 1. `supertooth`: Qt GUI application with live BR/EDR + BLE capture, spectrum view, and packet log.
 2. `supertooth-bredr`: BR/EDR multichannel receiver with piconet tracking.
-3. `supertooth-ble`: BLE advertising capture/decoder on a selected advertising channel (37/38/39), channelized from a wideband capture.
+3. `supertooth-ble`: BLE advertising capture/decoder over a window of LE RF channels (37/38/39), channelized from a wideband capture.
 4. `supertooth-hybrid`: simultaneous BR/EDR multichannel + BLE advertising processing from a shared stream.
 
 ## Install
@@ -27,7 +27,7 @@ supertooth          # GUI
 supertooth-bredr --help    # CLI
 ```
 
-The package bundles Qt 6.8, radio libs, and QML modules — no extra runtime dependencies beyond glibc/libstdc++. The GUI binary is wrapped in a thin launcher at `/usr/bin/supertooth` that sets plugin and QML import paths before exec'ing the real binary in `/usr/lib/supertooth/`.
+The package bundles Qt 6.8, radio libs, and QML modules — no extra runtime dependencies beyond glibc/libstdc++. The GUI binary lives at `/opt/supertooth/bin/supertooth-bin`; `/usr/bin/supertooth` is a thin wrapper that exec's it directly (plugin/QML paths come from `qt.conf` next to the binary, libraries via RPATH). CLI tools (`supertooth-bredr`, `supertooth-ble`, `supertooth-hybrid`) are symlinks into `/opt/supertooth/bin/`. Desktop entry and icons install under `/usr/share/applications` and `/usr/share/icons/`.
 
 ## Building from source
 
@@ -39,7 +39,10 @@ The package bundles Qt 6.8, radio libs, and QML modules — no extra runtime dep
 | `liquid-dsp` | Channelization, filtering, NCO mixing, GFSK/CPFSK demodulation |
 
 BR/EDR UAP and CLK1-6 recovery is implemented in-tree (no external
-dependency); see `src/core/protocol/bredr/bredr_recovery_native.c`.
+dependency); see `src/core/protocol/bredr/bredr_clock_recovery.c`,
+`src/core/protocol/bredr/bredr_tracker.c`,
+`src/core/protocol/ble/ble_tracker.c`, and the shared helpers in
+`src/core/models/rssi_tracker.c` and `src/core/service/collector.c`.
 
 ### CLI-only build (no GUI)
 
@@ -95,6 +98,12 @@ cmake .. \
 make
 ```
 
+Optional: `-DBUILD_TESTS=ON` enables the unit/integration suite (`make tests`,
+then `ctest --output-on-failure`). Version strings come from
+`-DSUPERTOOTH_VERSION=<ver>` or `git describe` at configure time. The
+differential `libbtbb` oracle tests additionally need a `libbtbb/` checkout at
+the repo root (it is gitignored); without it those oracle tests are skipped.
+
 Output binaries are in `build/src/apps/cli/` (CLI) and `build/src/apps/gui/` (GUI).
 
 ## Run
@@ -102,11 +111,21 @@ Output binaries are in `build/src/apps/cli/` (CLI) and `build/src/apps/gui/` (GU
 All binaries require a HackRF:
 
 ```bash
-./build/src/apps/cli/supertooth-ble --view full
-./build/src/apps/cli/supertooth-bredr --view full
-./build/src/apps/cli/supertooth-hybrid --view full
+./build/src/apps/cli/supertooth-ble
+./build/src/apps/cli/supertooth-bredr
+./build/src/apps/cli/supertooth-hybrid
 ./build/src/apps/gui/supertooth
 ```
+
+CLI output defaults to `--view summary`. All three CLIs also accept
+`--view full|summary|devices` (use `--help` for the full flag list):
+
+- `supertooth-bredr` / `supertooth-hybrid`: `--ac-errors N` sets the max
+  BR/EDR access-code bit errors (default: 0, strict).
+- `supertooth-ble` / `supertooth-hybrid`: `--enforce-crc on|off` drops BLE
+  frames with bad CRC (default: on); `-c/-b` select the LE channel window.
+- All three: `--debug` prints a Debug Summary with per-pool drop breakdown
+  plus BLE/BR-EDR frame counters.
 
 `supertooth-bredr`, `supertooth-ble`, and `supertooth-hybrid` accept `--help` for runtime flags.  The GUI needs a Wayland or X11 display.
 
@@ -116,16 +135,16 @@ All binaries require a HackRF:
 
 ```text
 src/
-  apps/cli/        CLI binaries (supertooth-bredr, -ble, -hybrid) + shared cli_common
+  apps/cli/        CLI binaries (supertooth-bredr, -ble, -hybrid) + shared app_common, app_summary_view, app_device_view
   apps/gui/        Qt GUI application
   core/
-    dsp/           Shared DSP utilities (RSSI measurement helpers)
-    models/        Shared packet and receive metadata types
-    radio/         HackRF integration, sample dispatcher, block pool
-    service/       Session API and channel processors
+    dsp/           Shared DSP utilities (channelizer_bank, rssi_measurements)
+    models/        Shared packet and receive metadata types (device_models, receive_event_models, phy, rssi_tracker)
+    radio/         HackRF integration (hackrf, radio_common) and sample dispatcher
+    service/       Session API, channel processors, channelizer_thread, event collector
     protocol/
-      ble/         BLE bitstream decoder, codec, display utilities
-      bredr/       BR/EDR bitstream decoder, codec, piconet tracking, UAP recovery
+      ble/         BLE bitstream decoder, codec, piconet + tracker, display utilities, BT assigned numbers
+      bredr/       BR/EDR bitstream decoder, codec, piconet + piconet store + tracker, clock recovery, display utilities
 ```
 
 ### Key design points
