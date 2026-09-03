@@ -654,7 +654,7 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
     if (pnet)
     {
         snapshot.lap            = pnet->lap;
-        snapshot.uap_found      = pnet->uap_found;
+        snapshot.uap_valid      = pnet->uap_valid;
         snapshot.uap            = pnet->uap;
         snapshot.clk_known      = pnet->clk_known;
         snapshot.central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);
@@ -692,7 +692,7 @@ int session_bredr_piconet_snapshot(const session_t *session,
     if (!pnet) return -1;
     memset(out, 0, sizeof(*out));
     out->lap            = pnet->lap;
-    out->uap_found      = pnet->uap_found;
+    out->uap_valid      = pnet->uap_valid;
     out->uap            = pnet->uap;
     out->clk_known      = pnet->clk_known;
     out->central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);

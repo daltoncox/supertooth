@@ -150,7 +150,7 @@ void bredr_piconet_init(bredr_piconet_t *pnet, uint32_t lap)
     if (pnet->lap == BREDR_LAP_GIAC || pnet->lap == BREDR_LAP_LIAC)
     {
         pnet->uap = BREDR_DCI;
-        pnet->uap_found = 1;
+        pnet->uap_valid = 1;
     }
 }
 
@@ -162,7 +162,7 @@ void bredr_piconet_set_uap(bredr_piconet_t *pnet, uint8_t uap,
         return;
 
     pnet->uap = uap;
-    pnet->uap_found = 1;
+    pnet->uap_valid = 1;
     pnet->clock_offset = (int)((central_clk_1_6 - rx_clk_1600) & 0x3Fu);
     pnet->clk_known = 1;
     pnet->tracking_state = 1;
@@ -175,7 +175,7 @@ void bredr_piconet_set_uap_only(bredr_piconet_t *pnet, uint8_t uap)
         return;
 
     pnet->uap = uap;
-    pnet->uap_found = 1;
+    pnet->uap_valid = 1;
     pnet->clk_known = 0;
     pnet->tracking_state = -1;
     pnet->drift_candidate = 0;
@@ -211,7 +211,7 @@ int bredr_piconet_add_packet(bredr_piconet_t *pnet,
     if (packet_is_newest)
         pnet->last_seen = rx_clk_1600;
 
-    has_active_track = (pnet->uap_found && pnet->clk_known && pnet->tracking_state > 0);
+    has_active_track = (pnet->uap_valid && pnet->clk_known && pnet->tracking_state > 0);
 
     /* Before track lock, accumulate aggregate RSSI from the newest packet. */
     if (packet_is_newest && !has_active_track && !isnan(meta->rssi_dbr))

@@ -89,8 +89,8 @@ typedef struct {
 
     uint8_t  lt_addr;       /**< 255 = master; 0..7 = slave slot */
     uint32_t lap;           /**< 24-bit Lower Address Part */
-    uint8_t  uap;           /**< valid iff uap_found */
-    int      uap_found;
+    uint8_t  uap;           /**< last recovered UAP (sticky on tracking loss) */
+    int      uap_valid;
 
     uint64_t piconet_id;    /**< owning piconet (linkage) */
 } bredr_device_snapshot_t;
@@ -103,8 +103,8 @@ typedef struct {
     ENTITY_COMMON_FIELDS;
 
     uint32_t lap;           /**< 24-bit Lower Address Part */
-    uint8_t  uap;           /**< valid iff uap_found */
-    int      uap_found;
+    uint8_t  uap;           /**< last recovered UAP (sticky on tracking loss) */
+    int      uap_valid;
 
     int      clk_known;             /**< nonzero once CLK1-6 established */
     uint8_t  central_clk_1_6;       /**< current central CLK1-6 (0..63), derived */

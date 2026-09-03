@@ -32,10 +32,10 @@ static uint32_t sample_to_rx_clk_1600(uint64_t radio_start_sample_index,
 }
 
 static void format_addr_bredr(char *buf, size_t n, uint32_t lap,
-                              uint8_t uap, int uap_found)
+                              uint8_t uap, int uap_valid)
 {
     uint8_t used = uap;
-    int known = uap_found;
+    int known = uap_valid;
 
     /* The General/Limited Inquiry Access Codes (GIAC 0x9E8B33, LIAC 0x9E8B00)
      * use the well-known DCI UAP (0x00); they are broadcast discovery LAPs, not
@@ -182,29 +182,17 @@ size_t bredr_tracker_get_piconets(const bredr_tracker_t *t,
         ensure_piconet_ids((bredr_tracker_t *)t, i);
         const bredr_piconet_t *p = bredr_piconet_store_get(&t->store, i);
 
-        /* When the piconet is broken out into tracked slaves, the per-member
-         * (Central / LT_ADDR N) rows already represent it; suppress this
-         * aggregate "piconet" row so the GUI does not surface a redundant
-         * "CONN" entry alongside them. */
-        int broken_out = 0;
-        for (int lt = 0; lt < 8; lt++)
-        {
-            if (p->slave_pkts[lt] > 0u)
-            {
-                broken_out = 1;
-                break;
-            }
-        }
-        if (broken_out)
-            continue;
-
+        /* The aggregate "piconet" row is always shown, even once the piconet
+         * is broken out into Central / LT_ADDR N member rows. It may show
+         * "??" for the UAP when tracking is lost; member rows below keep
+         * the last known UAP instead. */
         bredr_piconet_snapshot_t *s = &out[n++];
         memset(s, 0, sizeof(*s));
 
         s->id = t->aux[i].piconet_id;
         s->kind = ENTITY_BREDR_PICONET;
         format_addr_bredr(s->addr_str, sizeof(s->addr_str),
-                          p->lap, p->uap, p->uap_found);
+                          p->lap, p->uap, p->uap_valid);
         /* The General/Limited Inquiry Access Codes (GIAC 0x9E8B33,
          * LIAC 0x9E8B00) are broadcast LAPs used by device discovery; label
          * them as INQUIRY rather than a piconet/connection. */
@@ -246,7 +234,7 @@ size_t bredr_tracker_get_piconets(const bredr_tracker_t *t,
 
         s->lap = p->lap;
         s->uap = p->uap;
-        s->uap_found = p->uap_found;
+        s->uap_valid = p->uap_valid;
         s->clk_known = p->clk_known;
         s->central_clk_1_6 = bredr_piconet_central_clk_1_6(p, p->last_seen);
         s->tracking_state = p->tracking_state;
@@ -285,8 +273,11 @@ size_t bredr_tracker_get_devices(const bredr_tracker_t *t,
             memset(s, 0, sizeof(*s));
             s->id = t->aux[i].master_device_id;
             s->kind = ENTITY_BREDR_DEVICE;
+            /* Member rows keep the last known UAP even after tracking loss:
+             * a member only exists after an active track, so p->uap is
+             * meaningful regardless of p->uap_valid. */
             format_addr_bredr(s->addr_str, sizeof(s->addr_str),
-                              p->lap, p->uap, p->uap_found);
+                              p->lap, p->uap, 1);
             snprintf(s->label, sizeof(s->label), "Central");
             s->rssi_valid =
                 rssi_tracker_average(&p->master_rssi_track, &s->rssi_db);
@@ -297,7 +288,7 @@ size_t bredr_tracker_get_devices(const bredr_tracker_t *t,
             s->lt_addr = 255u;
             s->lap = p->lap;
             s->uap = p->uap;
-            s->uap_found = p->uap_found;
+            s->uap_valid = p->uap_valid;
             s->piconet_id = pid;
         }
 
@@ -309,8 +300,9 @@ size_t bredr_tracker_get_devices(const bredr_tracker_t *t,
             memset(s, 0, sizeof(*s));
             s->id = t->aux[i].slave_device_id[lt];
             s->kind = ENTITY_BREDR_DEVICE;
+            /* See Central above: member rows never show "??" for the UAP. */
             format_addr_bredr(s->addr_str, sizeof(s->addr_str),
-                              p->lap, p->uap, p->uap_found);
+                              p->lap, p->uap, 1);
             snprintf(s->label, sizeof(s->label), "LT_ADDR %d", lt);
             s->rssi_valid =
                 rssi_tracker_average(&p->slave_rssi_track[lt], &s->rssi_db);
@@ -321,7 +313,7 @@ size_t bredr_tracker_get_devices(const bredr_tracker_t *t,
             s->lt_addr = (uint8_t)lt;
             s->lap = p->lap;
             s->uap = p->uap;
-            s->uap_found = p->uap_found;
+            s->uap_valid = p->uap_valid;
             s->piconet_id = pid;
         }
     }

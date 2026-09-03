@@ -80,13 +80,18 @@ extern "C"
         /** 24-bit Lower Address Part. */
         uint32_t lap;
 
-        /** 8-bit Upper Address Part.  Valid only when uap_found != 0. */
+        /** 8-bit Upper Address Part.  Retains the last recovered value even
+         *  after tracking is lost; check uap_valid before treating it as
+         *  current. */
         uint8_t uap;
 
-        /** Non-zero once the UAP is known (tentative during recovery, then confirmed). */
-        int uap_found;
+        /** Non-zero while the UAP is currently valid (tentative during
+         *  recovery, then confirmed). Cleared on tracking loss without
+         *  clearing uap, so device rows can keep displaying the last
+         *  known value. */
+        int uap_valid;
 
-        /* -- Clock tracking (valid once uap_found && clk_known) ---------------- */
+        /* -- Clock tracking (valid once uap_valid && clk_known) ---------------- */
 
         /** Non-zero once CLK1-6 has been established via bredr_piconet_set_uap(). */
         int clk_known;
@@ -205,7 +210,7 @@ extern "C"
      * @brief Initialise a piconet for a given LAP.
      *
      * For the GIAC and LIAC LAPs the UAP is pre-set to the well-known DCI value
-     * (0x00) and uap_found is set.
+     * (0x00) and uap_valid is set.
      *
      * @param pnet  Must not be NULL.
      * @param lap   24-bit Lower Address Part.
@@ -218,7 +223,7 @@ extern "C"
     * Copies the event into the ring buffer (overwriting the oldest entry once
      * full) and updates first_seen and last_seen.
      *
-     * If the piconet is in clock-tracking mode (uap_found && clk_known) and the
+     * If the piconet is in clock-tracking mode (uap_valid && clk_known) and the
      * event carries a decoded header (has_header != 0), the central CLK1-6
      * estimate is verified: the tracked offset is tried first, then its ±1,
      * ±2 neighbours.  A neighbouring hit is only drift suspicion until a

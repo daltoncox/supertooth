@@ -504,7 +504,7 @@ static int bredr_gui_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
     if (!pnet)
         return 0;
 
-    int have_uap = pnet->uap_found;
+    int have_uap = pnet->uap_valid;
     int have_clk = pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u;
     if (have_uap)
         *uap_out = pnet->uap;
@@ -568,7 +568,7 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
     uint32_t lap = frame->lap & 0xFFFFFFu;
 
     /* Address: full UAP+LAP (UAP shown as "??" until recovered). */
-    if (pnet && pnet->uap_found)
+    if (pnet && pnet->uap_valid)
         snprintf(row.addr, sizeof(row.addr), "0x%02X%06" PRIX32, pnet->uap, lap);
     else
         snprintf(row.addr, sizeof(row.addr), "0x??%06" PRIX32, lap);
@@ -628,7 +628,7 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
     /* Info summary line (mirrors the CLI bredr_print_packet_summary_line). */
     char uap_str[8];
     char clk_str[8];
-    if (pnet && pnet->uap_found)
+    if (pnet && pnet->uap_valid)
         snprintf(uap_str, sizeof(uap_str), "%02X", pnet->uap);
     else
         snprintf(uap_str, sizeof(uap_str), "??");
@@ -648,7 +648,7 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
     add_detail(&row, "AC Errors", "%u", frame->ac_errors);
     if (pnet)
     {
-        if (pnet->uap_found)
+        if (pnet->uap_valid)
             add_detail(&row, "UAP", "0x%02X", pnet->uap);
         else
             add_detail(&row, "UAP", "??");

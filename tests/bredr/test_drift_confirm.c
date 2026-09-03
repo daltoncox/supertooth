@@ -2,7 +2,7 @@
  * @file test_drift_confirm.c
  * @brief Unit tests for two-packet drift confirmation in clock tracking.
  *
- * A locked piconet (uap_found && clk_known) is driven with a real captured
+ * A locked piconet (uap_valid && clk_known) is driven with a real captured
  * header (tests/bredr/capture_151FC475.h, UAP 0x15) via bredr_recovery_process().
  * The SAME frame is replayed at shifted radio_start_sample_index values: the
  * recovery logic cannot tell a receiver-clock shift from central-clock drift,
