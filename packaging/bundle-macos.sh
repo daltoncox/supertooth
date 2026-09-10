@@ -133,7 +133,46 @@ cp -a "$APP_SRC" "$APP"
 chmod -R u+w "$APP"
 
 echo "=== macdeployqt (Qt frameworks, plugins, QML imports) ==="
-"$MACDEPLOYQT" "$APP" -qmldir="$QML_DIR" -always-overwrite -verbose=1
+# macdeployqt prints "Cannot resolve rpath" ERRORs for every plugin whose
+# dependencies are not installed. Verified by sweeping the deployed bundle
+# (otool -L over every Mach-O): all of these belong to plugins this app
+# never loads (qpdf, virtual keyboard, Qt3D scene/physics, state machine,
+# timeline blend trees, spatial audio — our QML imports only QtQuick,
+# Controls, Layouts and Graphs), so they are benign. Anything else macdeployqt
+# prints is left visible. The `2> >(...)` redirection (not a pipe) filters
+# stderr while preserving macdeployqt's own exit status for `$?` below.
+# Note: this step takes several minutes; the time is the framework copy
+# itself, not the failed lookups.
+set +e
+"$MACDEPLOYQT" "$APP" -qmldir="$QML_DIR" -always-overwrite \
+    2> >(grep -v -e 'Cannot resolve rpath' -e 'using QList' >&2)
+MACDEPLOYQT_STATUS=$?
+set -e
+echo "macdeployqt exit code: $MACDEPLOYQT_STATUS"
+
+echo "=== Verifying Qt deployment ==="
+FRAMEWORKS_DIR="$APP/Contents/Frameworks"
+missing=0
+while IFS= read -r -d '' exe; do
+    while IFS= read -r dep; do
+        case "$dep" in
+            @rpath/*.framework/*)
+                rel="${dep#@rpath/}"
+                if [[ ! -e "$FRAMEWORKS_DIR/$rel" && ! -e "$FRAMEWORKS_DIR/${rel%%/*}" ]]; then
+                    echo "  MISSING: $(basename "$exe") needs $dep"
+                    missing=1
+                fi
+                ;;
+        esac
+    done < <(otool -L "$exe" | tail -n +2 | awk '{print $1}')
+done < <(find "$APP/Contents/MacOS" -type f -perm +111 -print0)
+if [[ "$missing" -ne 0 ]]; then
+    echo "Error: macdeployqt deployment is incomplete (exit $MACDEPLOYQT_STATUS)"
+    exit 1
+fi
+if [[ "$MACDEPLOYQT_STATUS" -ne 0 ]]; then
+    echo "Warning: macdeployqt exited $MACDEPLOYQT_STATUS but all referenced Qt frameworks are present; continuing"
+fi
 
 echo "=== Copying CLI tools into Contents/MacOS ==="
 MACOS_DIR="$APP/Contents/MacOS"
@@ -151,7 +190,6 @@ done
 # System (/usr/lib, /System) and framework (@rpath, Qt .framework)
 # references are left alone — macdeployqt already handled Qt.
 # ------------------------------------------------------------------
-FRAMEWORKS_DIR="$APP/Contents/Frameworks"
 mkdir -p "$FRAMEWORKS_DIR"
 
 realpath_py() {

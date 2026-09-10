@@ -21,6 +21,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -79,27 +80,48 @@ def find_package(root: ET.Element, name: str) -> dict:
     raise ValueError(f"Package '{name}' not found in Updates.xml")
 
 
-def download_archive(session: requests.Session, base_url: str, pkg_dir: str, archive: str, version_prefix: str, dest_dir: str) -> str:
+def download_archive(session: requests.Session, base_url: str, pkg_dir: str, archive: str, version_prefix: str, dest_dir: str, retries: int = 5) -> str:
     """Download a single .7z archive to dest_dir. Returns the local path.
-    
+
     The actual filename on the server is prefixed with the package version.
     Archives are located in the package subdirectory.
+
+    download.qt.io regularly drops connections mid-transfer, so downloads
+    are retried with exponential backoff. Data goes to a `.part` file and
+    is atomically renamed only on success, so a failed attempt can never
+    leave a corrupt file behind the "Already cached" check.
     """
     actual_name = f"{version_prefix}{archive}"
     url = f"{base_url}/{pkg_dir}/{actual_name}"
     local_path = os.path.join(dest_dir, actual_name)
+    tmp_path = local_path + ".part"
 
     if os.path.exists(local_path):
         print(f"  Already cached: {actual_name}")
         return local_path
 
-    print(f"  Downloading: {actual_name}")
-    resp = session.get(url, stream=True, timeout=300)
-    resp.raise_for_status()
-    with open(local_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=8192):
-            f.write(chunk)
-    return local_path
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            print(f"  Downloading: {actual_name} (attempt {attempt}/{retries})")
+            resp = session.get(url, stream=True, timeout=300)
+            resp.raise_for_status()
+            with open(tmp_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            os.replace(tmp_path, local_path)
+            return local_path
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            if attempt < retries:
+                delay = min(2 ** attempt, 60)
+                print(f"  Download failed ({type(e).__name__}), retrying in {delay}s...")
+                time.sleep(delay)
+    raise last_error
 
 
 def extract_7z(archive_path: str, target_dir: str, strip_prefix: str = ""):
@@ -148,8 +170,18 @@ def install_qt(version: str, extra_modules: list[str], output_dir: str, arch: st
     updates_url = f"{base_url}/Updates.xml"
 
     print(f"Fetching: {updates_url}")
-    resp = requests.get(updates_url, timeout=30)
-    resp.raise_for_status()
+    resp = None
+    for attempt in range(1, 6):
+        try:
+            resp = requests.get(updates_url, timeout=30)
+            resp.raise_for_status()
+            break
+        except requests.exceptions.RequestException as e:
+            if attempt == 5:
+                raise
+            delay = min(2 ** attempt, 30)
+            print(f"  Fetch failed ({type(e).__name__}), retrying in {delay}s...")
+            time.sleep(delay)
     root = ET.fromstring(resp.text)
 
     # Determine package names
