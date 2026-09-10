@@ -19,6 +19,8 @@ It includes four runtime binaries:
 
 ## Install
 
+### Linux
+
 Pre-built `.deb` packages are available on the [releases page](https://github.com/daltoncox/supertooth/releases). Download the latest package for your architecture and install it:
 
 ```bash
@@ -28,6 +30,20 @@ supertooth-bredr --help    # CLI
 ```
 
 The package bundles Qt 6.8, radio libs, and QML modules — no extra runtime dependencies beyond glibc/libstdc++. The GUI binary lives at `/opt/supertooth/bin/supertooth-bin`; `/usr/bin/supertooth` is a thin wrapper that exec's it directly (plugin/QML paths come from `qt.conf` next to the binary, libraries via RPATH). CLI tools (`supertooth-bredr`, `supertooth-ble`, `supertooth-hybrid`) are symlinks into `/opt/supertooth/bin/`. Desktop entry and icons install under `/usr/share/applications` and `/usr/share/icons/`.
+
+### macOS (Apple Silicon)
+
+Download the latest `supertooth_macos_arm64.dmg` from the [releases page](https://github.com/daltoncox/supertooth/releases), open it, and drag `Supertooth.app` to `/Applications`. The disk image is self-contained: Qt frameworks, QML imports, and the radio libraries (`hackrf`, `liquid-dsp` and their transitive dependencies) are all bundled inside the `.app` — no Homebrew packages required at runtime. Requires macOS 14+ on `arm64`.
+
+The three CLI tools ship inside the bundle alongside the GUI:
+
+```bash
+/Applications/Supertooth.app/Contents/MacOS/supertooth-bredr --help
+/Applications/Supertooth.app/Contents/MacOS/supertooth-ble --help
+/Applications/Supertooth.app/Contents/MacOS/supertooth-hybrid --help
+```
+
+> **Gatekeeper note:** release builds are ad-hoc signed but not notarized, so macOS may refuse to open the app on first launch. Right-click `Supertooth.app` → Open, or run `xattr -d com.apple.quarantine /Applications/Supertooth.app`.
 
 ## Building from source
 

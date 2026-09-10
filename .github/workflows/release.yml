@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 jobs:
   build-deb:
@@ -62,7 +63,7 @@ jobs:
             --arch ${{ matrix.arch }} \
             --version "${{ github.ref_name }}" \
             --qt-prefix /opt/Qt/6.8.0/${{ matrix.qt_arch }} \
-            --output "./supertooth_${{ github.ref_name }}_${{ matrix.arch }}.deb"
+            --output "./supertooth_linux_${{ matrix.arch }}.deb"
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
@@ -70,8 +71,50 @@ jobs:
           name: supertooth-deb-${{ matrix.arch }}
           path: ./*.deb
 
+  build-macos-arm64:
+    # Apple Silicon only. macos-14 is an arm64 (M1) runner; do not switch to
+    # macos-latest without confirming it is still arm64.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install cmake pkg-config hackrf liquid-dsp qt@6
+          echo "$(brew --prefix qt@6)/bin" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
+            -DBUILD_GUI=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSUPERTOOTH_VERSION=${{ github.ref_name }} \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+
+      - name: Build
+        run: |
+          cmake --build build --parallel "$(sysctl -n hw.ncpu)"
+
+      - name: Package DMG
+        run: |
+          bash packaging/bundle-macos.sh build \
+            --version "${{ github.ref_name }}" \
+            --qt-prefix "$(brew --prefix qt@6)" \
+            --output "./supertooth_macos_arm64.dmg"
+
+      - name: Upload .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: supertooth-dmg-arm64
+          path: ./*.dmg
+
   release:
-    needs: build-deb
+    needs: [build-deb, build-macos-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -80,6 +123,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: supertooth-deb-*
+          path: release
+          merge-multiple: true
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: supertooth-dmg-*
           path: release
           merge-multiple: true
 
