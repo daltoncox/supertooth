@@ -100,15 +100,13 @@ add_library(supertooth_core STATIC
     protocol/ble/ble_display.c protocol/ble/ble_display.h
     protocol/ble/ble_codec.c protocol/ble/ble_codec.h
     protocol/ble/ble_bitstream_decoder.c protocol/ble/ble_bitstream_decoder.h
-    protocol/ble/ble_piconet.c protocol/ble/ble_piconet.h
-    protocol/ble/ble_tracker.c protocol/ble/ble_tracker.h
+    protocol/ble/ble_registry.c protocol/ble/ble_registry.h
     protocol/ble/bt_assigned_numbers.c protocol/ble/bt_assigned_numbers.h
     protocol/bredr/bredr_display.c protocol/bredr/bredr_display.h
     protocol/bredr/bredr_codec.c protocol/bredr/bredr_codec.h
     protocol/bredr/bredr_bitstream_decoder.c protocol/bredr/bredr_bitstream_decoder.h
-    protocol/bredr/bredr_piconet.c protocol/bredr/bredr_piconet.h
-    protocol/bredr/bredr_piconet_store.c protocol/bredr/bredr_piconet_store.h
-    protocol/bredr/bredr_tracker.c protocol/bredr/bredr_tracker.h
+    protocol/bredr/bredr_link.c protocol/bredr/bredr_link.h
+    protocol/bredr/bredr_registry.c protocol/bredr/bredr_registry.h
     protocol/bredr/bredr_clock_recovery.c protocol/bredr/bredr_clock_recovery.h
     radio/radio_common.c radio/radio_common.h
     radio/sample_dispatcher.c radio/sample_dispatcher.h

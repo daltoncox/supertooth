@@ -6,11 +6,11 @@
 #include "session.h"
 
 /**
- * @brief Live 1 Hz device/piconet table for the CLI `-v devices` mode.
+ * @brief Live 1 Hz device/connection table for the CLI `-v devices` mode.
  *
  * Mirrors the GUI DeviceListView: it polls the core's protocol-agnostic
- * device/piconet snapshots (BR/EDR devices + piconets, BLE devices +
- * piconets), derives the same Type / Identifier columns, and computes a
+ * device/connection snapshots (BR/EDR devices + connections, BLE devices +
+ * connections), derives the same Type / Identifier columns, and computes a
  * 1-second packet rate from the delta of each entity's total packet count.
  *
  * The table is redrawn in place on a TTY (so it stays put on screen) and

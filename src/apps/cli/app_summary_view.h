@@ -25,7 +25,7 @@ void app_summary_view_print_ble(unsigned long packet_no,
 
 void app_summary_view_print_bredr(unsigned long packet_no,
                                   const bredr_event_t *event,
-                                  const bredr_piconet_snapshot_t *pnet);
+                                  const bredr_connection_snapshot_t *connection);
 
 void app_summary_view_print_ble_decode_fail(unsigned long packet_no,
                                             const ble_event_t *event);

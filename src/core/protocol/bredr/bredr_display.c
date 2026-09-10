@@ -18,25 +18,25 @@ static const char *bredr_tracking_state_desc(int tracking_state)
     return "tracking";
 }
 
-static int bredr_piconet_has_active_track(const bredr_piconet_snapshot_t *pnet)
+static int bredr_connection_has_active_track(const bredr_connection_snapshot_t *conn)
 {
-    return pnet && pnet->uap_valid && pnet->clk_known && pnet->tracking_state > 0;
+    return conn && conn->uap_valid && conn->clk_known && conn->tracking_state > 0;
 }
 
-static void bredr_format_piconet_id(char out[16],
-                                    const bredr_frame_t *frame,
-                                    const bredr_piconet_snapshot_t *pnet)
+static void bredr_format_connection_id(char out[16],
+                                       const bredr_frame_t *frame,
+                                       const bredr_connection_snapshot_t *conn)
 {
     uint32_t lap = frame ? (frame->lap & 0xFFFFFFu) : 0u;
-    if (pnet)
-        lap = pnet->lap & 0xFFFFFFu;
+    if (conn)
+        lap = conn->lap & 0xFFFFFFu;
 
     /* The General/Limited Inquiry Access Codes (GIAC 0x9E8B33, LIAC 0x9E8B00)
      * use the well-known DCI UAP (0x00), so always render with a known UAP. */
-    if (pnet && (pnet->uap_valid ||
+    if (conn && (conn->uap_valid ||
                  lap == 0x9E8B33u || lap == 0x9E8B00u))
         snprintf(out, 16, "0x%02X%06" PRIX32,
-                 (lap == 0x9E8B33u || lap == 0x9E8B00u) ? 0u : pnet->uap, lap);
+                 (lap == 0x9E8B33u || lap == 0x9E8B00u) ? 0u : conn->uap, lap);
     else
         snprintf(out, 16, "0x??%06" PRIX32, lap);
 }
@@ -84,7 +84,7 @@ static uint32_t bredr_sample_to_rx_clk_1600(uint64_t radio_start_sample_index,
     return (uint32_t)(num / (uint64_t)radio_sample_rate_hz);
 }
 
-static int bredr_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
+static int bredr_build_decode_inputs(const bredr_connection_snapshot_t *conn,
                                       const rx_metadata_t *meta,
                                       uint8_t *uap_out,
                                       uint8_t *clk1_6_out)
@@ -95,15 +95,15 @@ static int bredr_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
     *uap_out = 0u;
     *clk1_6_out = 0u;
 
-    if (!pnet)
+    if (!conn)
         return 0;
 
-    if (pnet->uap_valid)
-        *uap_out = pnet->uap;
-    if (pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u)
-        *clk1_6_out = pnet->central_clk_1_6;
+    if (conn->uap_valid)
+        *uap_out = conn->uap;
+    if (conn->clk_known && meta && meta->radio_sample_rate_hz != 0u)
+        *clk1_6_out = conn->central_clk_1_6;
 
-    return pnet->uap_valid && pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u;
+    return conn->uap_valid && conn->clk_known && meta && meta->radio_sample_rate_hz != 0u;
 }
 
 static void bredr_print_hex_line(const char *label,
@@ -231,7 +231,7 @@ static void bredr_print_decoded_payload(const bredr_packet_t *packet, const bred
 }
 
 void bredr_print_packet_details(const bredr_frame_t *frame,
-                                const bredr_piconet_snapshot_t *pnet,
+                                const bredr_connection_snapshot_t *conn,
                                 const rx_metadata_t *meta)
 {
     bredr_packet_t packet;
@@ -252,7 +252,7 @@ void bredr_print_packet_details(const bredr_frame_t *frame,
         printf("HEADER       : (none — shortened access code)\n");
 
     memset(&packet, 0, sizeof(packet));
-    have_decode_inputs = bredr_build_decode_inputs(pnet, meta, &decode_uap, &decode_clk1_6);
+    have_decode_inputs = bredr_build_decode_inputs(conn, meta, &decode_uap, &decode_clk1_6);
     if (have_decode_inputs)
     {
         decode_ok = bredr_decode_frame(frame, decode_uap, decode_clk1_6, &packet);
@@ -298,18 +298,18 @@ void bredr_print_packet_details(const bredr_frame_t *frame,
         }
     }
 
-    if (frame->has_header && pnet)
+    if (frame->has_header && conn)
     {
-        printf("\n[Piconet Info]\n");
-        printf("Packets      : %lu\n", pnet->total_packets);
-        if (pnet->uap_valid)
-            printf("UAP          : 0x%02X\n", pnet->uap);
+        printf("\n[Connection Info]\n");
+        printf("Packets      : %lu\n", conn->total_packets);
+        if (conn->uap_valid)
+            printf("UAP          : 0x%02X\n", conn->uap);
         else
             printf("UAP          : 0x??\n");
         printf("Tracking     : %d [%s]\n",
-               pnet->tracking_state, bredr_tracking_state_desc(pnet->tracking_state));
-        if (pnet->clk_known)
-            printf("CLK1-6       : %u\n", pnet->central_clk_1_6);
+               conn->tracking_state, bredr_tracking_state_desc(conn->tracking_state));
+        if (conn->clk_known)
+            printf("CLK1-6       : %u\n", conn->central_clk_1_6);
         else
             printf("CLK1-6       : ??\n");
     }
@@ -317,19 +317,19 @@ void bredr_print_packet_details(const bredr_frame_t *frame,
 
 void bredr_print_packet_summary_line(unsigned long packet_no,
                                      const bredr_frame_t *frame,
-                                     const bredr_piconet_snapshot_t *pnet,
+                                     const bredr_connection_snapshot_t *conn,
                                      const rx_metadata_t *meta)
 {
     if (frame->has_header)
     {
         char uap_buf[8];
         char clk_buf[8];
-        if (pnet && pnet->uap_valid)
-            snprintf(uap_buf, sizeof(uap_buf), "%02X", pnet->uap);
+        if (conn && conn->uap_valid)
+            snprintf(uap_buf, sizeof(uap_buf), "%02X", conn->uap);
         else
             snprintf(uap_buf, sizeof(uap_buf), "??");
-        if (pnet && pnet->clk_known)
-            snprintf(clk_buf, sizeof(clk_buf), "%02u", pnet->central_clk_1_6);
+        if (conn && conn->clk_known)
+            snprintf(clk_buf, sizeof(clk_buf), "%02u", conn->central_clk_1_6);
         else
             snprintf(clk_buf, sizeof(clk_buf), "??");
 
@@ -341,7 +341,7 @@ void bredr_print_packet_summary_line(unsigned long packet_no,
                meta->channel_index,
                frame->ac_errors,
                clk_buf,
-               pnet ? pnet->tracking_state : -1,
+               conn ? conn->tracking_state : -1,
                meta->rssi_dbr);
     }
     else
@@ -352,80 +352,80 @@ void bredr_print_packet_summary_line(unsigned long packet_no,
                receiver_phy_name(frame->phy),
                meta->channel_index,
                frame->ac_errors,
-               pnet ? pnet->tracking_state : -1,
+               conn ? conn->tracking_state : -1,
                meta->rssi_dbr);
     }
 }
 
-void bredr_print_piconet_snapshot(const bredr_piconet_snapshot_t *pnet)
+void bredr_print_connection_snapshot(const bredr_connection_snapshot_t *conn)
 {
-    if (!pnet)
+    if (!conn)
         return;
 
-    printf("  LAP: 0x%06" PRIX32, pnet->lap & 0xFFFFFFu);
-    if (pnet->uap_valid)
-        printf("  UAP: 0x%02X", pnet->uap);
+    printf("  LAP: 0x%06" PRIX32, conn->lap & 0xFFFFFFu);
+    if (conn->uap_valid)
+        printf("  UAP: 0x%02X", conn->uap);
     else
         printf("  UAP: ??");
 
-    if (pnet->clk_known)
-        printf("  CLK1-6: %02u [state=%d]", pnet->central_clk_1_6,
-               pnet->tracking_state);
+    if (conn->clk_known)
+        printf("  CLK1-6: %02u [state=%d]", conn->central_clk_1_6,
+               conn->tracking_state);
     else
-        printf("  CLK1-6: ?? [state=%d]", pnet->tracking_state);
+        printf("  CLK1-6: ?? [state=%d]", conn->tracking_state);
 
-    printf("  Packets: %lu\n", pnet->total_packets);
+    printf("  Packets: %lu\n", conn->total_packets);
 }
 
 void bredr_print_rssi_snapshot(unsigned long packet_no,
                                const bredr_frame_t *frame,
                                const rx_metadata_t *meta,
-                               const bredr_piconet_snapshot_t *const *piconets,
+                               const bredr_connection_snapshot_t *const *connections,
                                size_t count,
                                unsigned int master_clock_mhz)
 {
     printf("\n================ RSSI Snapshot (Packet #%lu) ================\n", packet_no);
     printf("Sample Index : %" PRIu64 " (%u Msps master clock)\n",
            meta->radio_start_sample_index, master_clock_mhz);
-    printf("Piconets     : %zu\n", count);
+    printf("Connections  : %zu\n", count);
     printf("--------------------------------------------------------------\n");
 
     for (size_t i = 0; i < count; i++)
     {
-        const bredr_piconet_snapshot_t *cur = piconets[i];
-        char piconet_id[16];
-        bredr_format_piconet_id(piconet_id, frame, cur);
+        const bredr_connection_snapshot_t *cur = connections[i];
+        char connection_id[16];
+        bredr_format_connection_id(connection_id, frame, cur);
 
-        if (!bredr_piconet_has_active_track(cur))
+        if (!bredr_connection_has_active_track(cur))
         {
             char combined_buf[8];
             bredr_format_rssi_value(combined_buf, cur->combined_rssi_seen, cur->combined_rssi);
-            printf("Piconet: %-10s | Track: %2d | Combined: %s dBr\n",
-                   piconet_id,
+            printf("Connection: %-10s | Track: %2d | Combined: %s dBr\n",
+                   connection_id,
                    cur->tracking_state,
                    combined_buf);
             continue;
         }
 
         char central_buf[8];
-        bredr_format_rssi_value(central_buf, cur->master_rssi_seen, cur->master_rssi);
-        printf("Piconet: %-10s | Track: %2d | Central: %s dBr",
-               piconet_id,
+        bredr_format_rssi_value(central_buf, cur->central_rssi_seen, cur->central_rssi);
+        printf("Connection: %-10s | Track: %2d | Central: %s dBr",
+               connection_id,
                cur->tracking_state,
                central_buf);
 
-        int periph_seen = 0;
+        int peripheral_seen = 0;
         for (int lt = 1; lt <= 7; lt++)
         {
-            if (!cur->slave_rssi_seen[lt])
+            if (!cur->peripheral_rssi_seen[lt])
                 continue;
-            periph_seen = 1;
+            peripheral_seen = 1;
             char pbuf[8];
-            bredr_format_rssi_value(pbuf, 1, cur->slave_rssi[lt]);
-            printf(" | Periph[%d]: %s dBr", lt, pbuf);
+            bredr_format_rssi_value(pbuf, 1, cur->peripheral_rssi[lt]);
+            printf(" | Peripheral[%d]: %s dBr", lt, pbuf);
         }
-        if (!periph_seen)
-            printf(" | Periph: (none yet)");
+        if (!peripheral_seen)
+            printf(" | Peripheral: (none yet)");
         printf("\n");
     }
 

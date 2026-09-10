@@ -6,10 +6,10 @@
  * primitives (1/3 and 2/3 FEC decode, dewhitening, HEC/CRC verification) are
  * provided by bredr_codec.c; this module implements only the recovery
  * orchestration (the 64 clock-candidate solve) and ongoing clock tracking on
- * top of them.  Every function operates directly on a bredr_piconet_t: the
- * piconet owns the recovery working state and the tracked clock_offset.
+ * top of them.  Every function operates directly on a bredr_link_t: the
+ * link owns the recovery working state and the tracked clock_offset.
  *
- * The single entry point is bredr_recovery_process(): while the piconet has no
+ * The single entry point is bredr_recovery_process(): while the link has no
  * confirmed clock it acquires the UAP and clock offset, and once those are
  * known it merely tracks and corrects for clock drift.
  */
@@ -20,33 +20,33 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "bredr_piconet.h"
+#include "bredr_link.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /**
- * @brief Reset the acquisition working state (and only that) of a piconet.
+ * @brief Reset the acquisition working state (and only that) of a link.
  *
  * Clears the recovery candidates, tentative UAP/clock fields and clock_offset.
  * The ring buffer, statistics and confirmed clock lock are preserved; callers
- * that want a full reset should instead re-initialise the piconet.
+ * that want a full reset should instead re-initialise the link.
  */
-void bredr_recovery_reset(bredr_piconet_t *pnet);
+void bredr_recovery_reset(bredr_link_t *link);
 
 /**
  * @brief Drive UAP/clock recovery for a single received event.
  *
- * While the piconet has no confirmed clock it acquires the UAP and clock
- * offset (bredr_piconet_set_uap() is called once both are found).  Once the
+ * While the link has no confirmed clock it acquires the UAP and clock
+ * offset (bredr_link_set_uap() is called once both are found).  Once the
  * UAP and clock offset are known this function only tracks clock drift,
  * correcting the tracked clock_offset when the two clocks have drifted.
  *
  * @return non-zero if the clock is locked for this packet (acquired, or the
  *         HEC validated while tracking).
  */
-int bredr_recovery_process(bredr_piconet_t *pnet,
+int bredr_recovery_process(bredr_link_t *link,
                            const bredr_event_t *event);
 
 /**

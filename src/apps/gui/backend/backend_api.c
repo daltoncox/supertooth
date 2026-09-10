@@ -492,7 +492,7 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
  * bredr_build_decode_inputs() so the facade can attempt a header decode
  * without depending on static CLI helpers. Returns 1 when both UAP and
  * CLK1-6 are available, 0 otherwise. */
-static int bredr_gui_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
+static int bredr_gui_build_decode_inputs(const bredr_connection_snapshot_t *connection,
                                          const rx_metadata_t *meta,
                                          uint8_t *uap_out,
                                          uint8_t *clk1_6_out)
@@ -501,15 +501,15 @@ static int bredr_gui_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
         return 0;
     *uap_out = 0u;
     *clk1_6_out = 0u;
-    if (!pnet)
+    if (!connection)
         return 0;
 
-    int have_uap = pnet->uap_valid;
-    int have_clk = pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u;
+    int have_uap = connection->uap_valid;
+    int have_clk = connection->clk_known && meta && meta->radio_sample_rate_hz != 0u;
     if (have_uap)
-        *uap_out = pnet->uap;
+        *uap_out = connection->uap;
     if (have_clk)
-        *clk1_6_out = pnet->central_clk_1_6;
+        *clk1_6_out = connection->central_clk_1_6;
     return have_uap && have_clk;
 }
 
@@ -543,7 +543,7 @@ static void bredr_build_raw(backend_row_t *row, const bredr_frame_t *frame)
 }
 
 static void bredr_packet_trampoline(const bredr_event_t *event,
-                                    const bredr_piconet_snapshot_t *pnet,
+                                    const bredr_connection_snapshot_t *connection,
                                     void *user)
 {
     backend_session_t *bs = (backend_session_t *)user;
@@ -568,8 +568,8 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
     uint32_t lap = frame->lap & 0xFFFFFFu;
 
     /* Address: full UAP+LAP (UAP shown as "??" until recovered). */
-    if (pnet && pnet->uap_valid)
-        snprintf(row.addr, sizeof(row.addr), "0x%02X%06" PRIX32, pnet->uap, lap);
+    if (connection && connection->uap_valid)
+        snprintf(row.addr, sizeof(row.addr), "0x%02X%06" PRIX32, connection->uap, lap);
     else
         snprintf(row.addr, sizeof(row.addr), "0x??%06" PRIX32, lap);
 
@@ -581,7 +581,7 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
 
     /* Attempt header decode if UAP + CLK1-6 context is available. */
     uint8_t uap = 0u, clk1_6 = 0u;
-    int have_ctx = bredr_gui_build_decode_inputs(pnet, m, &uap, &clk1_6);
+    int have_ctx = bredr_gui_build_decode_inputs(connection, m, &uap, &clk1_6);
 
     bredr_packet_t pkt;
     memset(&pkt, 0, sizeof(pkt));
@@ -596,8 +596,9 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
         snprintf(row.type, sizeof(row.type), "%s",
                  bredr_packet_type_name(pkt.header.type));
 
-        /* Direction: CLK1 (the LSB of CLK1-6) is 0 on master→slave slots and
-         * 1 on slave→master slots. LT_ADDR 0 means broadcast. */
+        /* Direction: CLK1 (the LSB of CLK1-6) is 0 on central→peripheral
+         * slots and 1 on peripheral→central slots. LT_ADDR 0 means
+         * broadcast. */
         unsigned int lt_addr = pkt.header.lt_addr & 0x07u;
         char peer[BACKEND_ADDR_TEXT_LEN];
         if (lt_addr == 0u)
@@ -613,7 +614,7 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
         }
         else
         {
-            /* Odd slot: the addressed slave is transmitting to the Central. */
+            /* Odd slot: the addressed peripheral is transmitting to the Central. */
             snprintf(row.src, sizeof(row.src), "%s", peer);
             snprintf(row.dst, sizeof(row.dst), "Central");
         }
@@ -628,17 +629,17 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
     /* Info summary line (mirrors the CLI bredr_print_packet_summary_line). */
     char uap_str[8];
     char clk_str[8];
-    if (pnet && pnet->uap_valid)
-        snprintf(uap_str, sizeof(uap_str), "%02X", pnet->uap);
+    if (connection && connection->uap_valid)
+        snprintf(uap_str, sizeof(uap_str), "%02X", connection->uap);
     else
         snprintf(uap_str, sizeof(uap_str), "??");
-    if (pnet && pnet->clk_known)
-        snprintf(clk_str, sizeof(clk_str), "%02u", pnet->central_clk_1_6);
+    if (connection && connection->clk_known)
+        snprintf(clk_str, sizeof(clk_str), "%02u", connection->central_clk_1_6);
     else
         snprintf(clk_str, sizeof(clk_str), "??");
     snprintf(row.info, sizeof(row.info), "ac=%u uap=%s clk=%s track=%d",
              frame->ac_errors, uap_str, clk_str,
-             pnet ? pnet->tracking_state : -1);
+             connection ? connection->tracking_state : -1);
 
     bredr_build_raw(&row, frame);
 
@@ -646,18 +647,18 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
     add_detail(&row, "Channel", "%u", m->channel_index);
     add_detail(&row, "LAP", "0x%06" PRIX32, lap);
     add_detail(&row, "AC Errors", "%u", frame->ac_errors);
-    if (pnet)
+    if (connection)
     {
-        if (pnet->uap_valid)
-            add_detail(&row, "UAP", "0x%02X", pnet->uap);
+        if (connection->uap_valid)
+            add_detail(&row, "UAP", "0x%02X", connection->uap);
         else
             add_detail(&row, "UAP", "??");
-        add_detail(&row, "Tracking", "%d", pnet->tracking_state);
-        if (pnet->clk_known)
-            add_detail(&row, "CLK1-6", "%u", pnet->central_clk_1_6);
+        add_detail(&row, "Tracking", "%d", connection->tracking_state);
+        if (connection->clk_known)
+            add_detail(&row, "CLK1-6", "%u", connection->central_clk_1_6);
         else
             add_detail(&row, "CLK1-6", "??");
-        add_detail(&row, "Piconet Packets", "%lu", pnet->total_packets);
+        add_detail(&row, "Connection Packets", "%lu", connection->total_packets);
     }
     add_detail(&row, "RSSI", "%.1f dBr", m->rssi_dbr);
     if (frame->has_header)
@@ -954,10 +955,10 @@ size_t backend_session_poll_entities(backend_session_t *session,
     size_t cap = max;
     size_t n = 0u;
 
-    bredr_device_snapshot_t  *bd = (bredr_device_snapshot_t *)calloc(cap, sizeof(*bd));
-    bredr_piconet_snapshot_t *bp = (bredr_piconet_snapshot_t *)calloc(cap, sizeof(*bp));
-    ble_device_snapshot_t    *ld = (ble_device_snapshot_t *)calloc(cap, sizeof(*ld));
-    ble_piconet_snapshot_t   *lp = (ble_piconet_snapshot_t *)calloc(cap, sizeof(*lp));
+    bredr_device_snapshot_t     *bd = (bredr_device_snapshot_t *)calloc(cap, sizeof(*bd));
+    bredr_connection_snapshot_t *bp = (bredr_connection_snapshot_t *)calloc(cap, sizeof(*bp));
+    ble_device_snapshot_t       *ld = (ble_device_snapshot_t *)calloc(cap, sizeof(*ld));
+    ble_connection_snapshot_t   *lp = (ble_connection_snapshot_t *)calloc(cap, sizeof(*lp));
     if (!bd || !bp || !ld || !lp)
     {
         free(bd); free(bp); free(ld); free(lp);
@@ -965,9 +966,9 @@ size_t backend_session_poll_entities(backend_session_t *session,
     }
 
     size_t nb = session_get_bredr_devices(s, bd, cap);
-    size_t np = session_get_bredr_piconets(s, bp, cap);
+    size_t np = session_get_bredr_connections(s, bp, cap);
     size_t nl = session_get_ble_devices(s, ld, cap);
-    size_t nq = session_get_ble_piconets(s, lp, cap);
+    size_t nq = session_get_ble_connections(s, lp, cap);
 
     #define EMIT_BASE(e, snap)                                                \
         do {                                                                  \

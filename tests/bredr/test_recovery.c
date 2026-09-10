@@ -36,13 +36,13 @@ static int g_failures = 0;
 
 static void run_case(const golden_case_t *c)
 {
-    bredr_piconet_t *pnet = malloc(sizeof(*pnet));
-    if (!pnet)
+    bredr_link_t *link = malloc(sizeof(*link));
+    if (!link)
     {
         g_failures++;
         return;
     }
-    bredr_piconet_init(pnet, 0x123456u);
+    bredr_link_init(link, 0x123456u);
 
     int recovered = 0;
     uint8_t got_uap = 0u;
@@ -75,17 +75,17 @@ static void run_case(const golden_case_t *c)
         ev.meta.radio_start_sample_index = p->clkn;
         ev.frame = frame;
 
-        int rc = bredr_recovery_process(pnet, &ev);
+        int rc = bredr_recovery_process(link, &ev);
         if (rc)
         {
             recovered = 1;
-            got_uap = pnet->uap;
-            got_clk6 = (uint8_t)pnet->clock_offset;
+            got_uap = link->uap;
+            got_clk6 = (uint8_t)link->clock_offset;
             converged_at = k;
         }
     }
 
-    free(pnet);
+    free(link);
 
     TEST_ASSERT(recovered);
     if (!recovered)

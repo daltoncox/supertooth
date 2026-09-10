@@ -87,8 +87,8 @@ typedef struct
 typedef void (*backend_row_fn)(const backend_row_t *row, void *user);
 
 /**
- * A polled, display-ready device/piconet entity (one row in the device list).
- * Produced by backend_session_poll_entities() from the core trackers. All
+ * A polled, display-ready device/connection entity (one row in the device list).
+ * Produced by backend_session_poll_entities() from the core registries. All
  * strings are NUL-terminated. The callback receives a pointer valid only for
  * the duration of the call; copy out anything needed.
  */
@@ -96,8 +96,8 @@ typedef struct
 {
     uint64_t id;                       /**< stable entity id (matches core) */
     int      kind;                    /**< entity_kind_t: 0=BR/EDR dev,
-                                          1=BR/EDR piconet, 2=BLE dev,
-                                          3=BLE piconet */
+                                          1=BR/EDR connection, 2=BLE dev,
+                                          3=BLE connection */
     char     proto[BACKEND_PROTO_TEXT_LEN];   /**< "BR/EDR" or "LE" */
     char     addr[BACKEND_ADDR_TEXT_LEN];     /**< core addr_str */
     char     device[BACKEND_TYPE_TEXT_LEN];   /**< core label */
@@ -216,10 +216,10 @@ int backend_session_run_hybrid(backend_session_t *session,
 void backend_session_request_stop(backend_session_t *session);
 
 /**
- * Snapshot the current device/piconet entities from the core trackers into
- * @p out (capacity @p max). Returns the number of entities written. Caller
- * provides the buffer; safe to call from the GUI thread while a capture runs
- * (the core getters lock internally).
+ * Snapshot the current device/connection entities from the core registries
+ * into @p out (capacity @p max). Returns the number of entities written.
+ * Caller provides the buffer; safe to call from the GUI thread while a
+ * capture runs (the core getters lock internally).
  */
 size_t backend_session_poll_entities(backend_session_t *session,
                                      backend_entity_t *out, size_t max);

@@ -260,15 +260,15 @@ static void ble_complete_adv_frame(ble_bitstream_decoder_t *proc)
 
     /* CONNECT_IND handling (seeding a CRCInit candidate, linking the two
      * peers) is the consumer's job: the decoder is a pure framing stage and
-     * carries no piconet store. The collector CRC-checks the CONNECT_IND and
+     * carries no registry. The collector CRC-checks the CONNECT_IND and
      * seeds the candidate once confirmed. */
     ble_dec_emit(proc);
 }
 
 /* Emit a completed data candidate as a raw frame. We deliberately do NOT
  * CRC-gate here: confirming a data packet is the consumer's job (it owns the
- * piconet store and CRCInit recovery), exactly as the BR/EDR path leaves
- * packet confirmation to its tracker. The emitted frame carries the still-
+ * connection table and CRCInit recovery), exactly as the BR/EDR path leaves
+ * packet confirmation to its registry. The emitted frame carries the still-
  * whitened PDU; the consumer dewhitens and gates it. */
 static void ble_complete_data_frame(ble_bitstream_decoder_t *proc)
 {

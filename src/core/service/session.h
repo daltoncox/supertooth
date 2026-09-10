@@ -11,11 +11,9 @@
 #include "ble_channel_processor.h"
 #include "bredr_channel_processor.h"
 #include "channelizer_thread.h"
-#include "ble_piconet.h"
-#include "bredr_piconet.h"
+#include "ble_registry.h"
+#include "bredr_registry.h"
 #include "bredr_display.h"
-#include "ble_tracker.h"
-#include "bredr_tracker.h"
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
 #include "radio_common.h"
@@ -40,7 +38,7 @@ typedef enum {
 
 typedef void (*session_ble_packet_fn)(const ble_event_t *event, void *user);
 typedef void (*session_bredr_packet_fn)(const bredr_event_t *event,
-                                         const bredr_piconet_snapshot_t *piconet,
+                                         const bredr_connection_snapshot_t *connection,
                                          void *user);
 
 typedef struct {
@@ -120,9 +118,8 @@ typedef struct session {
     pthread_t            bredr_channelizer_thread;
     int                  bredr_channelizer_running;
 
-    ble_tracker_t       ble_tracker;   /**< owns BLE advertiser + connection
-                                              correlation (incl. piconet store) */
-    bredr_tracker_t     bredr_tracker;
+    ble_registry_t      ble_registry;  /**< owns BLE devices + connections. */
+    bredr_registry_t    bredr_registry;
 
     /** Per-protocol collector: channel processors submit decoded events here; a
      *  dedicated thread drains the queue, runs the tracker, and invokes the
@@ -165,8 +162,8 @@ typedef struct session {
 
     /* BLE frame counts: emitted = every event reaching
      * session_process_ble_event (i.e. every VALID_PACKET the BLE processors
-     * forwarded); confirmed = subset the tracker surfaced
-     * (ble_tracker_submit_frame returned 1: accepted advertising frame or
+     * forwarded); confirmed = subset the registry surfaced
+     * (ble_registry_submit returned 1: accepted advertising frame or
      * CRC-gated data frame). Sole writer is the single BLE collector thread. */
     unsigned long ble_frames_emitted;
     unsigned long ble_frames_confirmed;
@@ -201,21 +198,16 @@ int  session_destroy(session_t *session);
 void session_process_ble_event(session_t *session, const ble_event_t *event);
 void session_process_bredr_event(session_t *session, const bredr_event_t *event);
 
-size_t       session_bredr_piconet_count(const session_t *session);
-int          session_bredr_piconet_snapshot(const session_t *session,
-                                           size_t index,
-                                           bredr_piconet_snapshot_t *out);
-
-/** Snapshot polling API for the device/piconet list (caller-provided array,
- *  core fills up to @p max entries and returns the number written). */
+/** Snapshot polling API for the device/connection list (caller-provided
+ *  array, core fills up to @p max entries and returns the number written). */
 size_t session_get_bredr_devices(const session_t *session,
                                  bredr_device_snapshot_t *out, size_t max);
-size_t session_get_bredr_piconets(const session_t *session,
-                                 bredr_piconet_snapshot_t *out, size_t max);
+size_t session_get_bredr_connections(const session_t *session,
+                                     bredr_connection_snapshot_t *out, size_t max);
 size_t session_get_ble_devices(const session_t *session,
                                ble_device_snapshot_t *out, size_t max);
-size_t session_get_ble_piconets(const session_t *session,
-                               ble_piconet_snapshot_t *out, size_t max);
+size_t session_get_ble_connections(const session_t *session,
+                                   ble_connection_snapshot_t *out, size_t max);
 
 unsigned long session_dropped_blocks(const session_t *session);
 void session_dropped_blocks_breakdown(const session_t *session,

@@ -3,7 +3,7 @@
  * @brief Offline replay of a real-capture frame dump through the recovery backend.
  *
  * This is the Phase 3 harness: with no IQ/file replay path in the radio stack,
- * a real capture is recorded via bredr_piconet_store_set_frame_dump() and
+ * a real capture is recorded via bredr_registry_set_frame_dump() and
  * replayed here through bredr_recovery_process() to confirm the
  * aligned recovery produces a stable, expected UAP.
  *
@@ -22,7 +22,7 @@
 #include "bredr_bitstream_decoder.h"
 #include "bredr_clock_recovery.h"
 #include "receive_event_models.h"
-#include "bredr_piconet_store.h"
+#include "bredr_link.h"
 
 #define FRAME_DUMP_MAGIC   0x53544C44u
 #define FRAME_DUMP_VERSION 1u
@@ -55,7 +55,7 @@ int main(void)
         return 1;
     }
 
-    bredr_piconet_t *pnet = NULL;
+    bredr_link_t *link = NULL;
     int records = 0;
     int recovered = 0;
     uint8_t got_uap = 0;
@@ -75,16 +75,16 @@ int main(void)
             return 1;
         }
 
-        if (!pnet || rec.lap != last_lap)
+        if (!link || rec.lap != last_lap)
         {
-            free(pnet);
-            pnet = malloc(sizeof(*pnet));
-            if (!pnet)
+            free(link);
+            link = malloc(sizeof(*link));
+            if (!link)
             {
                 fclose(f);
                 return 1;
             }
-            bredr_piconet_init(pnet, rec.lap);
+            bredr_link_init(link, rec.lap);
             last_lap = rec.lap;
         }
 
@@ -108,17 +108,17 @@ int main(void)
         ev.meta.channel_index = (uint16_t)rec.channel;
         ev.frame = fr;
 
-        if (bredr_recovery_process(pnet, &ev))
+        if (bredr_recovery_process(link, &ev))
         {
             recovered = 1;
-            got_uap = pnet->uap;
-            got_clk = (uint8_t)pnet->clock_offset;
+            got_uap = link->uap;
+            got_clk = (uint8_t)link->clock_offset;
             break;
         }
         records++;
     }
 
-    free(pnet);
+    free(link);
 
     fclose(f);
 

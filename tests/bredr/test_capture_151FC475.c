@@ -8,9 +8,9 @@
 
 int main(void)
 {
-    bredr_piconet_t *pnet = malloc(sizeof(*pnet));
-    if(!pnet) return 1;
-    bredr_piconet_init(pnet, CAP_LAP);
+    bredr_link_t *link = malloc(sizeof(*link));
+    if(!link) return 1;
+    bredr_link_init(link, CAP_LAP);
     int recovered=0;
     uint8_t got_uap=0, got_clk=0;
     for(int i=0;i<cap_151FC475_n;i++){
@@ -29,10 +29,10 @@ int main(void)
         ev.meta.radio_start_sample_index=p->clkn;
         ev.meta.channel_index=(uint16_t)p->channel;
         ev.frame=f;
-        int rc = bredr_recovery_process(pnet,&ev);
-        if(rc){ recovered=1; got_uap=pnet->uap; got_clk=(uint8_t)pnet->clock_offset; printf("recovered at pkt %d: UAP=0x%02X clk6=%u\n",i,got_uap,got_clk); break; }
+        int rc = bredr_recovery_process(link,&ev);
+        if(rc){ recovered=1; got_uap=link->uap; got_clk=(uint8_t)link->clock_offset; printf("recovered at pkt %d: UAP=0x%02X clk6=%u\n",i,got_uap,got_clk); break; }
     }
-    free(pnet);
+    free(link);
     if(!recovered){ fprintf(stderr,"FAIL: LAP 0x%08X never recovered (true UAP 0x%02X)\n", CAP_LAP, CAP_TRUE_UAP); return 1; }
     if(got_uap != CAP_TRUE_UAP){ fprintf(stderr,"FAIL: LAP 0x%08X wrong UAP got 0x%02X expected 0x%02X\n", CAP_LAP, got_uap, CAP_TRUE_UAP); return 1; }
     printf("PASS: LAP 0x%08X correctly recovered UAP 0x%02X (clk6 %u)\n", CAP_LAP, got_uap, got_clk);

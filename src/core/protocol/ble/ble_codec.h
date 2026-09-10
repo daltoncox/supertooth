@@ -29,7 +29,7 @@ uint32_t ble_extract_crc(const uint8_t *crc_bytes);
  * T_n is an invertible 24x24 GF(2) matrix that depends only on the message
  * bit length. The tables built here invert T_16 (2-byte messages, i.e.
  * 0-length LL data PDUs) so a CRCInit candidate can be recovered from any
- * empty data packet. Called by ble_piconet_store_init() and lazily by
+ * empty data packet. Called by ble_registry_init() and lazily by
  * ble_crc_reverse_init_len2().
  */
 void ble_crc_tables_init(void);

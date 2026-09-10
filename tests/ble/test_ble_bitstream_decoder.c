@@ -5,12 +5,12 @@
  * emitted with crc_init=BLE_CRC_INIT_ADV (the codec recomputes CRC on decode);
  * data candidates are emitted with crc_ok=0 / crc_init=0. Confirming a data
  * packet and recovering its CRCInit is the consumer's job (the per-session
- * piconet store, exercised here through ble_tracker_t).
+ * BLE registry, exercised here through ble_registry_t).
  *
  * These tests therefore fall into two groups:
  *  - framing tests (decoder only): verify the decoder surfaces the right frame
  *    for a given preamble/AA/length, found by access address;
- *  - gating tests (decoder -> tracker): verify the collector accepts valid
+ *  - gating tests (decoder -> registry): verify the collector accepts valid
  *    data frames / seeds CONNECT_IND candidates and rejects the rest.
  *
  * Construction notes: false candidates use an all-zero AA so their prefix
@@ -26,7 +26,7 @@
 #include <string.h>
 
 #include "ble_test_stream.h"
-#include "ble_tracker.h"
+#include "ble_registry.h"
 
 static int g_failures = 0;
 
@@ -173,11 +173,11 @@ static const ble_frame_t *find_frame_by_aa(const ble_test_out_t *out,
     return NULL;
 }
 
-/* Feed a decoder's emitted frames through a tracker, collecting only the
- * frames the tracker surfaces (advertising, or data whose CRC verified),
+/* Feed a decoder's emitted frames through a registry, collecting only the
+ * frames the registry surfaces (advertising, or data whose CRC verified),
  * with their post-gate annotations (crc_ok, crc_init). */
 static void bts_feed_collect(ble_bitstream_decoder_t *proc,
-                              ble_tracker_t *tracker,
+                               ble_registry_t *registry,
                               const ble_test_stream_t *s,
                               ble_test_out_t *out)
 {
@@ -196,7 +196,7 @@ static void bts_feed_collect(ble_bitstream_decoder_t *proc,
             memset(&ev, 0, sizeof(ev));
             ev.meta.channel_index = proc->channel_index;
             ev.frame = f;
-            if (ble_tracker_submit_frame(tracker, &ev) == 1 &&
+            if (ble_registry_submit(registry, &ev, NULL) == 1 &&
                 out->count < BTS_MAX_FRAMES)
                 out->frames[out->count++] = ev.frame;
         }
@@ -211,7 +211,7 @@ static void bts_feed_collect(ble_bitstream_decoder_t *proc,
         memset(&ev, 0, sizeof(ev));
         ev.meta.channel_index = proc->channel_index;
         ev.frame = f;
-        if (ble_tracker_submit_frame(tracker, &ev) == 1 &&
+        if (ble_registry_submit(registry, &ev, NULL) == 1 &&
             out->count < BTS_MAX_FRAMES)
             out->frames[out->count++] = ev.frame;
     }
@@ -256,13 +256,13 @@ static void test_adv_regression(void)
 }
 
 /* ---------------------------------------------------------------------------
- * 2. Data packet CRC gating + CRCInit recovery (decoder -> tracker).
+ * 2. Data packet CRC gating + CRCInit recovery (decoder -> registry).
  * ---------------------------------------------------------------------------*/
 static void test_data_confirmed(void)
 {
-    ble_tracker_t tracker;
-    ble_tracker_init(&tracker);
-    ble_piconet_store_confirm(&tracker.conn_store, AA_DATA, INIT_DATA);
+    ble_registry_t registry;
+    ble_registry_init(&registry, NULL);
+    ble_registry_confirm_for_test(&registry, AA_DATA, INIT_DATA);
 
     ble_bitstream_decoder_t dec;
     ble_bitstream_decoder_init(&dec, CH_DATA);
@@ -276,7 +276,7 @@ static void test_data_confirmed(void)
     stream_zeros(&s, 23u);
 
     ble_test_out_t out;
-    bts_feed_collect(&dec, &tracker, &s, &out);
+    bts_feed_collect(&dec, &registry, &s, &out);
 
     TEST_ASSERT(out.count == 1u);
     if (out.count == 1u)
@@ -296,7 +296,7 @@ static void test_data_confirmed(void)
         TEST_ASSERT(memcmp(pkt.pdu.data.payload, payload, 4u) == 0);
     }
 
-    ble_tracker_free(&tracker);
+    ble_registry_free(&registry);
 }
 
 /* ---------------------------------------------------------------------------
@@ -304,8 +304,8 @@ static void test_data_confirmed(void)
  * ---------------------------------------------------------------------------*/
 static void test_data_unknown_aa_silent(void)
 {
-    ble_tracker_t tracker;
-    ble_tracker_init(&tracker);
+    ble_registry_t registry;
+    ble_registry_init(&registry, NULL);
 
     ble_bitstream_decoder_t dec;
     ble_bitstream_decoder_init(&dec, CH_DATA);
@@ -317,27 +317,27 @@ static void test_data_unknown_aa_silent(void)
                         INIT_DATA);
 
     ble_test_out_t out;
-    bts_feed_collect(&dec, &tracker, &s, &out);
+    bts_feed_collect(&dec, &registry, &s, &out);
 
     TEST_ASSERT(out.count == 0u);
 
-    /* The store gates on promote-on-promise: a brand-new access address
-     * must recur (BLE_PICONET_PROMOTE_THRESHOLD raw frames) before it
+    /* The registry gates on promote-on-promise: a brand-new access address
+     * must recur (BLE_REGISTRY_PROMOTE_THRESHOLD raw frames) before it
      * earns a slot, so a one-off unknown AA leaves no entry behind. */
-    ble_piconet_t snap;
-    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) != 0);
+    ble_link_t snap;
+    TEST_ASSERT(ble_registry_find_link_for_test(&registry, AA_DATA, &snap) != 0);
 
-    ble_tracker_free(&tracker);
+    ble_registry_free(&registry);
 }
 
 /* ---------------------------------------------------------------------------
  * 4. Empty packet -> candidate -> proof on non-empty packet -> confirmed ->
- *    subsequent empty packet accepted (decoder -> tracker gating).
+ *    subsequent empty packet accepted (decoder -> registry gating).
  * ---------------------------------------------------------------------------*/
 static void test_recovery_lifecycle(void)
 {
-    ble_tracker_t tracker;
-    ble_tracker_init(&tracker);
+    ble_registry_t registry;
+    ble_registry_init(&registry, NULL);
 
     ble_bitstream_decoder_t dec;
     ble_bitstream_decoder_init(&dec, CH_DATA);
@@ -346,21 +346,21 @@ static void test_recovery_lifecycle(void)
     ble_test_out_t out;
 
     /* Phase 1: 0-length packets produce a candidate, nothing surfaced. The
-     * AA must first recur enough times to earn a store slot
-     * (BLE_PICONET_PROMOTE_THRESHOLD); the first rounds only bump the
+     * AA must first recur enough times to earn a connection slot
+     * (BLE_REGISTRY_PROMOTE_THRESHOLD); the first rounds only bump the
      * pending tally, the final one reverses the CRC into a candidate. */
     for (int round = 0; round < 3; round++)
     {
         bts_reset(&s);
         stream_data_packet(&s, AA_DATA, 0x01u, NULL, 0u, CH_DATA, INIT_DATA);
         stream_zeros(&s, FLUSH_ZEROS);
-        bts_feed_collect(&dec, &tracker, &s, &out);
+        bts_feed_collect(&dec, &registry, &s, &out);
         TEST_ASSERT(out.count == 0u);
     }
 
-    ble_piconet_t snap;
-    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) == 0);
-    TEST_ASSERT(snap.state == BLE_PICONET_COLLECTING);
+    ble_link_t snap;
+    TEST_ASSERT(ble_registry_find_link_for_test(&registry, AA_DATA, &snap) == 0);
+    TEST_ASSERT(snap.state == BLE_CONNECTION_COLLECTING);
     TEST_ASSERT(snap.candidate_count == 1u);
     TEST_ASSERT(snap.candidates[0] == INIT_DATA);
 
@@ -371,11 +371,11 @@ static void test_recovery_lifecycle(void)
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
                         INIT_DATA);
     stream_zeros(&s, FLUSH_ZEROS);
-    bts_feed_collect(&dec, &tracker, &s, &out);
+    bts_feed_collect(&dec, &registry, &s, &out);
     TEST_ASSERT(out.count == 1u);
 
-    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) == 0);
-    TEST_ASSERT(snap.state == BLE_PICONET_CONFIRMED);
+    TEST_ASSERT(ble_registry_find_link_for_test(&registry, AA_DATA, &snap) == 0);
+    TEST_ASSERT(snap.state == BLE_CONNECTION_CONFIRMED);
     TEST_ASSERT(snap.crc_init == INIT_DATA);
     TEST_ASSERT(snap.candidate_count == 0u);
 
@@ -383,15 +383,15 @@ static void test_recovery_lifecycle(void)
     bts_reset(&s);
     stream_data_packet(&s, AA_DATA, 0x01u, NULL, 0u, CH_DATA, INIT_DATA);
     stream_zeros(&s, FLUSH_ZEROS);
-    bts_feed_collect(&dec, &tracker, &s, &out);
+    bts_feed_collect(&dec, &registry, &s, &out);
     TEST_ASSERT(out.count == 1u);
 
-    ble_tracker_free(&tracker);
+    ble_registry_free(&registry);
 }
 
 /* ---------------------------------------------------------------------------
  * 5. CONNECT_IND seeding: valid seed proves on a data channel; corrupt seed
- *    is ignored. Two decoders share one tracker (as in the real session).
+ *    is ignored. Two decoders share one registry (as in the real session).
  * ---------------------------------------------------------------------------*/
 static void push_connect_ind(ble_test_stream_t *s, uint8_t ch,
                               uint32_t conn_aa, uint32_t conn_crc_init)
@@ -418,8 +418,8 @@ static void push_connect_ind(ble_test_stream_t *s, uint8_t ch,
 
 static void test_connect_ind_seeding(void)
 {
-    ble_tracker_t tracker;
-    ble_tracker_init(&tracker);
+    ble_registry_t registry;
+    ble_registry_init(&registry, NULL);
 
     ble_bitstream_decoder_t dec_adv, dec_data;
     ble_bitstream_decoder_init(&dec_adv, CH_ADV);
@@ -432,14 +432,14 @@ static void test_connect_ind_seeding(void)
      * frame AND seeds a (still unproven) candidate. */
     bts_reset(&s);
     push_connect_ind(&s, CH_ADV, AA_DATA, INIT_DATA);
-    bts_feed_collect(&dec_adv, &tracker, &s, &out);
+    bts_feed_collect(&dec_adv, &registry, &s, &out);
     TEST_ASSERT(out.count == 1u);
     if (out.count == 1u)
         TEST_ASSERT(out.frames[0].kind == BLE_FRAME_ADVERTISING);
 
-    ble_piconet_t snap;
-    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) == 0);
-    TEST_ASSERT(snap.state == BLE_PICONET_COLLECTING);
+    ble_link_t snap;
+    TEST_ASSERT(ble_registry_find_link_for_test(&registry, AA_DATA, &snap) == 0);
+    TEST_ASSERT(snap.state == BLE_CONNECTION_COLLECTING);
     TEST_ASSERT(snap.candidate_count == 1u);
     TEST_ASSERT(snap.candidates[0] == INIT_DATA);
 
@@ -448,20 +448,20 @@ static void test_connect_ind_seeding(void)
     bts_reset(&s);
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
                         INIT_DATA);
-    bts_feed_collect(&dec_data, &tracker, &s, &out);
+    bts_feed_collect(&dec_data, &registry, &s, &out);
     TEST_ASSERT(out.count == 1u);
 
-    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) == 0);
-    TEST_ASSERT(snap.state == BLE_PICONET_CONFIRMED);
+    TEST_ASSERT(ble_registry_find_link_for_test(&registry, AA_DATA, &snap) == 0);
+    TEST_ASSERT(snap.state == BLE_CONNECTION_CONFIRMED);
     TEST_ASSERT(snap.crc_init == INIT_DATA);
 
-    ble_tracker_free(&tracker);
+    ble_registry_free(&registry);
 }
 
 static void test_connect_ind_corrupt_no_seed(void)
 {
-    ble_tracker_t tracker;
-    ble_tracker_init(&tracker);
+    ble_registry_t registry;
+    ble_registry_init(&registry, NULL);
 
     ble_bitstream_decoder_t dec_adv, dec_data;
     ble_bitstream_decoder_init(&dec_adv, CH_ADV);
@@ -475,23 +475,23 @@ static void test_connect_ind_corrupt_no_seed(void)
     bts_reset(&s);
     push_connect_ind(&s, CH_ADV, AA_DATA, INIT_DATA);
     s.bytes[120u / 8u] ^= (uint8_t)(1u << (120u % 8u));
-    bts_feed_collect(&dec_adv, &tracker, &s, &out);
+    bts_feed_collect(&dec_adv, &registry, &s, &out);
 
     /* The adv frame is still surfaced (advertising is not CRC-gated in the
      * framer), but its CRC fails so nothing is seeded. */
     TEST_ASSERT(out.count == 1u);
-    ble_piconet_t snap;
-    TEST_ASSERT(ble_piconet_store_find(&tracker.conn_store, AA_DATA, &snap) != 0);
+    ble_link_t snap;
+    TEST_ASSERT(ble_registry_find_link_for_test(&registry, AA_DATA, &snap) != 0);
 
     /* The data packet now has no candidate to prove -> rejected. */
     const uint8_t payload[3] = {0x11u, 0x22u, 0x33u};
     bts_reset(&s);
     stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload), CH_DATA,
                         INIT_DATA);
-    bts_feed_collect(&dec_data, &tracker, &s, &out);
+    bts_feed_collect(&dec_data, &registry, &s, &out);
     TEST_ASSERT(out.count == 0u);
 
-    ble_tracker_free(&tracker);
+    ble_registry_free(&registry);
 }
 
 /* ---------------------------------------------------------------------------

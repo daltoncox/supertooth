@@ -22,7 +22,7 @@ static unsigned int g_bottom_le_channel = BLE_CH37_INDEX;
 static session_t g_session;
 static int g_session_initialized = 0;
 
-/* Live device/piconet table view (started/stopped around session_run). */
+/* Live device/connection table view (started/stopped around session_run). */
 static app_device_view_t *g_device_view = NULL;
 
 static const app_output_mode_option_t s_output_modes[] = {

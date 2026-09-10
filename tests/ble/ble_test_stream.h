@@ -16,7 +16,6 @@
 
 #include "ble_bitstream_decoder.h"
 #include "ble_codec.h"
-#include "ble_piconet.h"
 
 #define BTS_MAX_BITS 8192u
 #define BTS_MAX_FRAMES 16u

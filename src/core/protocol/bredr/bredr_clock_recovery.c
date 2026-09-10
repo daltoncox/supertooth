@@ -19,7 +19,7 @@
  *     Non-FHS/DM1/HV1 CRC failures are downgraded to inconclusive.  EV3/EV5
  *     positives are downgraded to inconclusive (high false-positive rate).
  *
- * All recovery/tracking state lives in the target bredr_piconet_t; there is no
+ * All recovery/tracking state lives in the target bredr_link_t; there is no
  * separate recovery struct.
  */
 
@@ -77,21 +77,21 @@ void bredr_recovery_set_frame_dump(FILE *file)
  * Acquisition working-state helpers
  * --------------------------------------------------------------------------- */
 
-void bredr_recovery_reset(bredr_piconet_t *pnet)
+void bredr_recovery_reset(bredr_link_t *link)
 {
-    if (!pnet)
+    if (!link)
         return;
     for (int i = 0; i < BREDR_CLK6_CANDIDATES; i++)
-        pnet->recovery_candidates[i] = -1;
-    memset(pnet->recovery_esco_lt_mask, 0, sizeof(pnet->recovery_esco_lt_mask));
-    memset(pnet->recovery_acl_lt_mask, 0, sizeof(pnet->recovery_acl_lt_mask));
-    /* Preserve pnet->uap (last known value for device-row display); only
+        link->recovery_candidates[i] = -1;
+    memset(link->recovery_esco_lt_mask, 0, sizeof(link->recovery_esco_lt_mask));
+    memset(link->recovery_acl_lt_mask, 0, sizeof(link->recovery_acl_lt_mask));
+    /* Preserve link->uap (last known value for device-row display); only
      * validity is cleared here. */
-    pnet->uap_valid = 0;
-    pnet->clock_offset = 0;
-    pnet->drift_candidate = 0;
-    pnet->recovery_first_pkt_time = 0u;
-    pnet->recovery_got_first_packet = 0;
+    link->uap_valid = 0;
+    link->clock_offset = 0;
+    link->drift_candidate = 0;
+    link->recovery_first_pkt_time = 0u;
+    link->recovery_got_first_packet = 0;
 }
 
 /* --- header decode (mirror libbtbb try_clock) --- */
@@ -148,11 +148,11 @@ static uint8_t decode_uap_for_clock(const bredr_frame_t *frame,
 }
 
 /* Reject CLK1-6 candidates whose decoded header is illegal for the implied slot
- * role.  The master transmits in even slots (CLK1 == 0) and the peripheral
- * (slave) in odd slots (CLK1 == 1).  Returns 0 if the candidate is plausible,
+ * role.  The central transmits in even slots (CLK1 == 0) and the peripheral
+ * in odd slots (CLK1 == 1).  Returns 0 if the candidate is plausible,
  * -1 if it must be pruned.  Checks:
  *   - LT_ADDR == 0 (broadcast) never originates from a peripheral.
- *   - POLL (0x1) and FHS (0x2) are master-only, so never in a peripheral slot.
+ *   - POLL (0x1) and FHS (0x2) are central-only, so never in a peripheral slot.
  *   - HV1/HV2/HV3 (0x5/0x6/0x7) reserve FLOW/ARQN/SEQN as 0, so any of those
  *     bits set indicates a malformed (or mis-clocked) header. */
 static int sanity_check_header(const bredr_decoded_header_t *hdr,
@@ -166,10 +166,10 @@ static int sanity_check_header(const bredr_decoded_header_t *hdr,
             return -1; /* broadcast never originates from a peripheral */
 
         if (hdr->type == PT_POLL)
-            return -1; /* POLL is a master-only packet */
+            return -1; /* POLL is a central-only packet */
 
         if (hdr->type == PT_FHS)
-            return -1; /* FHS is a master-only packet */
+            return -1; /* FHS is a central-only packet */
     }
 
     if (hdr->type == PT_HV1 || hdr->type == PT_HV2 || hdr->type == PT_HV3)
@@ -618,7 +618,7 @@ static int verify_payload_crc(const bredr_frame_t *frame, uint8_t clock,
  * slot @p count, record the LT_ADDR as eSCO (EV4/EV5) or ACL (DM/DH/DV); if the
  * same LT_ADDR was already recorded under the opposite family, return -1 to
  * prune the candidate, else update the masks and return @p crc_chk unchanged. */
-static int apply_esco_lt_addr_rule(bredr_piconet_t *pnet, int count,
+static int apply_esco_lt_addr_rule(bredr_link_t *link, int count,
                                    uint8_t lt_addr, uint8_t type, int crc_chk)
 {
     if (crc_chk != 10 || lt_addr == 0u)
@@ -632,10 +632,10 @@ static int apply_esco_lt_addr_rule(bredr_piconet_t *pnet, int count,
         return crc_chk;
 
     uint8_t bit = (uint8_t)(1u << lt_addr);
-    uint8_t *self_mask  = is_esco ? pnet->recovery_esco_lt_mask
-                                  : pnet->recovery_acl_lt_mask;
-    uint8_t *other_mask = is_esco ? pnet->recovery_acl_lt_mask
-                                  : pnet->recovery_esco_lt_mask;
+    uint8_t *self_mask  = is_esco ? link->recovery_esco_lt_mask
+                                  : link->recovery_acl_lt_mask;
+    uint8_t *other_mask = is_esco ? link->recovery_acl_lt_mask
+                                  : link->recovery_esco_lt_mask;
 
     if (other_mask[count] & bit)
         return -1; /* LT_ADDR already seen as the opposite family */
@@ -649,28 +649,28 @@ static int apply_esco_lt_addr_rule(bredr_piconet_t *pnet, int count,
  * --------------------------------------------------------------------------- */
 
 /* Accumulate UAP/CLK1-6 candidates from one header packet.  On a confident
- * solve it records pnet->uap, pnet->uap_valid and a tentative clock_offset
+ * solve it records link->uap, link->uap_valid and a tentative clock_offset
  * (the CLK1-6 hint), and returns 1.  Returns 0 while still ambiguous. */
-static int solve_uap_clock_candidates(bredr_piconet_t *pnet,
+static int solve_uap_clock_candidates(bredr_link_t *link,
                                      const bredr_frame_t *frame,
                                      uint32_t clkn)
 {
-    if (!pnet || !frame || !frame->has_header)
+    if (!link || !frame || !frame->has_header)
         return 0;
 
     uint32_t clk1 = clkn >> 1;
 
-    if (!pnet->recovery_got_first_packet)
-        pnet->recovery_first_pkt_time = clk1;
+    if (!link->recovery_got_first_packet)
+        link->recovery_first_pkt_time = clk1;
 
     int remaining = 0;
     int first_clock = 0;
 
     for (int count = 0; count < BREDR_CLK6_CANDIDATES; count++)
     {
-        if (pnet->recovery_candidates[count] > -1 || !pnet->recovery_got_first_packet)
+        if (link->recovery_candidates[count] > -1 || !link->recovery_got_first_packet)
         {
-            int clock = (count + (int)(clk1 - pnet->recovery_first_pkt_time)) & 0x3f;
+            int clock = (count + (int)(clk1 - link->recovery_first_pkt_time)) & 0x3f;
 
             uint8_t type = 0u;
             bredr_decoded_header_t hdr;
@@ -684,11 +684,11 @@ static int solve_uap_clock_candidates(bredr_piconet_t *pnet,
              * to update UAP/clock state, so the candidate is pruned. */
             if (fec_err != 0)
                 crc_chk = -1;
-            else if (!pnet->recovery_got_first_packet ||
-                     UAP == (uint8_t)pnet->recovery_candidates[count])
+            else if (!link->recovery_got_first_packet ||
+                     UAP == (uint8_t)link->recovery_candidates[count])
                 crc_chk = verify_payload_crc(frame, (uint8_t)clock, type, UAP);
 
-            if (pnet->uap_valid && UAP != pnet->uap)
+            if (link->uap_valid && UAP != link->uap)
                 crc_chk = -1;
 
             /* Slot-role sanity checks on the decoded header.  An illegal
@@ -700,45 +700,45 @@ static int solve_uap_clock_candidates(bredr_piconet_t *pnet,
 
             /* Enforce eSCO LT_ADDR discipline: an LT_ADDR must not be decoded
              * as both eSCO (EV4/EV5) and ACL (DM/DH) under the same clock. */
-            crc_chk = apply_esco_lt_addr_rule(pnet, count, hdr.lt_addr,
+            crc_chk = apply_esco_lt_addr_rule(link, count, hdr.lt_addr,
                                               type, crc_chk);
 
             switch (crc_chk)
             {
             case -1:
             case 0:
-                pnet->recovery_candidates[count] = -1;
+                link->recovery_candidates[count] = -1;
                 break;
             case 1:
             case 2:
-                pnet->recovery_candidates[count] = (int)UAP;
+                link->recovery_candidates[count] = (int)UAP;
                 first_clock = count;
                 remaining++;
                 break;
             default:
-                pnet->clock_offset =
-                    (count - (int)(pnet->recovery_first_pkt_time & 0x3fu)) & 0x3f;
-                pnet->uap = UAP;
-                pnet->uap_valid = 1;
+                link->clock_offset =
+                    (count - (int)(link->recovery_first_pkt_time & 0x3fu)) & 0x3f;
+                link->uap = UAP;
+                link->uap_valid = 1;
                 return 1;
             }
         }
     }
 
-    pnet->recovery_got_first_packet = 1;
+    link->recovery_got_first_packet = 1;
 
     if (remaining == 1)
     {
-        pnet->clock_offset =
-            (first_clock - (int)(pnet->recovery_first_pkt_time & 0x3fu)) & 0x3f;
-        pnet->uap = (uint8_t)pnet->recovery_candidates[first_clock];
-        pnet->uap_valid = 1;
+        link->clock_offset =
+            (first_clock - (int)(link->recovery_first_pkt_time & 0x3fu)) & 0x3f;
+        link->uap = (uint8_t)link->recovery_candidates[first_clock];
+        link->uap_valid = 1;
         return 1;
     }
 
     if (remaining == 0)
     {
-        bredr_recovery_reset(pnet);
+        bredr_recovery_reset(link);
         return 0;
     }
 
@@ -753,12 +753,12 @@ static int solve_uap_clock_candidates(bredr_piconet_t *pnet,
  *  narrowing.  625 µs × 8000 ≈ 5 seconds. */
 #define CLK1_6_HISTORY_CUTOFF_CLK1600 8000u
 
-/* Narrow the @p n CLK1-6 candidates in @p candidates against the piconet's
+/* Narrow the @p n CLK1-6 candidates in @p candidates against the link's
  * historical packets (which advance one CLK1-6 tick per rx_clk_1600 slot),
  * returning the number of surviving candidates.  The scan is bounded both by
  * the history age cutoff and by the ring-buffer depth
- * (BREDR_PICONET_QUEUE_SIZE recent packets). */
-static int narrow_clock_via_history(const bredr_piconet_t *pnet,
+ * (BREDR_LINK_QUEUE_SIZE recent packets). */
+static int narrow_clock_via_history(const bredr_link_t *link,
                                     const bredr_event_t *cur_event,
                                     uint8_t uap,
                                     int candidates[64],
@@ -766,7 +766,7 @@ static int narrow_clock_via_history(const bredr_piconet_t *pnet,
 {
     uint32_t cur_clk;
 
-    if (n <= 1 || pnet->queue_fill < 2)
+    if (n <= 1 || link->queue_fill < 2)
         return n;
 
     cur_clk = bredr_sample_to_rx_clk_1600(cur_event);
@@ -774,11 +774,11 @@ static int narrow_clock_via_history(const bredr_piconet_t *pnet,
     /* The queue is maintained in start-sample order. The current packet is at
      * the logical tail, so walk backwards through older history and stop once
      * packets fall outside the history window. */
-    for (unsigned int i = 1; i < pnet->queue_fill; i++)
+    for (unsigned int i = 1; i < link->queue_fill; i++)
     {
         unsigned int idx =
-            (pnet->queue_head + BREDR_PICONET_QUEUE_SIZE - 1u - i) % BREDR_PICONET_QUEUE_SIZE;
-        const bredr_event_t *hist_event = &pnet->queue[idx];
+            (link->queue_head + BREDR_LINK_QUEUE_SIZE - 1u - i) % BREDR_LINK_QUEUE_SIZE;
+        const bredr_event_t *hist_event = &link->queue[idx];
         const bredr_frame_t *hist_frame = &hist_event->frame;
         uint32_t hist_clk = bredr_sample_to_rx_clk_1600(hist_event);
 
@@ -820,18 +820,18 @@ static int narrow_clock_via_history(const bredr_piconet_t *pnet,
 
 /* Feed packets to the candidate solver; once a UAP is found, narrow the 64
  * CLK1-6 candidates against history and establish the clock via
- * bredr_piconet_set_uap() (or via the recovery hint when a single candidate
+ * bredr_link_set_uap() (or via the recovery hint when a single candidate
  * cannot be isolated).  Returns 1 if the clock became known. */
-static int acquire_uap_and_clock(bredr_piconet_t *pnet,
+static int acquire_uap_and_clock(bredr_link_t *link,
                                  const bredr_event_t *event,
                                  uint32_t clkn,
                                  uint32_t rx_clk_1600)
 {
     const bredr_frame_t *frame = &event->frame;
 
-    if (!pnet || !frame->has_header)
+    if (!link || !frame->has_header)
         return 0;
-    if (pnet->uap_valid && pnet->clk_known)
+    if (link->uap_valid && link->clk_known)
         return 0;
 
     /* Optional frame dump for offline recovery replay. */
@@ -856,13 +856,13 @@ static int acquire_uap_and_clock(bredr_piconet_t *pnet,
             fflush(g_frame_dump);
     }
 
-    if (!solve_uap_clock_candidates(pnet, frame, clkn))
+    if (!solve_uap_clock_candidates(link, frame, clkn))
         return 0;
 
-    uint8_t uap = pnet->uap;
-    uint8_t btbb_clk6 = (uint8_t)pnet->clock_offset; /* recovery backend CLK1-6 hint */
-    if (!pnet->uap_valid)
-        bredr_piconet_set_uap_only(pnet, uap);
+    uint8_t uap = link->uap;
+    uint8_t btbb_clk6 = (uint8_t)link->clock_offset; /* recovery backend CLK1-6 hint */
+    if (!link->uap_valid)
+        bredr_link_set_uap_only(link, uap);
 
     /* Collect all CLK1-6 values that produce a valid HEC for this packet. */
     int valid_clk[64];
@@ -874,12 +874,12 @@ static int acquire_uap_and_clock(bredr_piconet_t *pnet,
     }
 
     /* Narrow the candidates using historical packets in the ring buffer. */
-    valid_n = narrow_clock_via_history(pnet, event, uap, valid_clk, valid_n);
+    valid_n = narrow_clock_via_history(link, event, uap, valid_clk, valid_n);
 
     if (valid_n == 1)
     {
         /* Unambiguous — use directly. */
-        bredr_piconet_set_uap(pnet, uap, (uint8_t)valid_clk[0], rx_clk_1600);
+        bredr_link_set_uap(link, uap, (uint8_t)valid_clk[0], rx_clk_1600);
         return 1;
     }
     else if (valid_n > 1)
@@ -901,7 +901,7 @@ static int acquire_uap_and_clock(bredr_piconet_t *pnet,
                 best = valid_clk[i];
             }
         }
-        bredr_piconet_set_uap(pnet, uap, (uint8_t)best, rx_clk_1600);
+        bredr_link_set_uap(link, uap, (uint8_t)best, rx_clk_1600);
         return 1;
     }
     /* valid_n == 0: UAP may be wrong — leave state unchanged and let
@@ -923,15 +923,15 @@ static int acquire_uap_and_clock(bredr_piconet_t *pnet,
  * candidate at all decays tracking_state (cleared at zero, as before).
  * The header must be 100% correct (zero FEC errors) before any clock state
  * is touched.  Returns 1 if the HEC validated on any tried candidate. */
-static int recover_clock_drift(bredr_piconet_t *pnet,
+static int recover_clock_drift(bredr_link_t *link,
                                const bredr_frame_t *frame,
                                uint32_t rx_clk_1600)
 {
-    if (!pnet || !frame)
+    if (!link || !frame)
         return 0;
 
     /* Central CLK1-6 expected for this packet, given the tracked offset. */
-    uint8_t base = (uint8_t)((rx_clk_1600 + pnet->clock_offset) & 0x3Fu);
+    uint8_t base = (uint8_t)((rx_clk_1600 + link->clock_offset) & 0x3Fu);
 
     static const int offsets[] = {0, 1, -1, 2, -2};
     int hit_delta = 0;
@@ -939,7 +939,7 @@ static int recover_clock_drift(bredr_piconet_t *pnet,
     for (int k = 0; k < 5; k++)
     {
         int candidate = ((base + offsets[k]) + 64) % 64;
-        if (bredr_hec_ok_for_clk6_clean(frame, pnet->uap, (uint8_t)candidate))
+        if (bredr_hec_ok_for_clk6_clean(frame, link->uap, (uint8_t)candidate))
         {
             hit_delta = offsets[k];
             found = 1;
@@ -951,12 +951,12 @@ static int recover_clock_drift(bredr_piconet_t *pnet,
     {
         /* No valid clock for this packet: drop any pending suspicion and
          * decay lock confidence as before. */
-        pnet->drift_candidate = 0;
-        if (pnet->tracking_state > 0)
-            pnet->tracking_state--;
+        link->drift_candidate = 0;
+        if (link->tracking_state > 0)
+            link->tracking_state--;
 
-        if (pnet->tracking_state == 0)
-            pnet->clk_known = 0;
+        if (link->tracking_state == 0)
+            link->clk_known = 0;
 
         return 0;
     }
@@ -964,34 +964,34 @@ static int recover_clock_drift(bredr_piconet_t *pnet,
     if (hit_delta == 0)
     {
         /* Tracked clock still correct: any prior suspicion is disproven. */
-        pnet->drift_candidate = 0;
-        if (pnet->tracking_state < 5)
-            pnet->tracking_state++;
-        pnet->clk_known = 1;
+        link->drift_candidate = 0;
+        if (link->tracking_state < 5)
+            link->tracking_state++;
+        link->clk_known = 1;
         return 1;
     }
 
-    if (pnet->drift_candidate == 0)
+    if (link->drift_candidate == 0)
     {
         /* First sighting of this drift: record it, but hold the tracked
          * offset and confidence steady until a second packet confirms. */
-        pnet->drift_candidate = hit_delta;
+        link->drift_candidate = hit_delta;
         return 1;
     }
 
-    if (pnet->drift_candidate == hit_delta)
+    if (link->drift_candidate == hit_delta)
     {
         /* Same delta on two consecutive packets: confirmed drift. */
-        pnet->clock_offset = ((pnet->clock_offset + hit_delta) + 64) % 64;
-        pnet->drift_candidate = 0;
-        if (pnet->tracking_state < 5)
-            pnet->tracking_state++;
-        pnet->clk_known = 1;
+        link->clock_offset = ((link->clock_offset + hit_delta) + 64) % 64;
+        link->drift_candidate = 0;
+        if (link->tracking_state < 5)
+            link->tracking_state++;
+        link->clk_known = 1;
         return 1;
     }
 
     /* Conflicting drift evidence: discard the suspicion, keep tracking. */
-    pnet->drift_candidate = 0;
+    link->drift_candidate = 0;
     return 1;
 }
 
@@ -999,14 +999,14 @@ static int recover_clock_drift(bredr_piconet_t *pnet,
  * Unified recovery entry point
  * --------------------------------------------------------------------------- */
 
-/* Drive UAP/clock recovery for a single received event.  While the piconet
+/* Drive UAP/clock recovery for a single received event.  While the link
  * has no confirmed clock it acquires the UAP and clock offset; once those are
  * known it merely tracks and corrects for clock drift.  Returns 1 if the
  * clock is locked for this packet (acquired or HEC-validated). */
-int bredr_recovery_process(bredr_piconet_t *pnet,
+int bredr_recovery_process(bredr_link_t *link,
                            const bredr_event_t *event)
 {
-    if (!pnet || !event)
+    if (!link || !event)
         return 0;
 
     const bredr_frame_t *frame = &event->frame;
@@ -1016,8 +1016,8 @@ int bredr_recovery_process(bredr_piconet_t *pnet,
     uint32_t rx_clk_1600 = bredr_sample_to_rx_clk_1600(event);
     uint32_t clkn = bredr_sample_to_clkn(event);
 
-    if (pnet->uap_valid && pnet->clk_known)
-        return recover_clock_drift(pnet, frame, rx_clk_1600);
+    if (link->uap_valid && link->clk_known)
+        return recover_clock_drift(link, frame, rx_clk_1600);
 
-    return acquire_uap_and_clock(pnet, event, clkn, rx_clk_1600);
+    return acquire_uap_and_clock(link, event, clkn, rx_clk_1600);
 }

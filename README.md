@@ -56,8 +56,8 @@ The three CLI tools ship inside the bundle alongside the GUI:
 
 BR/EDR UAP and CLK1-6 recovery is implemented in-tree (no external
 dependency); see `src/core/protocol/bredr/bredr_clock_recovery.c`,
-`src/core/protocol/bredr/bredr_tracker.c`,
-`src/core/protocol/ble/ble_tracker.c`, and the shared helpers in
+`src/core/protocol/bredr/bredr_registry.c`,
+`src/core/protocol/ble/ble_registry.c`, and the shared helpers in
 `src/core/models/rssi_tracker.c` and `src/core/service/collector.c`.
 
 ### CLI-only build (no GUI)
@@ -159,8 +159,8 @@ src/
     radio/         HackRF integration (hackrf, radio_common) and sample dispatcher
     service/       Session API, channel processors, channelizer_thread, event collector
     protocol/
-      ble/         BLE bitstream decoder, codec, piconet + tracker, display utilities, BT assigned numbers
-      bredr/       BR/EDR bitstream decoder, codec, piconet + piconet store + tracker, clock recovery, display utilities
+      ble/         BLE bitstream decoder, codec, registry (devices + connections), display utilities, BT assigned numbers
+      bredr/       BR/EDR bitstream decoder, codec, piconet link + registry, clock recovery, display utilities
 ```
 
 ### Key design points
@@ -169,4 +169,4 @@ src/
 - **Decoder state machines**: per-channel/thread processor owns its decoder context.  Caller pulls decoded packets immediately after push-status signals readiness.
 - **Frame-vs-packet split**: bitstream decoders emit raw frames (`ble_frame_t` / `bredr_frame_t`); codec layer decodes into clean semantic packet models.  Service callbacks carry the frame (not the decoded packet), keeping layers decoupled.
 - **BR/EDR channel layout** avoids DC by centering LO at `-(N/2 - 0.5) × channel_bw`.
-- **Piconet tracking** is centralized through `bredr_piconet_store_add_packet()` — runtime binaries never duplicate UAP/clock logic.
+- **Connection tracking** is centralized through the registries (`bredr_registry_submit()` / `ble_registry_submit()`) — runtime binaries never duplicate UAP/clock/CRCInit logic. Each registry owns dynamic connection + device tables (single lock) plus a static bounded pending tally so decoder junk never allocates.

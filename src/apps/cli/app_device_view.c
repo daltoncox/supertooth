@@ -1,8 +1,8 @@
 /**
  * @file app_device_view.c
- * @brief Live 1 Hz device/piconet table for the CLI `-v devices` mode.
+ * @brief Live 1 Hz device/connection table for the CLI `-v devices` mode.
  *
- * Polls the core's protocol-agnostic device/piconet snapshots (the same
+ * Polls the core's protocol-agnostic device/connection snapshots (the same
  * source the GUI's DeviceListView uses) and renders a table whose columns and
  * row derivation mirror the GUI exactly: RSSI, Protocol, Type, Identifier,
  * First Seen, Last Seen, Packet Rate. The 1-second packet rate is derived
@@ -84,7 +84,7 @@ static void compute_type(const char *proto, const char *device,
     }
     if (strcmp(proto, "BR/EDR") == 0)
     {
-        if (strcmp(device, "piconet") == 0)  { snprintf(out, n, "CONN"); return; }
+        if (strcmp(device, "connection") == 0)  { snprintf(out, n, "CONN"); return; }
         if (strcmp(device, "INQUIRY") == 0)  { snprintf(out, n, "INQUIRY"); return; }
         snprintf(out, n, "LT_ADDR"); return;
     }
@@ -98,7 +98,7 @@ static void compute_identifier(const char *proto, const char *device,
 {
     if (strcmp(proto, "BR/EDR") == 0)
     {
-        if (strcmp(device, "piconet") == 0 || strcmp(device, "INQUIRY") == 0)
+        if (strcmp(device, "connection") == 0 || strcmp(device, "INQUIRY") == 0)
         {
             snprintf(out, n, "%s", addr ? addr : "");
             return;
@@ -204,10 +204,10 @@ static unsigned int compute_rate(app_device_view_t *v, int kind, uint64_t id,
 static size_t collect(app_device_view_t *v, dev_entity_t *out)
 {
     const size_t cap = DEV_VIEW_MAX_ENTITIES;
-    bredr_device_snapshot_t  *bd = calloc(cap, sizeof(*bd));
-    bredr_piconet_snapshot_t *bp = calloc(cap, sizeof(*bp));
-    ble_device_snapshot_t    *ld = calloc(cap, sizeof(*ld));
-    ble_piconet_snapshot_t   *lp = calloc(cap, sizeof(*lp));
+    bredr_device_snapshot_t     *bd = calloc(cap, sizeof(*bd));
+    bredr_connection_snapshot_t *bp = calloc(cap, sizeof(*bp));
+    ble_device_snapshot_t       *ld = calloc(cap, sizeof(*ld));
+    ble_connection_snapshot_t   *lp = calloc(cap, sizeof(*lp));
     if (!bd || !bp || !ld || !lp)
     {
         free(bd); free(bp); free(ld); free(lp);
@@ -215,9 +215,9 @@ static size_t collect(app_device_view_t *v, dev_entity_t *out)
     }
 
     size_t nb = session_get_bredr_devices(v->session, bd, cap);
-    size_t np = session_get_bredr_piconets(v->session, bp, cap);
+    size_t np = session_get_bredr_connections(v->session, bp, cap);
     size_t nl = session_get_ble_devices(v->session, ld, cap);
-    size_t nq = session_get_ble_piconets(v->session, lp, cap);
+    size_t nq = session_get_ble_connections(v->session, lp, cap);
 
     size_t n = 0u;
 

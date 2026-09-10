@@ -389,7 +389,7 @@ int            bredr_bitstream_decoder_get_frame(bredr_bitstream_decoder_t *proc
  *
  * This is the Bluetooth HEC *decode* (the inverse of the hardware HEC
  * generation).  It is exposed publicly so that external modules (e.g.
- * bredr_piconet) can recover the UAP without duplicating the LFSR logic.
+ * bredr_link) can recover the UAP without duplicating the LFSR logic.
  *
  * The HEC only narrows the UAP to one of (up to) 36 reachable values for a
  * given header; the payload CRC must be used to disambiguate the true UAP.

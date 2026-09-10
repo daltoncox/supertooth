@@ -283,9 +283,10 @@ void ReceiverController::pollDevices()
     if (!m_session || !m_running)
         return;
 
-    /* The promoted piconet store can now hold 512 entries; combined with the
-     * other device/piconet registries the total entity count can exceed the
-     * old 256 buffer, so allocate on the heap to avoid truncation. */
+    /* The promoted BLE registry can now hold 512 connections; combined
+     * with the other device/connection registries the total entity count
+     * can exceed the old 256 buffer, so allocate on the heap to avoid
+     * truncation. */
     const size_t cap = 4096u;
     backend_entity_t *buf = (backend_entity_t *)calloc(cap, sizeof(backend_entity_t));
     if (!buf)

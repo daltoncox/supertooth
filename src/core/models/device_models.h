@@ -7,30 +7,35 @@
  * --------
  * The core tracks two classes of radio entity, per protocol:
  *
- *   - Devices  : a single observed radio entity (an LE advertiser, or a
- *                BR/EDR piconet member — master or a specific slave slot).
- *   - Piconets : a network / link relationship (a BR/EDR piconet identified
- *                by LAP, or an LE connection identified by access address).
+ *   - Devices    : a single observed radio entity (an LE advertiser, or a
+ *                  BR/EDR connection member — central or a specific
+ *                  peripheral slot). Standalone devices with no connection
+ *                  (e.g. chipset inquiry hits) carry connection_id == 0.
+ *   - Connections: a network / link relationship (a BR/EDR connection
+ *                  identified by LAP, or an LE connection identified by
+ *                  access address).
  *
  * Both classes share a common leading field block (ENTITY_COMMON_FIELDS) so
- * an application can merge devices and piconets into a single list, copy the
- * common fields in one pass, then branch on `kind` for the class-specific
+ * an application can merge devices and connections into a single list, copy
+ * the common fields in one pass, then branch on `kind` for the class-specific
  * tail. Each protocol also has its own snapshot struct so the field sets stay
- * honest (a piconet carries clock / per-slave RSSI that a device never does).
+ * honest (a connection carries clock / peripheral RSSI that a device never
+ * does).
  *
  * Passing convention
  * ------------------
- * Applications poll via the tracker getters, supplying a pre-allocated array
+ * Applications poll via the registry getters, supplying a pre-allocated array
  * of the appropriate snapshot struct and a capacity. The core fills the array
- * under the tracker lock and returns the number of entries written (capped at
- * the supplied capacity). No heap is allocated on the read path and the
+ * under the registry lock and returns the number of entries written (capped
+ * at the supplied capacity). No heap is allocated on the read path and the
  * structs are plain-old-data, so they are safe to memcpy and own no pointers.
  *
  * Timestamps
  * ----------
  * first_seen_ms / last_seen_ms are epoch milliseconds (system clock at the
- * time the sample was processed). For BR/EDR the core converts the piconet's
- * slot clock (rx_clk_1600) to epoch ms via a session-start anchor.
+ * time the sample was processed). For BR/EDR the core converts the
+ * connection's slot clock (rx_clk_1600) to epoch ms via a session-start
+ * anchor.
  */
 
 #ifndef DEVICE_MODELS_H
@@ -47,10 +52,10 @@ extern "C" {
  * ---------------------------------------------------------------------------*/
 
 typedef enum {
-    ENTITY_BREDR_DEVICE = 0,   /**< BR/EDR piconet member (master or slave). */
-    ENTITY_BREDR_PICONET,      /**< BR/EDR piconet identified by LAP.        */
-    ENTITY_BLE_DEVICE,         /**< LE advertiser (broadcasting device).     */
-    ENTITY_BLE_PICONET,        /**< LE connection (identified by AA).        */
+    ENTITY_BREDR_DEVICE = 0,   /**< BR/EDR connection member (central or peripheral). */
+    ENTITY_BREDR_CONNECTION,   /**< BR/EDR connection identified by LAP.               */
+    ENTITY_BLE_DEVICE,         /**< LE advertiser (broadcasting device).               */
+    ENTITY_BLE_CONNECTION,     /**< LE connection (identified by AA).                  */
 } entity_kind_t;
 
 /* ---------------------------------------------------------------------------
@@ -59,7 +64,7 @@ typedef enum {
 
 /** Address string buffer (e.g. "0x123456" or "A1:B2:C3:D4:E5:F6"). */
 #define DEVICE_ADDR_STR_MAX 24u
-/** Display label buffer (e.g. "Central", "LT_ADDR 2", "piconet", "Advertiser"). */
+/** Display label buffer (e.g. "Central", "LT_ADDR 2", "connection", "Advertiser"). */
 #define DEVICE_LABEL_MAX    24u
 /** BLE local name buffer (truncated if longer). */
 #define DEVICE_NAME_MAX     64u
@@ -69,7 +74,7 @@ typedef enum {
 #define DEVICE_MANUF_MAX    32u
 
 #define ENTITY_COMMON_FIELDS \
-    uint64_t       id;            /**< device_id or piconet_id (stable) */ \
+    uint64_t       id;            /**< device_id or connection_id (stable) */ \
     entity_kind_t  kind;          /**< one of entity_kind_t */ \
     char           addr_str[DEVICE_ADDR_STR_MAX]; \
     char           label[DEVICE_LABEL_MAX]; \
@@ -81,22 +86,22 @@ typedef enum {
     unsigned int   packet_rate    /**< core-computed packets/sec window */
 
 /* ---------------------------------------------------------------------------
- * BR/EDR device (piconet member)
+ * BR/EDR device (connection member)
  * ---------------------------------------------------------------------------*/
 
 typedef struct {
     ENTITY_COMMON_FIELDS;
 
-    uint8_t  lt_addr;       /**< 255 = master; 0..7 = slave slot */
+    uint8_t  lt_addr;       /**< 255 = central; 0..7 = peripheral slot */
     uint32_t lap;           /**< 24-bit Lower Address Part */
     uint8_t  uap;           /**< last recovered UAP (sticky on tracking loss) */
     int      uap_valid;
 
-    uint64_t piconet_id;    /**< owning piconet (linkage) */
+    uint64_t connection_id; /**< owning connection (0 = standalone) */
 } bredr_device_snapshot_t;
 
 /* ---------------------------------------------------------------------------
- * BR/EDR piconet (network / link)
+ * BR/EDR connection (network / link)
  * ---------------------------------------------------------------------------*/
 
 typedef struct {
@@ -110,17 +115,17 @@ typedef struct {
     uint8_t  central_clk_1_6;       /**< current central CLK1-6 (0..63), derived */
     int      tracking_state;        /**< clock confidence (-1..5) */
 
-    float    master_rssi;           /**< RSSI for master (CLK1 == 0) */
-    int      master_rssi_seen;
-    float    slave_rssi[8];         /**< RSSI per slave LT_ADDR (0..7) */
-    int      slave_rssi_seen[8];
+    float    central_rssi;          /**< RSSI for central (CLK1 == 0) */
+    int      central_rssi_seen;
+    float    peripheral_rssi[8];    /**< RSSI per peripheral LT_ADDR (0..7) */
+    int      peripheral_rssi_seen[8];
 
     int      combined_rssi_seen;    /**< nonzero once any member RSSI seen */
-    float    combined_rssi;         /**< combined (master+slave) RSSI */
+    float    combined_rssi;         /**< combined (central+peripheral) RSSI */
 
-    uint64_t master_device_id;      /**< linkage to member device */
-    uint64_t slave_device_id[8];    /**< linkage to member devices */
-} bredr_piconet_snapshot_t;
+    uint64_t central_device_id;     /**< linkage to member device */
+    uint64_t peripheral_device_id[8]; /**< linkage to member devices */
+} bredr_connection_snapshot_t;
 
 /* ---------------------------------------------------------------------------
  * LE device (advertiser)
@@ -136,7 +141,7 @@ typedef struct {
 } ble_device_snapshot_t;
 
 /* ---------------------------------------------------------------------------
- * LE piconet (connection)
+ * LE connection
  * ---------------------------------------------------------------------------*/
 
 typedef struct {
@@ -148,9 +153,9 @@ typedef struct {
     int      state;                /**< collecting / confirmed */
     unsigned int candidate_count;  /**< distinct CRCInit candidates accumulated */
 
-    uint64_t device_id_master;     /**< linkage to advertiser device */
-    uint64_t device_id_slave;      /**< linkage to advertiser device */
-} ble_piconet_snapshot_t;
+    uint64_t device_id_central;    /**< linkage to advertiser device */
+    uint64_t device_id_peripheral; /**< linkage to advertiser device */
+} ble_connection_snapshot_t;
 
 #ifdef __cplusplus
 }

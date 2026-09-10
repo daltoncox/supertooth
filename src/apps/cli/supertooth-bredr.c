@@ -23,11 +23,11 @@
 
 typedef void (*packet_formatter_fn)(unsigned long packet_no,
                                      const bredr_event_t *event,
-                                     const bredr_piconet_snapshot_t *pnet);
+                                     const bredr_connection_snapshot_t *connection);
 
 static app_output_mode_t g_output_mode = APP_OUTPUT_MODE_SUMMARY;
 
-/* Live device/piconet table view (started/stopped around session_run). */
+/* Live device/connection table view (started/stopped around session_run). */
 static app_device_view_t *g_device_view = NULL;
 static int g_debug = 0;
 static int g_lap_filter_enabled = 0;
@@ -49,10 +49,10 @@ static session_t *g_session = NULL;
  * Helpers
  * -------------------------------------------------------------------------*/
 
-static int piconet_lap_cmp(const void *a, const void *b)
+static int connection_lap_cmp(const void *a, const void *b)
 {
-    const bredr_piconet_snapshot_t *pa = *(const bredr_piconet_snapshot_t *const *)a;
-    const bredr_piconet_snapshot_t *pb = *(const bredr_piconet_snapshot_t *const *)b;
+    const bredr_connection_snapshot_t *pa = *(const bredr_connection_snapshot_t *const *)a;
+    const bredr_connection_snapshot_t *pb = *(const bredr_connection_snapshot_t *const *)b;
     uint32_t la = pa ? (pa->lap & 0xFFFFFFu) : 0u;
     uint32_t lb = pb ? (pb->lap & 0xFFFFFFu) : 0u;
     if (la < lb)
@@ -62,17 +62,15 @@ static int piconet_lap_cmp(const void *a, const void *b)
     return 0;
 }
 
-static void print_session_piconets(void)
+static void print_session_connections(void)
 {
-    size_t count = session_bredr_piconet_count(g_session);
-    printf("=== BR/EDR Piconet Store (%zu piconet%s) ===\n",
+    bredr_connection_snapshot_t snapshots[BREDR_SESSION_MAX_CHANNELS * 2u];
+    size_t count = session_get_bredr_connections(
+        g_session, snapshots, sizeof(snapshots) / sizeof(snapshots[0]));
+    printf("=== BR/EDR Connections (%zu connection%s) ===\n",
            count, count == 1u ? "" : "s");
     for (size_t i = 0; i < count; i++)
-    {
-        bredr_piconet_snapshot_t snapshot;
-        if (session_bredr_piconet_snapshot(g_session, i, &snapshot) == 0)
-            bredr_print_piconet_snapshot(&snapshot);
-    }
+        bredr_print_connection_snapshot(&snapshots[i]);
 }
 
 static unsigned int current_master_clock_mhz(void)
@@ -82,7 +80,7 @@ static unsigned int current_master_clock_mhz(void)
 
 static void print_packet_full(unsigned long packet_no,
                                const bredr_event_t *event,
-                               const bredr_piconet_snapshot_t *pnet)
+                               const bredr_connection_snapshot_t *connection)
 {
     const bredr_frame_t *frame = &event->frame;
     const rx_metadata_t *meta = &event->meta;
@@ -95,50 +93,41 @@ static void print_packet_full(unsigned long packet_no,
     printf("Frequency    : %u MHz (Channel %u)\n",
            (unsigned int)(meta->center_frequency_hz / 1000000u), meta->channel_index);
     printf("RSSI         : %.2f dBr\n", meta->rssi_dbr);
-    bredr_print_packet_details(frame, pnet, meta);
+    bredr_print_packet_details(frame, connection, meta);
 
     printf("--------------------------------------------------\n");
 }
 
 static void print_packet_summary(unsigned long packet_no,
                                   const bredr_event_t *event,
-                                  const bredr_piconet_snapshot_t *pnet)
+                                  const bredr_connection_snapshot_t *connection)
 {
-    app_summary_view_print_bredr(packet_no, event, pnet);
+    app_summary_view_print_bredr(packet_no, event, connection);
 }
 
 static void print_packet_rssi(unsigned long packet_no,
                                const bredr_event_t *event,
-                               const bredr_piconet_snapshot_t *pnet)
+                               const bredr_connection_snapshot_t *connection)
 {
-    (void)pnet;
+    (void)connection;
     const bredr_frame_t *frame = &event->frame;
     const rx_metadata_t *meta = &event->meta;
-    size_t count = session_bredr_piconet_count(g_session);
-    const bredr_piconet_snapshot_t **ordered =
-        (const bredr_piconet_snapshot_t **)malloc(sizeof(*ordered) * (count > 0u ? count : 1u));
+    bredr_connection_snapshot_t snapshots[BREDR_SESSION_MAX_CHANNELS * 2u];
+    size_t count = session_get_bredr_connections(
+        g_session, snapshots, sizeof(snapshots) / sizeof(snapshots[0]));
+    const bredr_connection_snapshot_t **ordered =
+        (const bredr_connection_snapshot_t **)malloc(sizeof(*ordered) * (count > 0u ? count : 1u));
     if (!ordered)
         return;
 
     size_t used = 0u;
     for (size_t i = 0; i < count; i++)
-    {
-        bredr_piconet_snapshot_t *cur =
-            (bredr_piconet_snapshot_t *)malloc(sizeof(*cur));
-        if (!cur)
-            continue;
-        if (session_bredr_piconet_snapshot(g_session, i, cur) == 0)
-            ordered[used++] = cur;
-        else
-            free(cur);
-    }
-    qsort(ordered, used, sizeof(*ordered), piconet_lap_cmp);
+        ordered[used++] = &snapshots[i];
+    qsort(ordered, used, sizeof(*ordered), connection_lap_cmp);
 
     bredr_print_rssi_snapshot(packet_no, frame, meta,
-                              (const bredr_piconet_snapshot_t *const *)ordered,
+                              (const bredr_connection_snapshot_t *const *)ordered,
                               used, current_master_clock_mhz());
-    for (size_t i = 0; i < used; i++)
-        free((void *)ordered[i]);
     free(ordered);
 }
 
@@ -229,7 +218,7 @@ static void print_usage(const char *argv0)
 }
 
 static void handle_bredr_packet(const bredr_event_t *event,
-                                  const bredr_piconet_snapshot_t *pnet,
+                                  const bredr_connection_snapshot_t *connection,
                                   void *user)
 {
     (void)user;
@@ -239,7 +228,7 @@ static void handle_bredr_packet(const bredr_event_t *event,
         return;
     app_output_lock();
     g_total_packets++;
-    output_mode_formatter(g_output_mode)(g_total_packets, event, pnet);
+    output_mode_formatter(g_output_mode)(g_total_packets, event, connection);
     fflush(stdout);
     app_output_unlock();
 }
@@ -496,7 +485,7 @@ int main(int argc, char *argv[])
         printf("  BR/EDR frames emitted: %lu\n", session_bredr_frame_count(g_session));
     }
     printf("\n");
-    print_session_piconets();
+    print_session_connections();
     session_destroy(g_session);
     free(g_session);
     g_session = NULL;

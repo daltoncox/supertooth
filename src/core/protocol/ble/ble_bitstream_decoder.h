@@ -25,7 +25,7 @@
  *     handed to the consumer ungated; data candidates are emitted raw too.
  *     Confirming a data candidate is a real packet — and recovering its
  *     CRCInit from CONNECT_IND seeding — is the consumer's job (the
- *     per-session piconet store owns CRC gating and CRCInit recovery). This
+ *     per-session BLE registry owns CRC gating and CRCInit recovery). This
  *     keeps the decoder a pure PHY/framing stage, mirroring the BR/EDR
  *     path.
  *

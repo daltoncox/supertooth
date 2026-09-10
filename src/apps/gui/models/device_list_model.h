@@ -16,11 +16,11 @@
  * @brief QML-facing list model backing the DeviceListView table.
  *
  * Each row is a single observed radio entity: a BLE advertiser, a BR/EDR
- * piconet member (master or a specific slave slot), a BR/EDR piconet, or an
- * LE connection. Rows are produced by the core trackers and delivered via
- * setRows() on a 4 Hz poll driven by ReceiverController (which calls
- * backend_session_poll_entities). The core supplies a stable entity id, a
- * 1-second average RSSI, and first/last-seen timestamps.
+ * connection member (central or a specific peripheral slot), a BR/EDR
+ * connection, or an LE connection. Rows are produced by the core registries
+ * and delivered via setRows() on a 4 Hz poll driven by ReceiverController
+ * (which calls backend_session_poll_entities). The core supplies a stable
+ * entity id, a 1-second average RSSI, and first/last-seen timestamps.
  *
  * The displayed RSSI (rssiDb) is the core's rolling 1-second average. The
  * RSSI chart shows that average sampled at the poll rate (the faint raw

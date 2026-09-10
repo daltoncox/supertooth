@@ -321,7 +321,7 @@ QString DeviceListModel::typeLabelFor(const QString &proto, const QString &devic
     }
     if (proto == QStringLiteral("BR/EDR"))
     {
-        if (device == QStringLiteral("piconet"))
+        if (device == QStringLiteral("connection"))
             return QStringLiteral("CONN");
         if (device == QStringLiteral("INQUIRY"))
             return QStringLiteral("INQUIRY");
@@ -334,7 +334,7 @@ QString DeviceListModel::identifierLabelFor(const Row &r)
 {
     if (r.proto == QStringLiteral("BR/EDR"))
     {
-        if (r.device == QStringLiteral("piconet") ||
+        if (r.device == QStringLiteral("connection") ||
             r.device == QStringLiteral("INQUIRY"))
             return r.addr;
         QString suffix;

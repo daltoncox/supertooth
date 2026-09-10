@@ -1,35 +1,35 @@
 /**
- * @file bredr_piconet.h
- * @brief BR/EDR piconet tracking — per-piconet packet queues, clock tracking,
- *        per-device RSSI accumulation, and a multi-piconet store.
+ * @file bredr_link.h
+ * @brief BR/EDR connection link — per-connection packet queue, clock
+ *        tracking, and per-device RSSI accumulation.
  *
  * Overview
  * --------
- * A `bredr_piconet_t` represents a single observed Bluetooth piconet,
- * identified by its 24-bit LAP.  It maintains a circular ring buffer of the
- * 128 most recently received BR/EDR events.
+ * A `bredr_link_t` is the DSP state for a single observed Bluetooth
+ * connection, identified by its 24-bit LAP.  It maintains a circular ring
+ * buffer of the 128 most recently received BR/EDR events.
  *
  * UAP and initial clock resolution is performed natively by the recovery
  * module (bredr_clock_recovery.c) operating directly on these fields.  Once
  * the UAP and an initial CLK1-6 value are known, the recovery module calls
- * `bredr_piconet_set_uap()` to transition the piconet into clock-tracking
+ * `bredr_link_set_uap()` to transition the link into clock-tracking
  * mode.  In this mode every subsequent header packet is used to verify and —
  * if necessary — correct the clock by checking the HEC with the known UAP and
  * trying the tracked clock offset and its ±1, ±2 neighbours to absorb drift.
  *
- * The piconet does not store an absolute central clock; instead it keeps a
+ * The link does not store an absolute central clock; instead it keeps a
  * single `clock_offset` such that the central CLK1-6 at any received packet is
  * `(rx_clk_1600 + clock_offset) mod 64`.  Once the clock is established,
- * incoming packets are tagged as master or slave transmissions using slot
- * parity (CLK1): even slot = master, odd slot = slave. Per-role RSSI is
- * tracked as an exponentially averaged value by default (configurable,
- * including disabled mode).
+ * incoming packets are tagged as central or peripheral transmissions using
+ * slot parity (CLK1): even slot = central, odd slot = peripheral. Per-role
+ * RSSI is tracked as an exponentially averaged value by default
+ * (configurable, including disabled mode).
  *
  * Memory notes
  * ------------
- * Each `bredr_piconet_t` is approximately 60 KB in size (128-packet ring
- * buffer dominates).  Always allocate piconets on the heap; never declare
- * them as local variables.  The store manages allocation automatically.
+ * Each `bredr_link_t` is approximately 60 KB in size (128-packet ring
+ * buffer dominates).  Always allocate links on the heap; never declare
+ * them as local variables.  The registry manages allocation automatically.
  *
  * Bluetooth Core Specification references
  * ----------------------------------------
@@ -38,8 +38,8 @@
  * - Vol 2, Part B, §1.2   — Bluetooth clock (CLK / CLKN)
  */
 
-#ifndef BREDR_PICONET_H
-#define BREDR_PICONET_H
+#ifndef BREDR_LINK_H
+#define BREDR_LINK_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -57,21 +57,21 @@ extern "C"
  * Constants
  * ---------------------------------------------------------------------------*/
 
-/** Number of packets retained in each piconet's ring buffer. */
-#define BREDR_PICONET_QUEUE_SIZE 128u
+/** Number of packets retained in each connection link's ring buffer. */
+#define BREDR_LINK_QUEUE_SIZE 128u
 
 /** Number of CLK1-6 candidates tracked during UAP/clock acquisition. */
 #define BREDR_CLK6_CANDIDATES 64
 
     /* ---------------------------------------------------------------------------
-     * bredr_piconet_t
+     * bredr_link_t
      * ---------------------------------------------------------------------------*/
 
     /**
-     * @brief State for a single observed BR/EDR piconet.
+     * @brief State for a single observed BR/EDR connection.
      *
      * Identified by its 24-bit LAP.  All memory is owned by this struct; heap-
-     * allocate via `malloc(sizeof(...))` or through a `bredr_piconet_store_t`.
+     * allocate via `malloc(sizeof(...))` or through a `bredr_registry_t`.
      */
     typedef struct
     {
@@ -93,11 +93,11 @@ extern "C"
 
         /* -- Clock tracking (valid once uap_valid && clk_known) ---------------- */
 
-        /** Non-zero once CLK1-6 has been established via bredr_piconet_set_uap(). */
+        /** Non-zero once CLK1-6 has been established via bredr_link_set_uap(). */
         int clk_known;
 
         /**
-         * Offset between the piconet's central clock and the receiver clock.
+         * Offset between the connection's central clock and the receiver clock.
          * The central CLK1-6 of any received packet is:
          *   (rx_clk_1600 + clock_offset) mod 64.
          * Tracking tries this offset first; a neighbouring offset (±1, ±2)
@@ -161,19 +161,20 @@ extern "C"
 
         /* -- Per-role RSSI (valid with active track + HEC-pass packet) -------- */
 
-        /** RSSI tracker over the last ~1 s, master transmissions (CLK1 == 0). */
-        rssi_tracker_t master_rssi_track;
+        /** RSSI tracker over the last ~1 s, central transmissions (CLK1 == 0). */
+        rssi_tracker_t central_rssi_track;
 
         /**
-         * RSSI tracker over the last ~1 s for slave transmissions, indexed by
-         * LT_ADDR (0–7). Index 0 = broadcast / unaddressed frames from slaves.
+         * RSSI tracker over the last ~1 s for peripheral transmissions,
+         * indexed by LT_ADDR (0–7). Index 0 = broadcast / unaddressed frames
+         * from peripherals.
          */
-        rssi_tracker_t slave_rssi_track[8];
+        rssi_tracker_t peripheral_rssi_track[8];
 
         /* -- Frames: ring buffer ---------------------------------------------- */
 
         /** Circular queue of the 128 most recently received BR/EDR events. */
-        bredr_event_t queue[BREDR_PICONET_QUEUE_SIZE];
+        bredr_event_t queue[BREDR_LINK_QUEUE_SIZE];
 
         /** Index of the next slot to overwrite (0 … QUEUE_SIZE-1). */
         unsigned int queue_head;
@@ -181,49 +182,49 @@ extern "C"
         /** Packets currently stored in the ring buffer (0 … QUEUE_SIZE). */
         unsigned int queue_fill;
 
-        /** All-time count of packets received by this piconet. */
+        /** All-time count of packets received by this connection. */
         unsigned long total_packets;
 
         /* -- Per-member packet counts (derived device rows) ------------------- */
 
-        /** Packets classified as master transmissions (CLK1 == 0). */
-        unsigned long master_pkts;
+        /** Packets classified as central transmissions (CLK1 == 0). */
+        unsigned long central_pkts;
 
-        /** Packets classified as slave transmissions, indexed by LT_ADDR (0–7). */
-        unsigned long slave_pkts[8];
+        /** Packets classified as peripheral transmissions, indexed by LT_ADDR (0–7). */
+        unsigned long peripheral_pkts[8];
 
         /* -- Timestamps (slot clock, 625 µs per tick / 1600 Hz) ----------------- */
 
-        /** rx_clk_1600 of the first packet ever added to this piconet. */
+        /** rx_clk_1600 of the first packet ever added to this connection. */
         uint32_t first_seen;
 
         /** rx_clk_1600 of the most recently added packet. */
         uint32_t last_seen;
 
-    } bredr_piconet_t;
+    } bredr_link_t;
 
     /* ---------------------------------------------------------------------------
-     * bredr_piconet_t API
+     * bredr_link_t API
      * ---------------------------------------------------------------------------*/
 
     /**
-     * @brief Initialise a piconet for a given LAP.
+     * @brief Initialise a connection link for a given LAP.
      *
      * For the GIAC and LIAC LAPs the UAP is pre-set to the well-known DCI value
      * (0x00) and uap_valid is set.
      *
-     * @param pnet  Must not be NULL.
+     * @param link  Must not be NULL.
      * @param lap   24-bit Lower Address Part.
      */
-    void bredr_piconet_init(bredr_piconet_t *pnet, uint32_t lap);
+    void bredr_link_init(bredr_link_t *link, uint32_t lap);
 
     /**
-    * @brief Add a received event to the piconet ring buffer.
+    * @brief Add a received event to the connection link ring buffer.
      *
     * Copies the event into the ring buffer (overwriting the oldest entry once
      * full) and updates first_seen and last_seen.
      *
-     * If the piconet is in clock-tracking mode (uap_valid && clk_known) and the
+     * If the link is in clock-tracking mode (uap_valid && clk_known) and the
      * event carries a decoded header (has_header != 0), the central CLK1-6
      * estimate is verified: the tracked offset is tried first, then its ±1,
      * ±2 neighbours.  A neighbouring hit is only drift suspicion until a
@@ -231,30 +232,30 @@ extern "C"
      * only a packet matching no candidate decays tracking confidence.
      *
      * If event metadata includes a valid RSSI value and the clock is known,
-     * the latest role RSSI is updated: master (CLK1 == 0) or slave
+     * the latest role RSSI is updated: central (CLK1 == 0) or peripheral
      * (CLK1 == 1, indexed by LT_ADDR).
      *
-     * @param pnet  Must not be NULL and must have been initialised.
+     * @param link  Must not be NULL and must have been initialised.
      * @param event BR/EDR event to add. Must not be NULL.
      */
-    int bredr_piconet_add_packet(bredr_piconet_t *pnet,
+    int bredr_link_add_packet(bredr_link_t *link,
                            const bredr_event_t *event);
 
     /**
      * @brief Record the UAP and initial CLK1-6, as solved by the recovery backend.
      *
-     * Transitions the piconet into clock-tracking mode.  Subsequent calls to
-     * bredr_piconet_add_packet() will verify and maintain the CLK1-6 estimate
+     * Transitions the link into clock-tracking mode.  Subsequent calls to
+     * bredr_link_add_packet() will verify and maintain the CLK1-6 estimate
      * using HEC checks.
      *
-     * @param pnet          Must not be NULL.
+     * @param link          Must not be NULL.
      * @param uap           Solved 8-bit Upper Address Part.
      * @param central_clk_1_6  Central CLK1-6 value (0–63) valid at the packet
      *                          whose rx_clk_1600 is given below.
      * @param rx_clk_1600       rx_clk_1600 of the packet at which
      *                          central_clk_1_6 is known-good.
      */
-    void bredr_piconet_set_uap(bredr_piconet_t *pnet, uint8_t uap,
+    void bredr_link_set_uap(bredr_link_t *link, uint8_t uap,
                                 uint8_t central_clk_1_6,
                                 uint32_t rx_clk_1600);
 
@@ -265,18 +266,18 @@ extern "C"
      * CLK1-6 candidate. Clock tracking remains disabled until a successful
      * HEC-based clock acquisition occurs.
      */
-    void bredr_piconet_set_uap_only(bredr_piconet_t *pnet, uint8_t uap);
+    void bredr_link_set_uap_only(bredr_link_t *link, uint8_t uap);
 
     /**
      * @brief Compute the central CLK1-6 for a packet received at rx_clk_1600.
      *
      * Uses the tracked clock_offset: central = (rx_clk_1600 + clock_offset) mod 64.
      *
-     * @param pnet        Must not be NULL.
+     * @param link        Must not be NULL.
      * @param rx_clk_1600 Receiver slot-clock timestamp (625 µs/tick, 1600 Hz).
      * @return            Central CLK1-6 value (0–63).
      */
-    uint8_t bredr_piconet_central_clk_1_6(const bredr_piconet_t *pnet,
+    uint8_t bredr_link_central_clk_1_6(const bredr_link_t *link,
                                           uint32_t rx_clk_1600);
 
     /**
@@ -296,4 +297,4 @@ extern "C"
 }
 #endif
 
-#endif /* BREDR_PICONET_H */
+#endif /* BREDR_LINK_H */

@@ -14,7 +14,7 @@
  *
  * Clock model: frames are whitened with CLK1-6 = (clkn >> 1) & 0x3f and fed
  * with clkn advancing 2 ticks (one slot) per packet -- exactly the semantics
- * of the production pipeline (bredr_piconet_store passes 3200 Hz CLKN).
+ * of the production pipeline (bredr_registry passes 3200 Hz CLKN).
  */
 
 #include <stdint.h>
@@ -476,10 +476,10 @@ static void make_bredr_frame(const pframe_t *pf, uint32_t lap, bredr_frame_t *ou
 static void run_scenario(const char *name, uint32_t lap, scen_pkt_t *pkts, int n)
 {
     /* Native backend. */
-    bredr_piconet_t *pnet = malloc(sizeof(*pnet));
-    if (!pnet)
+    bredr_link_t *link = malloc(sizeof(*link));
+    if (!link)
         return;
-    bredr_piconet_init(pnet, lap);
+    bredr_link_init(link, lap);
     int nat_rec = 0, nat_idx = -1;
     uint8_t nat_uap = 0, nat_clk = 0;
     for (int i = 0; i < n; i++)
@@ -493,16 +493,16 @@ static void run_scenario(const char *name, uint32_t lap, scen_pkt_t *pkts, int n
         ev.meta.radio_start_sample_index = pkts[i].clkn;
         ev.frame = fr;
 
-        if (bredr_recovery_process(pnet, &ev))
+        if (bredr_recovery_process(link, &ev))
         {
             nat_rec = 1;
             nat_idx = i;
-            nat_uap = pnet->uap;
-            nat_clk = (uint8_t)pnet->clock_offset;
+            nat_uap = link->uap;
+            nat_clk = (uint8_t)link->clock_offset;
             break;
         }
     }
-    free(pnet);
+    free(link);
 
     /* Real libbtbb. */
     btbb_piconet *pn = btbb_test_piconet_new(lap);

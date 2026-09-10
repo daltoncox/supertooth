@@ -67,7 +67,7 @@ static void print_ble_packet_summary(unsigned long packet_no,
 
 static void print_bredr_packet_full(unsigned long packet_no,
                                      const bredr_event_t *event,
-                                     const bredr_piconet_snapshot_t *pnet)
+                                     const bredr_connection_snapshot_t *connection)
 {
     const bredr_frame_t *frame = &event->frame;
     const rx_metadata_t *meta = &event->meta;
@@ -80,15 +80,15 @@ static void print_bredr_packet_full(unsigned long packet_no,
     printf("Frequency    : %u MHz (Channel %u)\n",
            (unsigned int)(meta->center_frequency_hz / 1000000u), meta->channel_index);
     printf("RSSI         : %.2f dBr\n\n", meta->rssi_dbr);
-    bredr_print_packet_details(frame, pnet, meta);
+    bredr_print_packet_details(frame, connection, meta);
     printf("--------------------------------------------------\n");
 }
 
 static void print_bredr_packet_summary(unsigned long packet_no,
                                         const bredr_event_t *event,
-                                        const bredr_piconet_snapshot_t *pnet)
+                                        const bredr_connection_snapshot_t *connection)
 {
-    app_summary_view_print_bredr(packet_no, event, pnet);
+    app_summary_view_print_bredr(packet_no, event, connection);
 }
 
 static int parse_channel_count(const char *arg, unsigned int *out_channels)
@@ -163,7 +163,7 @@ static void print_usage(const char *argv0)
 }
 
 static void handle_hybrid_bredr_packet(const bredr_event_t *event,
-                                         const bredr_piconet_snapshot_t *pnet,
+                                         const bredr_connection_snapshot_t *connection,
                                          void *user)
 {
     (void)user;
@@ -172,9 +172,9 @@ static void handle_hybrid_bredr_packet(const bredr_event_t *event,
     app_output_lock();
     unsigned long packet_no = ++g_packet_count;
     if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
-        print_bredr_packet_summary(packet_no, event, pnet);
+        print_bredr_packet_summary(packet_no, event, connection);
     else
-        print_bredr_packet_full(packet_no, event, pnet);
+        print_bredr_packet_full(packet_no, event, connection);
     fflush(stdout);
     app_output_unlock();
 }
