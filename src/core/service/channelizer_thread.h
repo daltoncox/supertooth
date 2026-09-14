@@ -38,6 +38,11 @@ typedef struct
     int debug;
     int active;
 
+    /* Exhaustive replay: wait for pool blocks / reader room instead of
+     * dropping (see sample_dispatcher_acquire_blocking/push_blocking).
+     * Set by the session from its config; 0 preserves live behavior. */
+    int exhaustive;
+
     /* The bank (channelizer_bank_t) keeps its own internal carry
      * (q->carry) across calls, so no worker-side RF buffer is needed: raw RF
      * blocks are fed to the bank in place, in max_in-sized sub-chunks, and the

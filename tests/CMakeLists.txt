@@ -26,6 +26,8 @@ set(_supertooth_test_targets
     test_file_device
     test_dispatcher_backpressure
     test_channel_layout
+    test_collector_blocking
+    test_exhaustive_replay
     test_rssi_window
     test_rssi_tracker
 )

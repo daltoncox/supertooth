@@ -202,6 +202,7 @@ static int session_create_channels(session_t *session)
                 fprintf(stderr, "[session] BLE channelizer init failed\n");
             return -1;
         }
+        session->ble_channelizer.exhaustive = session->config.file_exhaustive;
 
         for (unsigned int rf = 0u; rf < BLE_RF_CHANNEL_COUNT; rf++)
         {
@@ -264,6 +265,7 @@ static int session_create_channels(session_t *session)
                 fprintf(stderr, "[session] channelizer init failed\n");
             return -1;
         }
+        session->bredr_channelizer.exhaustive = session->config.file_exhaustive;
 
         for (unsigned int c = 0u; c < BREDR_SESSION_MAX_CHANNELS; c++)
         {
@@ -344,6 +346,53 @@ static void *session_bredr_collector_shim(void *arg)
     while (collector_pop(&s->bredr_collector, &ev) == 0)
         session_process_bredr_event(s, &ev);
     return NULL;
+}
+
+/* Quiescence bound for the exhaustive EOF drain: a wedged pipeline warns and
+ * tears down instead of hanging forever. */
+#define SESSION_DRAIN_TIMEOUT_NS 30000000000ull
+
+static uint64_t session_mono_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+/* Wait until every in-flight sample block is released and both event queues
+ * are empty (i.e. the whole capture has been processed and surfaced), the
+ * drain times out, or shutdown is requested. Exhaustive file replay only;
+ * realtime/live teardown discards in-flight data like a Ctrl+C would. */
+static void session_drain_exhaustive(session_t *session)
+{
+    uint64_t start_ns = session_mono_ns();
+
+    for (;;)
+    {
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 10000000L};
+
+        if (atomic_load_explicit(&session->shutdown_requested,
+                                 memory_order_acquire) != 0u)
+            return;
+
+        if (sample_dispatcher_all_free(session->dispatcher) &&
+            sample_dispatcher_all_free(session->ble_chan_dispatcher) &&
+            sample_dispatcher_all_free(session->bredr_chan_dispatcher) &&
+            collector_count(&session->ble_collector) == 0u &&
+            collector_count(&session->bredr_collector) == 0u)
+            return;
+
+        if (session_mono_ns() - start_ns > SESSION_DRAIN_TIMEOUT_NS)
+        {
+            if (session->config.debug)
+                fprintf(stderr,
+                        "[session] exhaustive drain timed out with data in "
+                        "flight; tearing down anyway\n");
+            return;
+        }
+
+        nanosleep(&ts, NULL);
+    }
 }
 
 int session_run(session_t *session)
@@ -457,8 +506,14 @@ int session_run(session_t *session)
 
     /* File replay mode (realtime default, exhaustive on request); no-op for
      * live radios. Applied before configure/start so the reader thread
-     * observes it from its first block. */
+     * observes it from its first block. Collector blocking follows the same
+     * flag so decoded events also apply backpressure instead of
+     * overwrite-oldest. */
     radio_set_replay_mode(session->device, session->config.file_exhaustive);
+    collector_set_blocking(&session->ble_collector,
+                           session->config.file_exhaustive);
+    collector_set_blocking(&session->bredr_collector,
+                           session->config.file_exhaustive);
 
     uint32_t lna  = session->bredr_enabled ? SESSION_BREDR_LNA_GAIN : SESSION_BLE_LNA_GAIN;
     uint32_t vga  = session->bredr_enabled ? SESSION_BREDR_VGA_GAIN : SESSION_BLE_VGA_GAIN;
@@ -491,6 +546,17 @@ int session_run(session_t *session)
         if (radio_is_finished(session->device))
             break;
     }
+
+    /* Exhaustive file replay only (never realtime/live): the radio is done
+     * but blocks/events may still be in flight. Drain every stage before the
+     * teardown below stops the workers, so nothing sampled is lost. A
+     * shutdown request (Ctrl+C) skips the drain and tears down immediately. */
+    if (atomic_load_explicit(&session->shutdown_requested,
+                             memory_order_acquire) == 0u &&
+        session->config.file_exhaustive &&
+        session->config.device_type == RADIO_DEVICE_FILE &&
+        radio_is_finished(session->device))
+        session_drain_exhaustive(session);
     /* The capture loop has ended; notify the owner (UI) now, before the
      * potentially blocking radio teardown below, so the UI can flip to the
      * stopped state immediately instead of waiting on device shutdown. */
@@ -604,6 +670,10 @@ int session_destroy(session_t *session)
 
     ble_registry_free(&session->ble_registry);
     bredr_registry_free(&session->bredr_registry);
+    session->ble_collector_dropped =
+        collector_dropped(&session->ble_collector);
+    session->bredr_collector_dropped =
+        collector_dropped(&session->bredr_collector);
     collector_destroy(&session->ble_collector);
     collector_destroy(&session->bredr_collector);
     
@@ -725,6 +795,34 @@ void session_ble_frame_counts(const session_t *session,
 unsigned long session_bredr_frame_count(const session_t *session)
 {
     return session ? session->bredr_frames_emitted : 0ul;
+}
+
+void session_collector_dropped(const session_t *session,
+                               unsigned long *ble,
+                               unsigned long *bredr)
+{
+    if (!session)
+    {
+        if (ble)
+            *ble = 0ul;
+        if (bredr)
+            *bredr = 0ul;
+        return;
+    }
+    /* After teardown the queues are gone, so report the snapshot (same
+     * pattern as the block-drop counters). */
+    if (session->torn_down)
+    {
+        if (ble)
+            *ble = session->ble_collector_dropped;
+        if (bredr)
+            *bredr = session->bredr_collector_dropped;
+        return;
+    }
+    if (ble)
+        *ble = collector_dropped(&session->ble_collector);
+    if (bredr)
+        *bredr = collector_dropped(&session->bredr_collector);
 }
 
 void session_dropped_blocks_breakdown(const session_t *session,

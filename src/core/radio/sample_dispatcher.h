@@ -61,6 +61,34 @@ unsigned int sample_dispatcher_push_block(sample_dispatcher_t *dispatcher,
 int sample_dispatcher_can_push(sample_dispatcher_t *dispatcher);
 
 /**
+ * Blocking acquire for backpressure paths (exhaustive replay): waits until a
+ * pool block is free or @p shutdown is set. Returns the block (with one ref
+ * held, as acquire_block) or NULL on shutdown (also NULL on bad arguments).
+ * Poll-based so the lock-free fast path is untouched.
+ */
+sample_block_t *sample_dispatcher_acquire_blocking(
+    sample_dispatcher_t *dispatcher,
+    const _Atomic unsigned int *shutdown);
+
+/**
+ * Blocking push for backpressure paths: waits until every reader's queue has
+ * room (or @p shutdown is set), then delivers to all readers. Returns the
+ * number of readers delivered to, or 0 on shutdown/bad arguments. With a
+ * single producer the wait-then-push is race-free.
+ */
+unsigned int sample_dispatcher_push_blocking(
+    sample_dispatcher_t *dispatcher,
+    sample_block_t *block,
+    const _Atomic unsigned int *shutdown);
+
+/**
+ * 1 when every pool block is unreferenced (and therefore no reader queue can
+ * hold a block either), 0 otherwise. Used to detect pipeline quiescence at
+ * end of exhaustive replay.
+ */
+int sample_dispatcher_all_free(const sample_dispatcher_t *dispatcher);
+
+/**
  * Total dropped blocks across this dispatcher: blocks the pool could not
  * acquire plus blocks every reader's queue rejected because it was full.
  * Both are real drops the capture loop could not keep up with.

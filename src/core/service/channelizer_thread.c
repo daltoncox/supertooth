@@ -88,11 +88,15 @@ void *channelizer_worker(void *arg)
             if (n > max_in)
                 n = max_in;
 
-            sample_block_t *fm = sample_dispatcher_acquire_block(c->out);
+            sample_block_t *fm = c->exhaustive
+                ? sample_dispatcher_acquire_blocking(c->out, c->shutdown)
+                : sample_dispatcher_acquire_block(c->out);
             if (!fm)
             {
-                sample_dispatcher_note_drop(c->out, c->debug);
-                break; /* backpressure: drop the rest of this RF block */
+                if (!c->exhaustive)
+                    sample_dispatcher_note_drop(c->out, c->debug);
+                break; /* live: drop the rest of this RF block;
+                        * exhaustive: shutdown requested, abandon it */
             }
 
             unsigned int frames_out = 0u;
@@ -101,9 +105,22 @@ void *channelizer_worker(void *arg)
             fm->num_samples        = (unsigned int)((size_t)M * frames_out);
             fm->block_base_sample  = base + (uint64_t)done;
 
-            sample_dispatcher_push_block(c->out, fm);
-            sample_block_release(fm);
-            fm = NULL;
+            if (c->exhaustive)
+            {
+                sample_dispatcher_push_blocking(c->out, fm, c->shutdown);
+                sample_block_release(fm);
+                fm = NULL;
+                if (c->shutdown &&
+                    atomic_load_explicit(c->shutdown,
+                                         memory_order_acquire) != 0u)
+                    break; /* shutdown during push; abandon rest of block */
+            }
+            else
+            {
+                sample_dispatcher_push_block(c->out, fm);
+                sample_block_release(fm);
+                fm = NULL;
+            }
 
             done += n;
         }

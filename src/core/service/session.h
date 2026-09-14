@@ -165,6 +165,12 @@ typedef struct session {
      * Snapshotted at the same point as dropped_blocks_total. */
     session_drop_breakdown_t dropped_breakdown;
 
+    /* Collector overwrite-oldest drops, snapshotted in session_destroy()
+     * before the queues are torn down (same pattern as the block counters
+     * above). Always 0 in exhaustive mode short of a shutdown race. */
+    unsigned long ble_collector_dropped;
+    unsigned long bredr_collector_dropped;
+
     /* BLE frame counts: emitted = every event reaching
      * session_process_ble_event (i.e. every VALID_PACKET the BLE processors
      * forwarded); confirmed = subset the registry surfaced
@@ -223,6 +229,13 @@ void session_ble_frame_counts(const session_t *session,
                               unsigned long *confirmed);
 
 unsigned long session_bredr_frame_count(const session_t *session);
+
+/* Collector overwrite-oldest drops per protocol (see
+ * session_t.ble/bredr_collector_dropped). After teardown these read the
+ * snapshot taken in session_destroy(); pass NULL for either side. */
+void session_collector_dropped(const session_t *session,
+                               unsigned long *ble,
+                               unsigned long *bredr);
 
 /* Test-only helper: build the BLE/BR/EDR channel processors for the current
  * tune + enable state (without opening the radio) and report the counts.

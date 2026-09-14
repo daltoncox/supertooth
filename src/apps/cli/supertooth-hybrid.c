@@ -552,6 +552,12 @@ int main(int argc, char *argv[])
         printf("  BLE frames emitted   : %lu\n", emitted);
         printf("  BLE frames confirmed : %lu\n", confirmed);
         printf("  BR/EDR frames emitted: %lu\n", session_bredr_frame_count(g_session));
+        {
+            unsigned long ble_dropped = 0ul, bredr_dropped = 0ul;
+            session_collector_dropped(g_session, &ble_dropped, &bredr_dropped);
+            printf("  BLE collector drops  : %lu\n", ble_dropped);
+            printf("  BR/EDR collector drops: %lu\n", bredr_dropped);
+        }
     }
 
     session_destroy(g_session);

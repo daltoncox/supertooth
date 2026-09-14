@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static void sample_block_acquire(sample_block_t *block)
 {
@@ -248,6 +249,76 @@ int sample_dispatcher_can_push(sample_dispatcher_t *dispatcher)
             return 0;
     }
 
+    return 1;
+}
+
+/* Poll quantum for the blocking backpressure helpers: short enough to react
+ * promptly to freed blocks / drained queues and shutdown, long enough to
+ * stay out of the way. Timed with nanosleep (a duration, not an absolute
+ * timestamp). */
+#define SAMPLE_DISPATCHER_BACKPRESSURE_NS 1000000L
+
+static void sample_dispatcher_wait_quantum(const _Atomic unsigned int *shutdown)
+{
+    struct timespec ts = {.tv_sec = 0,
+                          .tv_nsec = SAMPLE_DISPATCHER_BACKPRESSURE_NS};
+    (void)shutdown;
+    nanosleep(&ts, NULL);
+}
+
+static int sample_dispatcher_shutdown_set(const _Atomic unsigned int *shutdown)
+{
+    if (!shutdown)
+        return 0;
+    return atomic_load_explicit(shutdown, memory_order_acquire) != 0u;
+}
+
+sample_block_t *sample_dispatcher_acquire_blocking(
+    sample_dispatcher_t *dispatcher,
+    const _Atomic unsigned int *shutdown)
+{
+    if (!dispatcher)
+        return NULL;
+
+    for (;;)
+    {
+        sample_block_t *block = sample_dispatcher_acquire_block(dispatcher);
+        if (block)
+            return block;
+        if (sample_dispatcher_shutdown_set(shutdown))
+            return NULL;
+        sample_dispatcher_wait_quantum(shutdown);
+    }
+}
+
+unsigned int sample_dispatcher_push_blocking(
+    sample_dispatcher_t *dispatcher,
+    sample_block_t *block,
+    const _Atomic unsigned int *shutdown)
+{
+    if (!dispatcher || !block)
+        return 0u;
+
+    for (;;)
+    {
+        if (sample_dispatcher_can_push(dispatcher))
+            return sample_dispatcher_push_block(dispatcher, block);
+        if (sample_dispatcher_shutdown_set(shutdown))
+            return 0u;
+        sample_dispatcher_wait_quantum(shutdown);
+    }
+}
+
+int sample_dispatcher_all_free(const sample_dispatcher_t *dispatcher)
+{
+    if (!dispatcher)
+        return 0;
+
+    for (unsigned int i = 0u; i < SAMPLE_DISPATCHER_BLOCK_CAPACITY; i++)
+    {
+        if (!sample_block_is_free(&dispatcher->blocks[i]))
+            return 0;
+    }
     return 1;
 }
 

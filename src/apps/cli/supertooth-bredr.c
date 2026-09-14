@@ -550,6 +550,11 @@ int main(int argc, char *argv[])
         session_dropped_blocks_breakdown(g_session, &drops);
         app_print_drop_breakdown(&drops);
         printf("  BR/EDR frames emitted: %lu\n", session_bredr_frame_count(g_session));
+        {
+            unsigned long bredr_dropped = 0ul;
+            session_collector_dropped(g_session, NULL, &bredr_dropped);
+            printf("  BR/EDR collector drops: %lu\n", bredr_dropped);
+        }
     }
     printf("\n");
     print_session_connections();

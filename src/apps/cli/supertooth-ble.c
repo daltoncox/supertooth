@@ -436,6 +436,11 @@ int main(int argc, char *argv[])
         session_ble_frame_counts(&g_session, &emitted, &confirmed);
         printf("  BLE frames emitted   : %lu\n", emitted);
         printf("  BLE frames confirmed : %lu\n", confirmed);
+        {
+            unsigned long ble_dropped = 0ul;
+            session_collector_dropped(&g_session, &ble_dropped, NULL);
+            printf("  BLE collector drops  : %lu\n", ble_dropped);
+        }
     }
 
     return 0;

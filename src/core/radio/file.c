@@ -69,11 +69,6 @@ static void file_sleep_until(uint64_t deadline_ns,
     }
 }
 
-static void file_sleep_ns(uint64_t ns, const _Atomic unsigned int *stop)
-{
-    file_sleep_until(file_now_ns() + ns, stop);
-}
-
 static void *file_radio_reader_thread(void *arg)
 {
     file_radio_t *radio = (file_radio_t *)arg;
@@ -140,27 +135,11 @@ static void *file_radio_reader_thread(void *arg)
 
             if (exhaustive)
             {
-                /* Backpressure instead of drops: this thread is the sole
-                 * producer, so waiting for a free block plus room in every
-                 * reader queue guarantees the acquire+push below delivers
-                 * everywhere. Consumers drain while we stall. */
-                block = NULL;
-                for (;;)
-                {
-                    if (atomic_load_explicit(&radio->stop_requested,
-                                             memory_order_acquire) != 0u)
-                        break;
-                    block = sample_dispatcher_acquire_block(radio->dispatcher);
-                    if (block &&
-                        sample_dispatcher_can_push(radio->dispatcher))
-                        break;
-                    if (block)
-                    {
-                        sample_block_release(block);
-                        block = NULL;
-                    }
-                    file_sleep_ns(1000000ull, &radio->stop_requested);
-                }
+                /* Backpressure instead of drops via the shared blocking
+                 * helpers (this thread is the sole producer, so the
+                 * wait-then-push is race-free and always delivers). */
+                block = sample_dispatcher_acquire_blocking(
+                    radio->dispatcher, &radio->stop_requested);
                 if (!block)
                     break; /* stop requested */
             }
@@ -197,8 +176,20 @@ static void *file_radio_reader_thread(void *arg)
             memcpy(block->samples, scratch + off, n * sizeof(float complex));
 
             __atomic_thread_fence(__ATOMIC_RELEASE);
-            sample_dispatcher_push_block(radio->dispatcher, block);
-            sample_block_release(block);
+            if (exhaustive)
+            {
+                sample_dispatcher_push_blocking(radio->dispatcher, block,
+                                                &radio->stop_requested);
+                sample_block_release(block);
+                if (atomic_load_explicit(&radio->stop_requested,
+                                         memory_order_acquire) != 0u)
+                    break;
+            }
+            else
+            {
+                sample_dispatcher_push_block(radio->dispatcher, block);
+                sample_block_release(block);
+            }
             off += n;
         }
     }
