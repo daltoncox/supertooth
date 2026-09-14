@@ -22,6 +22,9 @@ set(_supertooth_test_targets
     test_ble_data_codec
     test_ble_bitstream_decoder
     test_radio_list_devices
+    test_wav_io
+    test_file_device
+    test_dispatcher_backpressure
     test_channel_layout
     test_rssi_window
     test_rssi_tracker

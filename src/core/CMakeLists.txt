@@ -111,6 +111,8 @@ add_library(supertooth_core STATIC
     radio/radio_common.c radio/radio_common.h
     radio/sample_dispatcher.c radio/sample_dispatcher.h
     radio/hackrf.c radio/hackrf.h
+    radio/wav.c radio/wav.h
+    radio/file.c radio/file.h
     service/ble_channel_processor.c service/ble_channel_processor.h
     service/bredr_channel_processor.c service/bredr_channel_processor.h
     service/channelizer_thread.c service/channelizer_thread.h

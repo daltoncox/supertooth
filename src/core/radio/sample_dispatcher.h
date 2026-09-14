@@ -51,6 +51,16 @@ unsigned int sample_dispatcher_push_block(sample_dispatcher_t *dispatcher,
                                            sample_block_t *block);
 
 /**
+ * 1 when every reader's queue currently has room for another block, 0 when
+ * any reader is full (a push now would drop for that reader) or @p
+ * dispatcher is NULL. Sole-producer sources (file replay) use this to apply
+ * backpressure instead of outrunning consumers; with a single producer,
+ * check-then-push is race-free because only our own push can fill a queue
+ * observed non-full.
+ */
+int sample_dispatcher_can_push(sample_dispatcher_t *dispatcher);
+
+/**
  * Total dropped blocks across this dispatcher: blocks the pool could not
  * acquire plus blocks every reader's queue rejected because it was full.
  * Both are real drops the capture loop could not keep up with.

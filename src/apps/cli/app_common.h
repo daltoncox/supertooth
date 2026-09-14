@@ -28,6 +28,8 @@ enum
     APP_OPT_DEBUG = 0x100,
     APP_OPT_ENFORCE_CRC,
     APP_OPT_AC_ERRORS,
+    APP_OPT_RECORD,
+    APP_OPT_EXHAUSTIVE,
 };
 
 /* Parsed "<type>:<id>" device spec, e.g. "hackrf:b25062dc22113a0b".
@@ -79,6 +81,16 @@ int app_validate_device_spec(const char *argv0, const app_device_spec_t *spec);
  * Print the `--device` usage line for `print_usage` blocks.
  */
 void app_print_device_usage_line(void);
+
+/**
+ * Print the `--record` usage line for `print_usage` blocks.
+ */
+void app_print_record_usage_line(void);
+
+/**
+ * Print the `--exhaustive` usage line for `print_usage` blocks.
+ */
+void app_print_exhaustive_usage_line(void);
 
 /**
  * Print a per-pool breakdown of dropped blocks from a session summary

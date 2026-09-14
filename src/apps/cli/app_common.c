@@ -171,6 +171,20 @@ void app_print_device_usage_line(void)
             "-d, --device [<type>:<id>]");
 }
 
+void app_print_record_usage_line(void)
+{
+    fprintf(stderr, "  %-30s Record raw IQ to a WAV file (record-only, no decode)\n",
+            "--record PATH");
+    fprintf(stderr, "  %-30s Replay a capture: -d file:/path/to/cap.wav\n",
+            "");
+}
+
+void app_print_exhaustive_usage_line(void)
+{
+    fprintf(stderr, "  %-30s Replay as fast as consumers allow, never drop (default: realtime)\n",
+            "--exhaustive");
+}
+
 void app_print_drop_breakdown(const session_drop_breakdown_t *b)
 {
     if (!b)

@@ -13,6 +13,8 @@ add_library(cli_common STATIC
     app_common.h
     app_device_view.c
     app_device_view.h
+    app_record.c
+    app_record.h
     app_summary_view.c
     app_summary_view.h
 )

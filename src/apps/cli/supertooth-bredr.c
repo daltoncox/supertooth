@@ -8,7 +8,9 @@
 #include <getopt.h>
 #include "app_common.h"
 #include "app_device_view.h"
+#include "app_record.h"
 #include "app_summary_view.h"
+#include "file.h"
 #include "version.h"
 #include "bredr_display.h"
 #include "radio_common.h"
@@ -202,7 +204,8 @@ static void print_usage(const char *argv0)
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|devices] [-l|--lap LAP] "
             "[-c|--channels N] [-b|--bottom-channel CH] "
-            "[-d|--device [<type>:<id>]] [--ac-errors N] [--debug]\n", argv0);
+            "[-d|--device [<type>:<id>]] [--ac-errors N] [--debug] "
+            "[--record PATH]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
     fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n", "--ac-errors N");
@@ -215,6 +218,8 @@ static void print_usage(const char *argv0)
     app_print_device_usage_line();
     fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
     fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "--debug");
+    app_print_record_usage_line();
+    app_print_exhaustive_usage_line();
 }
 
 static void handle_bredr_packet(const bredr_event_t *event,
@@ -246,6 +251,8 @@ int main(int argc, char *argv[])
         {"bottom-channel", required_argument, NULL, 'b'},
         {"device",         optional_argument, NULL, 'd'},
         {"ac-errors",      required_argument, NULL, APP_OPT_AC_ERRORS},
+        {"record",         required_argument, NULL, APP_OPT_RECORD},
+        {"exhaustive",     no_argument,       NULL, APP_OPT_EXHAUSTIVE},
         {"version",        no_argument,       NULL, 'V'},
         {"debug",          no_argument,       NULL, APP_OPT_DEBUG},
         {"help",           no_argument,       NULL, 'h'},
@@ -254,6 +261,8 @@ int main(int argc, char *argv[])
 
     int g_list_devices = 0;
     const char *g_device_spec = NULL;
+    const char *g_record_path = NULL;
+    int g_exhaustive = 0;
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
 
@@ -323,6 +332,12 @@ int main(int argc, char *argv[])
                 break;
             case APP_OPT_DEBUG:
                 g_debug = 1;
+                break;
+            case APP_OPT_RECORD:
+                g_record_path = optarg;
+                break;
+            case APP_OPT_EXHAUSTIVE:
+                g_exhaustive = 1;
                 break;
             case APP_OPT_AC_ERRORS:
             {
@@ -394,6 +409,44 @@ int main(int argc, char *argv[])
         app_output_mode_name(g_output_mode, s_output_modes,
                              sizeof(s_output_modes) / sizeof(s_output_modes[0]));
     unsigned int sample_rate = (g_num_bredr_channels == 2u) ? 4000000u : g_num_bredr_channels * 1000000u;
+    double tune_lo_mhz = 2402.0 + (double)g_bottom_bredr_channel +
+                         ((double)g_num_bredr_channels - 1.0) / 2.0;
+    uint64_t tune_lo_hz = (uint64_t)(tune_lo_mhz * 1e6);
+    int is_file_input = g_device_selected &&
+                        g_device_spec_parsed.type == RADIO_DEVICE_FILE;
+
+    if (g_record_path && is_file_input)
+    {
+        fprintf(stderr, "--record cannot be used with file replay input.\n");
+        return EXIT_FAILURE;
+    }
+    if (g_exhaustive && !is_file_input)
+    {
+        fprintf(stderr, "--exhaustive is only meaningful with file replay input (-d file:...).\n");
+        return EXIT_FAILURE;
+    }
+    if (g_record_path)
+    {
+        app_record_config_t rcfg = {
+            .device_type = g_device_spec_parsed.type,
+            .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
+            .lo_freq_hz = (uint32_t)tune_lo_hz,
+            .sample_rate_hz = sample_rate,
+            .debug = g_debug,
+        };
+        return app_record_run(&rcfg, g_record_path) == 0 ? EXIT_SUCCESS
+                                                         : EXIT_FAILURE;
+    }
+
+    uint64_t file_center_hz = 0u;
+    uint32_t file_rate_hz = 0u;
+    if (is_file_input)
+    {
+        if (file_radio_check_compatible(g_device_spec_parsed.id, sample_rate,
+                                        &file_rate_hz,
+                                        &file_center_hz) != 0)
+            return EXIT_FAILURE;
+    }
     unsigned int decim_factor = sample_rate / 2000000u;
     printf("Supertooth RX (BR/EDR)\n");
     printf("======================\n");
@@ -413,6 +466,19 @@ int main(int argc, char *argv[])
                g_device_spec_parsed.id);
     else
         printf("Device      : (default)\n");
+    if (is_file_input)
+    {
+        printf("Replay      : %s, single pass, %u Hz",
+               g_exhaustive ? "exhaustive" : "realtime", file_rate_hz);
+        if (file_center_hz != 0u)
+            printf(", capture LO %llu Hz", (unsigned long long)file_center_hz);
+        else
+            printf(" (capture LO unknown: no auxi/filename tag)");
+        printf("\n");
+        if (file_center_hz != 0u && file_center_hz != tune_lo_hz)
+            printf("Warning     : tuned LO %.1f MHz differs from capture LO %.3f MHz\n",
+                   tune_lo_mhz, (double)file_center_hz / 1e6);
+    }
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
     printf("Press Ctrl+C to stop.\n\n");
 
@@ -420,6 +486,7 @@ int main(int argc, char *argv[])
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
+        .file_exhaustive = g_exhaustive,
     };
     g_session = (session_t *)calloc(1, sizeof(*g_session));
     if (!g_session)

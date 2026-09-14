@@ -1,9 +1,12 @@
 #include "radio_common.h"
 
+#include "file.h"
 #include "hackrf.h"
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 struct radio_device
 {
@@ -17,6 +20,8 @@ const char *radio_device_type_name(radio_device_type_t type)
     {
     case RADIO_DEVICE_HACKRF:
         return "hackrf";
+    case RADIO_DEVICE_FILE:
+        return "file";
     default:
         return NULL;
     }
@@ -47,6 +52,11 @@ int radio_open(radio_device_t **out_device,
         result = hackrf_radio_open(&device->impl, device_id, dispatcher,
                                    debug_enabled);
         break;
+    case RADIO_DEVICE_FILE:
+        /* For file replay the "device id" is the capture path. */
+        result = file_radio_open(&device->impl, device_id, dispatcher,
+                                 debug_enabled);
+        break;
     default:
         break;
     }
@@ -70,6 +80,8 @@ int radio_configure(radio_device_t *device, const radio_stream_config_t *config)
     {
     case RADIO_DEVICE_HACKRF:
         return hackrf_radio_configure(device->impl, config);
+    case RADIO_DEVICE_FILE:
+        return file_radio_configure(device->impl, config);
     default:
         return -1;
     }
@@ -84,6 +96,8 @@ int radio_start_rx(radio_device_t *device)
     {
     case RADIO_DEVICE_HACKRF:
         return hackrf_radio_start_rx(device->impl);
+    case RADIO_DEVICE_FILE:
+        return file_radio_start_rx(device->impl);
     default:
         return -1;
     }
@@ -98,6 +112,8 @@ int radio_stop_rx(radio_device_t *device)
     {
     case RADIO_DEVICE_HACKRF:
         return hackrf_radio_stop_rx(device->impl);
+    case RADIO_DEVICE_FILE:
+        return file_radio_stop_rx(device->impl);
     default:
         return -1;
     }
@@ -113,11 +129,45 @@ void radio_close(radio_device_t *device)
     case RADIO_DEVICE_HACKRF:
         hackrf_radio_close(device->impl);
         break;
+    case RADIO_DEVICE_FILE:
+        file_radio_close(device->impl);
+        break;
     default:
         break;
     }
 
     free(device);
+}
+
+int radio_is_finished(radio_device_t *device)
+{
+    if (!device)
+        return 0;
+
+    switch (device->device_type)
+    {
+    case RADIO_DEVICE_FILE:
+        return file_radio_is_finished(device->impl);
+    case RADIO_DEVICE_HACKRF:
+    default:
+        return 0;
+    }
+}
+
+void radio_set_replay_mode(radio_device_t *device, int exhaustive)
+{
+    if (!device)
+        return;
+
+    switch (device->device_type)
+    {
+    case RADIO_DEVICE_FILE:
+        file_radio_set_exhaustive(device->impl, exhaustive);
+        break;
+    case RADIO_DEVICE_HACKRF:
+    default:
+        break;
+    }
 }
 
 int radio_get_max_sample_rate_for_type(radio_device_type_t type,
@@ -130,6 +180,10 @@ int radio_get_max_sample_rate_for_type(radio_device_type_t type,
     {
     case RADIO_DEVICE_HACKRF:
         return hackrf_radio_get_max_sample_rate(NULL, out_rate_hz);
+    case RADIO_DEVICE_FILE:
+        /* Replay of an existing capture is not bound by ADC limits. */
+        *out_rate_hz = RADIO_MAX_SAMPLE_RATE_HZ;
+        return RADIO_SUCCESS;
     default:
         return -1;
     }
@@ -149,6 +203,9 @@ int radio_list_devices(radio_device_type_t device_type,
     {
     case RADIO_DEVICE_HACKRF:
         return hackrf_list_devices(out_identifiers, out_count);
+    case RADIO_DEVICE_FILE:
+        /* Captures are user paths, not enumerable hardware. */
+        return RADIO_SUCCESS;
     default:
         return -1;
     }
@@ -168,6 +225,18 @@ void radio_free_device_list(char ***identifiers, size_t count)
 
 int radio_device_exists(radio_device_type_t device_type, const char *device_id)
 {
+    /* For file replay "existence" is just path readability. */
+    if (device_type == RADIO_DEVICE_FILE)
+    {
+        struct stat st;
+        if (!device_id || device_id[0] == '\0')
+            return RADIO_DEVICE_NOT_FOUND;
+        if (stat(device_id, &st) == 0 && S_ISREG(st.st_mode) &&
+            access(device_id, R_OK) == 0)
+            return RADIO_SUCCESS;
+        return RADIO_DEVICE_NOT_FOUND;
+    }
+
     char **identifiers = NULL;
     size_t count = 0u;
     int result = radio_list_devices(device_type, &identifiers, &count);

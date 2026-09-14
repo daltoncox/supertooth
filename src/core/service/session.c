@@ -455,6 +455,11 @@ int session_run(session_t *session)
         return result;
     }
 
+    /* File replay mode (realtime default, exhaustive on request); no-op for
+     * live radios. Applied before configure/start so the reader thread
+     * observes it from its first block. */
+    radio_set_replay_mode(session->device, session->config.file_exhaustive);
+
     uint32_t lna  = session->bredr_enabled ? SESSION_BREDR_LNA_GAIN : SESSION_BLE_LNA_GAIN;
     uint32_t vga  = session->bredr_enabled ? SESSION_BREDR_VGA_GAIN : SESSION_BLE_VGA_GAIN;
 
@@ -481,6 +486,10 @@ int session_run(session_t *session)
          * absolute time, so we must not feed it a CLOCK_REALTIME timestamp. */
         struct timespec ts = { .tv_sec = 0, .tv_nsec = 50000000L };
         nanosleep(&ts, NULL);
+        /* Single-pass file replay ends here: the backend has exhausted its
+         * capture, so exit the loop and run the normal teardown + summary. */
+        if (radio_is_finished(session->device))
+            break;
     }
     /* The capture loop has ended; notify the owner (UI) now, before the
      * potentially blocking radio teardown below, so the UI can flip to the

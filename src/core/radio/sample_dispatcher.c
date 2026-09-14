@@ -230,6 +230,27 @@ unsigned int sample_dispatcher_push_block(sample_dispatcher_t *dispatcher,
     return delivered;
 }
 
+int sample_dispatcher_can_push(sample_dispatcher_t *dispatcher)
+{
+    if (!dispatcher)
+        return 0;
+
+    for (unsigned int i = 0u; i < dispatcher->reader_count; i++)
+    {
+        sample_reader_t *reader = dispatcher->readers[i];
+        int full;
+
+        pthread_mutex_lock(&reader->mutex);
+        full = (reader->count == SAMPLE_READER_QUEUE_CAPACITY);
+        pthread_mutex_unlock(&reader->mutex);
+
+        if (full)
+            return 0;
+    }
+
+    return 1;
+}
+
 unsigned long sample_dispatcher_total_dropped(const sample_dispatcher_t *dispatcher)
 {
     if (!dispatcher)

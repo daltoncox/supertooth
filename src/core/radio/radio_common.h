@@ -25,6 +25,7 @@ typedef struct
 typedef enum
 {
     RADIO_DEVICE_HACKRF = 0,
+    RADIO_DEVICE_FILE = 1,
     RADIO_DEVICE_TYPE_COUNT,
 } radio_device_type_t;
 
@@ -54,6 +55,21 @@ int radio_configure(radio_device_t *device, const radio_stream_config_t *config)
 int radio_start_rx(radio_device_t *device);
 int radio_stop_rx(radio_device_t *device);
 void radio_close(radio_device_t *device);
+
+/**
+ * 1 when a file-backed device has exhausted its capture (single-pass replay
+ * is done), 0 while samples are still flowing or for live radios. Lets the
+ * session run loop exit cleanly at EOF without knowing backend types.
+ */
+int radio_is_finished(radio_device_t *device);
+
+/**
+ * Select file-replay behavior (no-op for live radios):
+ *   exhaustive != 0 → backpressure, never drop for pacing reasons;
+ *   exhaustive == 0 → realtime wall-clock pacing (default).
+ * Must be called after radio_open() and before radio_start_rx().
+ */
+void radio_set_replay_mode(radio_device_t *device, int exhaustive);
 
 /**
  * Maximum sample rate (Hz) a device of @p type can sustain. Used by callers

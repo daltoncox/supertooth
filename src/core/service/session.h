@@ -48,6 +48,11 @@ typedef struct {
     radio_device_type_t device_type;
     const char *device_id;
     int debug;
+
+    /* File replay only: 1 = exhaustive (backpressure, never drop for pacing
+     * reasons), 0 = realtime wall-clock pacing (default). Ignored for live
+     * radios. */
+    int file_exhaustive;
 } session_config_t;
 
 typedef struct {
