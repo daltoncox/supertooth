@@ -5,6 +5,8 @@
 
 #include "ble_registry.h"
 
+#include "bt_assigned_numbers.h"
+
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -410,6 +412,8 @@ static void device_ingest_locked(ble_registry_t *r, const ble_advertiser_event_t
         snprintf(d->name, sizeof(d->name), "%s", ev->name);
     if (ev->manufacturer && ev->manufacturer[0])
         snprintf(d->manufacturer, sizeof(d->manufacturer), "%s", ev->manufacturer);
+    if (ev->has_adv_info)
+        ble_adv_info_merge(&d->adv_info, &ev->adv_info);
 
     if (ev->is_connect_ind && ev->crc_ok)
     {
@@ -538,6 +542,10 @@ int ble_registry_submit(ble_registry_t *r, const ble_event_t *event,
                                      manuf, sizeof(manuf));
             ev.name = name[0] ? name : NULL;
             ev.manufacturer = manuf[0] ? manuf : NULL;
+            if (adv_data && adv_len) {
+                ble_adv_parse_info(adv_data, adv_len, &ev.adv_info);
+                ev.has_adv_info = 1;
+            }
 
             ev.rssi_db = event->meta.rssi_dbr;
             ev.rssi_valid = !isnan((double)event->meta.rssi_dbr);
@@ -640,6 +648,8 @@ int ble_registry_add_device(ble_registry_t *r, const ble_device_obs_t *obs)
         snprintf(d->name, sizeof(d->name), "%s", obs->name);
     if (obs->manufacturer && obs->manufacturer[0])
         snprintf(d->manufacturer, sizeof(d->manufacturer), "%s", obs->manufacturer);
+    if (obs->adv_info)
+        ble_adv_info_merge(&d->adv_info, obs->adv_info);
     pthread_mutex_unlock(&r->lock);
     return 0;
 }
@@ -710,6 +720,18 @@ size_t ble_registry_get_devices(const ble_registry_t *r,
         snprintf(s->addr_type, sizeof(s->addr_type), "%s", d->addr_type);
         snprintf(s->name, sizeof(s->name), "%s", d->name);
         snprintf(s->manufacturer, sizeof(s->manufacturer), "%s", d->manufacturer);
+        ble_adv_info_format_services(&d->adv_info, s->services, sizeof(s->services));
+        if (d->adv_info.has_appearance)
+            bt_assigned_appearance_format(d->adv_info.appearance,
+                                          s->appearance, sizeof(s->appearance));
+        if (d->adv_info.has_flags)
+            ble_adv_flags_format(d->adv_info.flags, s->flags, sizeof(s->flags));
+        if (d->adv_info.has_cod)
+            bt_cod_format(d->adv_info.cod, s->device_class, sizeof(s->device_class));
+        if (d->adv_info.has_tx_power) {
+            s->tx_power = d->adv_info.tx_power;
+            s->tx_power_valid = 1;
+        }
     }
     pthread_mutex_unlock((pthread_mutex_t *)&r->lock);
     return n;

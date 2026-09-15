@@ -146,6 +146,65 @@ void ble_adv_parse_name_manuf(const uint8_t *data, unsigned int len,
                               char *name_out, size_t name_cap,
                               char *manuf_out, size_t manuf_cap);
 
+/* ---------------------------------------------------------------------------
+ * Rich advertising-data info (services, appearance, CoD, flags, ...)
+ * ---------------------------------------------------------------------------*/
+
+/** Max 16/32-bit service UUIDs merged per device (lists + solicitation + data). */
+#define BLE_ADV_MAX_SERVICES 16u
+/** Max 128-bit service UUIDs tracked per device (beyond count, first kept). */
+#define BLE_ADV_MAX_SERVICES_128 4u
+
+/** Parsed advertising-data summary for one packet (mergeable across packets). */
+typedef struct
+{
+    /* 16-bit service-class UUIDs (AD 0x02/0x03 + 16-bit solicitation 0x14 +
+     * 16-bit service-data 0x16 + BT-base aliases found in 128-bit lists). */
+    uint16_t service_uuids[BLE_ADV_MAX_SERVICES];
+    uint8_t service_count;
+    uint8_t has_complete_list;
+    uint8_t has_incomplete_list;
+    /* 32-bit service-class UUIDs (AD 0x04/0x05 + 0x1F/0x20). */
+    uint32_t service_uuids32[BLE_ADV_MAX_SERVICES];
+    uint8_t service32_count;
+    /* 128-bit (non-BT-base) service UUIDs: count + first entries for display. */
+    uint8_t uuid128[BLE_ADV_MAX_SERVICES_128][16];
+    uint8_t uuid128_count;
+    unsigned int uuid128_total;
+    uint8_t has_service_data;
+    uint8_t has_solicitation;
+
+    uint8_t flags;
+    uint8_t has_flags;
+    int8_t tx_power;
+    uint8_t has_tx_power;
+    uint16_t appearance;
+    uint8_t has_appearance;
+    uint32_t cod;               /**< 24-bit Class of Device (AD 0x0D). */
+    uint8_t has_cod;
+    uint16_t conn_interval_min, conn_interval_max;
+    uint8_t has_conn_interval;
+    uint16_t adv_interval;
+    uint8_t has_adv_interval;
+    char uri[64];
+    uint8_t le_role;
+    uint8_t has_le_role;
+} ble_adv_info_t;
+
+/** Parse one packet's advertising data into @p out (zeroed first). */
+void ble_adv_parse_info(const uint8_t *data, unsigned int len,
+                        ble_adv_info_t *out);
+
+/** Merge @p src into @p dst: union service UUIDs, fill unset scalar fields. */
+void ble_adv_info_merge(ble_adv_info_t *dst, const ble_adv_info_t *src);
+
+/** "Heart Rate (0x180D), Battery (0x180F)" or "" when none. */
+void ble_adv_info_format_services(const ble_adv_info_t *info,
+                                  char *out, size_t cap);
+
+/** "GeneralDisc, BR/EDR-NotSupp" or "" when no flags seen. */
+void ble_adv_flags_format(uint8_t flags, char *out, size_t cap);
+
 
 /** Decoded data-channel (LL) PDU: header fields + raw payload. The payload
  * includes the 4-byte MIC when the link is encrypted (not parsed). */

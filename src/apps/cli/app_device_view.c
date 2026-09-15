@@ -45,6 +45,11 @@ typedef struct
     char    device[DEVICE_LABEL_MAX];       /* core label (Central/LT_ADDR N/...) */
     char    addr_type[DEVICE_ADDRTYPE_MAX];
     char    name[DEVICE_NAME_MAX];
+    char    manufacturer[DEVICE_MANUF_MAX];
+    char    services[DEVICE_SERVICES_MAX];
+    char    appearance[DEVICE_APPEARANCE_MAX];
+    char    flags[DEVICE_FLAGS_MAX];
+    char    device_class[DEVICE_COD_MAX];
     uint64_t id;
     int     kind;
     float   rssi_db;
@@ -257,6 +262,11 @@ static size_t collect(app_device_view_t *v, dev_entity_t *out)
         snprintf(e->device, sizeof(e->device), "%s", ld[i].label);
         snprintf(e->addr_type, sizeof(e->addr_type), "%s", ld[i].addr_type);
         snprintf(e->name, sizeof(e->name), "%s", ld[i].name);
+        snprintf(e->manufacturer, sizeof(e->manufacturer), "%s", ld[i].manufacturer);
+        snprintf(e->services, sizeof(e->services), "%s", ld[i].services);
+        snprintf(e->appearance, sizeof(e->appearance), "%s", ld[i].appearance);
+        snprintf(e->flags, sizeof(e->flags), "%s", ld[i].flags);
+        snprintf(e->device_class, sizeof(e->device_class), "%s", ld[i].device_class);
         e->rssi_valid = ld[i].rssi_valid; e->rssi_db = ld[i].rssi_db;
         e->first_seen_ms = ld[i].first_seen_ms;
         e->last_seen_ms = ld[i].last_seen_ms;
@@ -296,23 +306,39 @@ static size_t print_table(app_device_view_t *v, dev_entity_t *e, size_t n)
     (void)v;
     size_t lines = 0u;
 
-    printf("%-8s %-7s %-13s %-24s %-12s %-12s %-8s %-9s\n",
-           "RSSI", "Proto", "Type", "Identifier", "First", "Last", "Pkts", "Pkts/s");
+    printf("%-8s %-7s %-13s %-24s %-30s %-12s %-12s %-8s %-9s\n",
+           "RSSI", "Proto", "Type", "Identifier", "Services", "First", "Last", "Pkts", "Pkts/s");
     lines++;
-    printf("-------- ------- ------------- ------------------------ ------------ ------------ -------- ---------\n");
+    printf("-------- ------- ------------- ------------------------ ------------------------------ ------------ ------------ -------- ---------\n");
     lines++;
 
     for (size_t i = 0; i < n; i++)
     {
-        char rssi[16], first[16], last[16], idisp[25];
+        char rssi[16], first[16], last[16], idisp[25], sdisp[31];
         fmt_rssi(e[i].rssi_valid, e[i].rssi_db, rssi, sizeof(rssi));
         fmt_ts(e[i].first_seen_ms, first, sizeof(first));
         fmt_ts(e[i].last_seen_ms, last, sizeof(last));
         snprintf(idisp, sizeof(idisp), "%s", e[i].identifier);
-        printf("%-8s %-7s %-13s %-24s %-12s %-12s %-8lu %-9u\n",
-               rssi, e[i].proto, e[i].type, idisp, first, last,
+        snprintf(sdisp, sizeof(sdisp), "%s", e[i].services);
+        printf("%-8s %-7s %-13s %-24s %-30s %-12s %-12s %-8lu %-9u\n",
+               rssi, e[i].proto, e[i].type, idisp, sdisp, first, last,
                e[i].total_packets, e[i].packet_rate);
         lines++;
+        /* Extra detail line for LE advertisers carrying appearance /
+         * flags / class-of-device / manufacturer info. */
+        if (strcmp(e[i].proto, "LE") == 0 &&
+            (e[i].appearance[0] || e[i].flags[0] ||
+             e[i].device_class[0] || e[i].manufacturer[0]))
+        {
+            char extra[256];
+            snprintf(extra, sizeof(extra), "         appearance=%s flags=%s class=%s manuf=%s",
+                     e[i].appearance[0] ? e[i].appearance : "--",
+                     e[i].flags[0] ? e[i].flags : "--",
+                     e[i].device_class[0] ? e[i].device_class : "--",
+                     e[i].manufacturer[0] ? e[i].manufacturer : "--");
+            printf("%s\n", extra);
+            lines++;
+        }
     }
     if (n == 0u)
     {

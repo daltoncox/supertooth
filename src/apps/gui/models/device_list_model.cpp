@@ -91,6 +91,13 @@ void DeviceListModel::setRows(const QVariantList &rows)
         r.addrType = m.value(QStringLiteral("addrType")).toString();
         r.displayName = m.value(QStringLiteral("displayName")).toString();
         r.manufacturer = m.value(QStringLiteral("manufacturer")).toString();
+        r.services = m.value(QStringLiteral("services")).toString();
+        r.appearance = m.value(QStringLiteral("appearance")).toString();
+        r.flags = m.value(QStringLiteral("flags")).toString();
+        r.deviceClass = m.value(QStringLiteral("deviceClass")).toString();
+        const QVariant txp = m.value(QStringLiteral("txPower"));
+        r.txPowerValid = txp.isValid() ? 1 : 0;
+        r.txPower = txp.isValid() ? txp.toInt() : 0;
         r.rssiValid = m.value(QStringLiteral("rssiValid")).toBool() ? 1 : 0;
         r.rssiDb = r.rssiValid
                        ? m.value(QStringLiteral("rssiDb")).toDouble()
@@ -224,6 +231,17 @@ QVariantList DeviceListModel::detailFor(int index) const
         add(QStringLiteral("Device Name"), r.displayName);
     if (!r.manufacturer.isEmpty())
         add(QStringLiteral("Manufacturer"), r.manufacturer);
+    if (!r.services.isEmpty())
+        add(QStringLiteral("Services"), r.services);
+    if (!r.appearance.isEmpty())
+        add(QStringLiteral("Appearance"), r.appearance);
+    if (!r.flags.isEmpty())
+        add(QStringLiteral("Flags"), r.flags);
+    if (!r.deviceClass.isEmpty())
+        add(QStringLiteral("Class of Device"), r.deviceClass);
+    if (r.txPowerValid)
+        add(QStringLiteral("Tx Power"),
+            QString::number(r.txPower) + QStringLiteral(" dBm"));
     add(QStringLiteral("RSSI (1s avg)"),
         r.rssiValid ? QString::number(r.rssiDb, 'f', 1) + QStringLiteral(" dBm")
                     : QStringLiteral("--"));

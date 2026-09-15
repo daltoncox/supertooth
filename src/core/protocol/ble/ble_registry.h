@@ -90,6 +90,7 @@ typedef struct {
     char addr_type[DEVICE_ADDRTYPE_MAX];
     char name[DEVICE_NAME_MAX];
     char manufacturer[DEVICE_MANUF_MAX];
+    ble_adv_info_t adv_info;    /**< merged advertised services/caps. */
     rssi_tracker_t rssi;
     uint64_t first_seen_ms, last_seen_ms;
     unsigned long total_packets;
@@ -103,6 +104,7 @@ typedef struct {
     const char *addr_type;
     const char *name;
     const char *manufacturer;
+    const ble_adv_info_t *adv_info; /**< optional merged adv caps (NULL if none). */
     float rssi_db;
     int rssi_valid;
 } ble_device_obs_t;
@@ -113,6 +115,8 @@ typedef struct {
     const char *addr_type;
     const char *name;
     const char *manufacturer;
+    ble_adv_info_t adv_info;
+    int has_adv_info;
     float rssi_db;
     int rssi_valid;
     int is_connect_ind;

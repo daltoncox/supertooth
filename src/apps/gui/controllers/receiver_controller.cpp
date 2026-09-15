@@ -312,6 +312,11 @@ void ReceiverController::pollDevices()
         m.insert(QStringLiteral("addrType"), QString::fromUtf8(e->addr_type));
         m.insert(QStringLiteral("displayName"), QString::fromUtf8(e->name));
         m.insert(QStringLiteral("manufacturer"), QString::fromUtf8(e->manufacturer));
+        m.insert(QStringLiteral("services"), QString::fromUtf8(e->services));
+        m.insert(QStringLiteral("appearance"), QString::fromUtf8(e->appearance));
+        m.insert(QStringLiteral("flags"), QString::fromUtf8(e->flags));
+        m.insert(QStringLiteral("deviceClass"), QString::fromUtf8(e->device_class));
+        m.insert(QStringLiteral("txPower"), e->tx_power_valid ? QVariant::fromValue((int)e->tx_power) : QVariant());
         m.insert(QStringLiteral("rssiDb"), (double)e->rssi_db);
         m.insert(QStringLiteral("rssiValid"), e->rssi_valid ? true : false);
         m.insert(QStringLiteral("firstSeenMs"), (qlonglong)e->first_seen_ms);

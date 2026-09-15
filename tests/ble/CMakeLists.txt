@@ -33,3 +33,13 @@ target_link_libraries(test_ble_bitstream_decoder
 )
 
 add_test(NAME test_ble_bitstream_decoder COMMAND test_ble_bitstream_decoder)
+
+add_executable(test_ble_adv_info
+    test_ble_adv_info.c
+)
+
+target_link_libraries(test_ble_adv_info
+    supertooth_core
+)
+
+add_test(NAME test_ble_adv_info COMMAND test_ble_adv_info)

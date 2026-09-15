@@ -289,6 +289,94 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
             add_detail(row, "AD Structure", "type=0x%02X (%s) len=%u data=%s",
                        ad_type, bt_assigned_ad_type_name(ad_type), ad_l, hex);
 
+            /* Service UUID lists (0x02-0x07): resolve each UUID to its
+             * assigned name so the Frame Info pane reads as words. */
+            if ((ad_type >= 0x02u && ad_type <= 0x07u) ||
+                ad_type == 0x14u || ad_type == 0x15u || ad_type == 0x1Fu)
+            {
+                unsigned int uuid_len = 2u;
+                if (ad_type == 0x04u || ad_type == 0x05u || ad_type == 0x1Fu)
+                    uuid_len = 4u;
+                else if (ad_type == 0x06u || ad_type == 0x07u || ad_type == 0x15u)
+                    uuid_len = 16u;
+                for (unsigned int j = vb; j + uuid_len <= ve && row->detail_count < BACKEND_DETAIL_MAX; j += uuid_len)
+                {
+                    if (uuid_len == 2u)
+                    {
+                        uint16_t uuid = (uint16_t)ad[j] | ((uint16_t)ad[j + 1u] << 8u);
+                        const char *nm = bt_assigned_service_uuid_name(uuid);
+                        add_detail(row, "Service", "%s (0x%04X)", nm ? nm : "Unknown", uuid);
+                    }
+                    else if (uuid_len == 4u)
+                    {
+                        uint32_t uuid = (uint32_t)ad[j] | ((uint32_t)ad[j + 1u] << 8u) |
+                                        ((uint32_t)ad[j + 2u] << 16u) | ((uint32_t)ad[j + 3u] << 24u);
+                        add_detail(row, "Service", "0x%08X", uuid);
+                    }
+                    else
+                    {
+                        char uuid_str[40];
+                        snprintf(uuid_str, sizeof(uuid_str),
+                                 "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                                 ad[j+15u], ad[j+14u], ad[j+13u], ad[j+12u],
+                                 ad[j+11u], ad[j+10u], ad[j+9u], ad[j+8u],
+                                 ad[j+7u], ad[j+6u], ad[j+5u], ad[j+4u],
+                                 ad[j+3u], ad[j+2u], ad[j+1u], ad[j]);
+                        add_detail(row, "Service", "%s", uuid_str);
+                    }
+                }
+            }
+
+            /* AD type 0x01 (Flags): decode the bitfield to words. */
+            if (ad_type == 0x01u && (ve - vb) >= 1u)
+            {
+                char flags[BACKEND_FLAGS_TEXT_LEN];
+                ble_adv_flags_format(ad[vb], flags, sizeof(flags));
+                add_detail(row, "Flags", "%s (0x%02X)", flags, ad[vb]);
+            }
+
+            /* AD type 0x0A (Tx Power Level): signed dBm. */
+            if (ad_type == 0x0Au && (ve - vb) >= 1u)
+                add_detail(row, "Tx Power", "%d dBm", (int)(int8_t)ad[vb]);
+
+            /* AD type 0x19 (Appearance): category [+ subcategory]. */
+            if (ad_type == 0x19u && (ve - vb) >= 2u)
+            {
+                uint16_t app = (uint16_t)ad[vb] | ((uint16_t)ad[vb + 1u] << 8u);
+                char app_str[BACKEND_APPEARANCE_TEXT_LEN];
+                bt_assigned_appearance_format(app, app_str, sizeof(app_str));
+                add_detail(row, "Appearance", "%s", app_str);
+            }
+
+            /* AD type 0x0D (Class of Device): major service classes +
+             * major/minor device class. */
+            if (ad_type == 0x0Du && (ve - vb) >= 3u)
+            {
+                uint32_t cod = (uint32_t)ad[vb] | ((uint32_t)ad[vb + 1u] << 8u) |
+                               ((uint32_t)ad[vb + 2u] << 16u);
+                char cod_str[BACKEND_COD_TEXT_LEN];
+                bt_cod_format(cod, cod_str, sizeof(cod_str));
+                add_detail(row, "Class of Device", "%s (0x%06X)", cod_str, cod);
+            }
+
+            /* Service Data (0x16/0x20/0x21): name the UUID being annotated. */
+            if ((ad_type == 0x16u && (ve - vb) >= 2u) ||
+                (ad_type == 0x20u && (ve - vb) >= 4u))
+            {
+                if (ad_type == 0x16u)
+                {
+                    uint16_t uuid = (uint16_t)ad[vb] | ((uint16_t)ad[vb + 1u] << 8u);
+                    add_detail(row, "Service Data", "%s (0x%04X)",
+                               bt_assigned_service_uuid_name(uuid), uuid);
+                }
+                else
+                {
+                    uint32_t uuid = (uint32_t)ad[vb] | ((uint32_t)ad[vb + 1u] << 8u) |
+                                    ((uint32_t)ad[vb + 2u] << 16u) | ((uint32_t)ad[vb + 3u] << 24u);
+                    add_detail(row, "Service Data", "0x%08X", uuid);
+                }
+            }
+
             /* AD type 0x08 (Shortened Local Name) or 0x09 (Complete Local
              * Name) carry the advertiser's local name verbatim as their
              * payload (typically ASCII / UTF-8, no NUL terminator). Surface
@@ -1016,6 +1104,12 @@ size_t backend_session_poll_entities(backend_session_t *session,
         snprintf(e->name, sizeof(e->name), "%s", ld[i].name);
         snprintf(e->manufacturer, sizeof(e->manufacturer), "%s",
                  ld[i].manufacturer);
+        snprintf(e->services, sizeof(e->services), "%s", ld[i].services);
+        snprintf(e->appearance, sizeof(e->appearance), "%s", ld[i].appearance);
+        snprintf(e->flags, sizeof(e->flags), "%s", ld[i].flags);
+        snprintf(e->device_class, sizeof(e->device_class), "%s", ld[i].device_class);
+        e->tx_power = ld[i].tx_power;
+        e->tx_power_valid = ld[i].tx_power_valid;
     }
     for (size_t i = 0; i < nq && n < cap; i++)
     {

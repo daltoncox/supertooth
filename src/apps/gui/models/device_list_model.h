@@ -109,6 +109,12 @@ private:
         QString addrType;               // BLE adv subtype / ""
         QString displayName;            // BLE local name (if any)
         QString manufacturer;           // BLE manufacturer (if any)
+        QString services;               // merged advertised services
+        QString appearance;             // GAP appearance (if any)
+        QString flags;                  // AD flags description (if any)
+        QString deviceClass;            // Class of Device (if advertised)
+        int txPower = 0;                // AD Tx Power dBm
+        int txPowerValid = 0;
 
         double rssiDb = qQNaN();       // 1 s average
         int    rssiValid = 0;

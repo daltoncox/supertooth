@@ -46,6 +46,10 @@ extern "C" {
 #define BACKEND_PROTO_TEXT_LEN  8
 #define BACKEND_NAME_TEXT_LEN   72
 #define BACKEND_MANUF_TEXT_LEN  40
+#define BACKEND_SERVICES_TEXT_LEN 160
+#define BACKEND_APPEARANCE_TEXT_LEN 48
+#define BACKEND_FLAGS_TEXT_LEN  64
+#define BACKEND_COD_TEXT_LEN    96
 #define BACKEND_DETAIL_KEY_LEN  40
 #define BACKEND_DETAIL_VAL_LEN  192
 #define BACKEND_DETAIL_MAX      32
@@ -104,6 +108,12 @@ typedef struct
     char     addr_type[BACKEND_TYPE_TEXT_LEN];/**< BLE address subtype */
     char     name[BACKEND_NAME_TEXT_LEN];     /**< BLE local name (if any) */
     char     manufacturer[BACKEND_MANUF_TEXT_LEN]; /**< BLE manufacturer */
+    char     services[BACKEND_SERVICES_TEXT_LEN]; /**< merged advertised services */
+    char     appearance[BACKEND_APPEARANCE_TEXT_LEN]; /**< GAP appearance */
+    char     flags[BACKEND_FLAGS_TEXT_LEN]; /**< AD flags description */
+    char     device_class[BACKEND_COD_TEXT_LEN]; /**< Class of Device */
+    int8_t   tx_power;                  /**< AD Tx Power dBm */
+    int      tx_power_valid;
     float    rssi_db;                  /**< 1 s average RSSI (NaN if invalid) */
     int      rssi_valid;              /**< 0 => no signal yet */
     uint64_t first_seen_ms;

@@ -5,6 +5,7 @@
 
 #include "ble_codec.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "bt_assigned_numbers.h"
@@ -461,5 +462,344 @@ void ble_adv_parse_name_manuf(const uint8_t *data, unsigned int len,
         }
         i += 1u + ad_len;
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * Rich advertising-data info
+ * ---------------------------------------------------------------------------*/
+
+/** Extract the 16-bit alias from a 128-bit UUID that uses the Bluetooth Base
+ * UUID (0000XXXX-0000-1000-8000-00805F9B34FB). On air the 128-bit UUID is
+ * little-endian, so a BT-base alias looks like
+ * FB 34 9B 5F 80 00 00 80 00 10 00 00 XX XX 00 00. */
+static int ble_uuid128_base_alias(const uint8_t u[16], uint16_t *alias_out)
+{
+    if (u[0] != 0xFB || u[1] != 0x34 || u[2] != 0x9B || u[3] != 0x5F ||
+        u[4] != 0x80 || u[5] != 0x00 || u[6] != 0x00 || u[7] != 0x80 ||
+        u[8] != 0x00 || u[9] != 0x10 || u[10] != 0x00 || u[11] != 0x00 ||
+        u[14] != 0x00 || u[15] != 0x00)
+        return 0;
+    if (alias_out)
+        *alias_out = (uint16_t)u[12] | ((uint16_t)u[13] << 8u);
+    return 1;
+}
+
+static void ble_info_add_uuid16(ble_adv_info_t *out, uint16_t uuid)
+{
+    for (unsigned int i = 0; i < out->service_count; i++)
+        if (out->service_uuids[i] == uuid)
+            return;
+    if (out->service_count < BLE_ADV_MAX_SERVICES)
+        out->service_uuids[out->service_count++] = uuid;
+}
+
+static void ble_info_add_uuid32(ble_adv_info_t *out, uint32_t uuid)
+{
+    for (unsigned int i = 0; i < out->service32_count; i++)
+        if (out->service_uuids32[i] == uuid)
+            return;
+    if (out->service32_count < BLE_ADV_MAX_SERVICES)
+        out->service_uuids32[out->service32_count++] = uuid;
+}
+
+static void ble_info_add_uuid128(ble_adv_info_t *out, const uint8_t u[16])
+{
+    uint16_t alias = 0u;
+    if (ble_uuid128_base_alias(u, &alias)) {
+        ble_info_add_uuid16(out, alias);
+        return;
+    }
+    out->uuid128_total++;
+    for (unsigned int i = 0; i < out->uuid128_count; i++)
+        if (memcmp(out->uuid128[i], u, 16) == 0)
+            return;
+    if (out->uuid128_count < BLE_ADV_MAX_SERVICES_128)
+        memcpy(out->uuid128[out->uuid128_count++], u, 16);
+}
+
+void ble_adv_parse_info(const uint8_t *data, unsigned int len,
+                        ble_adv_info_t *out)
+{
+    if (!out)
+        return;
+    memset(out, 0, sizeof(*out));
+    if (!data || len == 0)
+        return;
+
+    unsigned int i = 0;
+    while (i + 1 < len) {
+        uint8_t ad_len = data[i];
+        if (ad_len == 0)
+            break;
+        if (i + 1 + ad_len > len)
+            break;
+        uint8_t type = data[i + 1];
+        const uint8_t *ad = data + i + 2;
+        unsigned int ad_dlen = (unsigned int)ad_len - 1u;
+        switch (type) {
+        case 0x01: /* Flags */
+            if (ad_dlen >= 1) {
+                out->flags = ad[0];
+                out->has_flags = 1;
+            }
+            break;
+        case 0x02: /* Incomplete 16-bit UUIDs */
+            out->has_incomplete_list = 1;
+            for (unsigned int k = 0; k + 1 < ad_dlen; k += 2)
+                ble_info_add_uuid16(out, (uint16_t)ad[k] | ((uint16_t)ad[k + 1] << 8u));
+            break;
+        case 0x03: /* Complete 16-bit UUIDs */
+            out->has_complete_list = 1;
+            for (unsigned int k = 0; k + 1 < ad_dlen; k += 2)
+                ble_info_add_uuid16(out, (uint16_t)ad[k] | ((uint16_t)ad[k + 1] << 8u));
+            break;
+        case 0x04:
+        case 0x05:
+            if (type == 0x04) out->has_incomplete_list = 1;
+            else out->has_complete_list = 1;
+            for (unsigned int k = 0; k + 3 < ad_dlen; k += 4) {
+                uint32_t u = (uint32_t)ad[k] | ((uint32_t)ad[k + 1] << 8u) |
+                             ((uint32_t)ad[k + 2] << 16u) | ((uint32_t)ad[k + 3] << 24u);
+                ble_info_add_uuid32(out, u);
+            }
+            break;
+        case 0x06:
+        case 0x07:
+            if (type == 0x06) out->has_incomplete_list = 1;
+            else out->has_complete_list = 1;
+            for (unsigned int k = 0; k + 15 < ad_dlen; k += 16)
+                ble_info_add_uuid128(out, ad + k);
+            break;
+        case 0x0A: /* Tx Power */
+            if (ad_dlen >= 1) {
+                out->tx_power = (int8_t)ad[0];
+                out->has_tx_power = 1;
+            }
+            break;
+        case 0x0D: /* Class of Device */
+            if (ad_dlen >= 3) {
+                out->cod = (uint32_t)ad[0] | ((uint32_t)ad[1] << 8u) |
+                           ((uint32_t)ad[2] << 16u);
+                out->has_cod = 1;
+            }
+            break;
+        case 0x12: /* Peripheral Connection Interval Range */
+            if (ad_dlen >= 4) {
+                out->conn_interval_min = (uint16_t)ad[0] | ((uint16_t)ad[1] << 8u);
+                out->conn_interval_max = (uint16_t)ad[2] | ((uint16_t)ad[3] << 8u);
+                out->has_conn_interval = 1;
+            }
+            break;
+        case 0x14: /* 16-bit Solicitation */
+            out->has_solicitation = 1;
+            for (unsigned int k = 0; k + 1 < ad_dlen; k += 2)
+                ble_info_add_uuid16(out, (uint16_t)ad[k] | ((uint16_t)ad[k + 1] << 8u));
+            break;
+        case 0x1F: /* 32-bit Solicitation */
+            out->has_solicitation = 1;
+            for (unsigned int k = 0; k + 3 < ad_dlen; k += 4) {
+                uint32_t u = (uint32_t)ad[k] | ((uint32_t)ad[k + 1] << 8u) |
+                             ((uint32_t)ad[k + 2] << 16u) | ((uint32_t)ad[k + 3] << 24u);
+                ble_info_add_uuid32(out, u);
+            }
+            break;
+        case 0x15: /* 128-bit Solicitation */
+            out->has_solicitation = 1;
+            for (unsigned int k = 0; k + 15 < ad_dlen; k += 16)
+                ble_info_add_uuid128(out, ad + k);
+            break;
+        case 0x16: /* Service Data 16-bit */
+            if (ad_dlen >= 2) {
+                out->has_service_data = 1;
+                ble_info_add_uuid16(out, (uint16_t)ad[0] | ((uint16_t)ad[1] << 8u));
+            }
+            break;
+        case 0x20: /* Service Data 32-bit */
+            if (ad_dlen >= 4) {
+                out->has_service_data = 1;
+                ble_info_add_uuid32(out, (uint32_t)ad[0] | ((uint32_t)ad[1] << 8u) |
+                                          ((uint32_t)ad[2] << 16u) | ((uint32_t)ad[3] << 24u));
+            }
+            break;
+        case 0x21: /* Service Data 128-bit */
+            if (ad_dlen >= 16) {
+                out->has_service_data = 1;
+                ble_info_add_uuid128(out, ad);
+            }
+            break;
+        case 0x19: /* Appearance */
+            if (ad_dlen >= 2) {
+                out->appearance = (uint16_t)ad[0] | ((uint16_t)ad[1] << 8u);
+                out->has_appearance = 1;
+            }
+            break;
+        case 0x1A: /* Advertising Interval */
+            if (ad_dlen >= 2) {
+                out->adv_interval = (uint16_t)ad[0] | ((uint16_t)ad[1] << 8u);
+                out->has_adv_interval = 1;
+            }
+            break;
+        case 0x1C: /* LE Role */
+            if (ad_dlen >= 1) {
+                out->le_role = ad[0];
+                out->has_le_role = 1;
+            }
+            break;
+        case 0x24: /* URI */
+            if (ad_dlen > 0) {
+                size_t n = ad_dlen < sizeof(out->uri) - 1 ? ad_dlen : sizeof(out->uri) - 1;
+                for (size_t k = 0; k < n; k++) {
+                    char c = (char)ad[k];
+                    out->uri[k] = (c >= 0x20 && c < 0x7f) ? c : '.';
+                }
+                out->uri[n] = '\0';
+            }
+            break;
+        default:
+            break;
+        }
+        i += 1u + ad_len;
+    }
+}
+
+void ble_adv_info_merge(ble_adv_info_t *dst, const ble_adv_info_t *src)
+{
+    if (!dst || !src)
+        return;
+    for (unsigned int i = 0; i < src->service_count; i++)
+        ble_info_add_uuid16(dst, src->service_uuids[i]);
+    for (unsigned int i = 0; i < src->service32_count; i++)
+        ble_info_add_uuid32(dst, src->service_uuids32[i]);
+    for (unsigned int i = 0; i < src->uuid128_count; i++)
+        ble_info_add_uuid128(dst, src->uuid128[i]);
+    /* Count 128-bit UUIDs seen in packets whose first-N store already held
+     * the same values: keep the max total so the "+N more" hint is stable. */
+    if (src->uuid128_total > dst->uuid128_total)
+        dst->uuid128_total = src->uuid128_total;
+    dst->has_complete_list |= src->has_complete_list;
+    dst->has_incomplete_list |= src->has_incomplete_list;
+    dst->has_service_data |= src->has_service_data;
+    dst->has_solicitation |= src->has_solicitation;
+    if (src->has_flags && !dst->has_flags) {
+        dst->flags = src->flags;
+        dst->has_flags = 1;
+    }
+    if (src->has_tx_power && !dst->has_tx_power) {
+        dst->tx_power = src->tx_power;
+        dst->has_tx_power = 1;
+    }
+    if (src->has_appearance && !dst->has_appearance) {
+        dst->appearance = src->appearance;
+        dst->has_appearance = 1;
+    }
+    if (src->has_cod && !dst->has_cod) {
+        dst->cod = src->cod;
+        dst->has_cod = 1;
+    }
+    if (src->has_conn_interval && !dst->has_conn_interval) {
+        dst->conn_interval_min = src->conn_interval_min;
+        dst->conn_interval_max = src->conn_interval_max;
+        dst->has_conn_interval = 1;
+    }
+    if (src->has_adv_interval && !dst->has_adv_interval) {
+        dst->adv_interval = src->adv_interval;
+        dst->has_adv_interval = 1;
+    }
+    if (src->has_le_role && !dst->has_le_role) {
+        dst->le_role = src->le_role;
+        dst->has_le_role = 1;
+    }
+    if (!dst->uri[0] && src->uri[0]) {
+        strncpy(dst->uri, src->uri, sizeof(dst->uri) - 1);
+        dst->uri[sizeof(dst->uri) - 1] = '\0';
+    }
+}
+
+void ble_adv_info_format_services(const ble_adv_info_t *info,
+                                  char *out, size_t cap)
+{
+    if (!out || cap == 0u)
+        return;
+    out[0] = '\0';
+    if (!info)
+        return;
+    size_t pos = 0u;
+    for (unsigned int i = 0; i < info->service_count; i++) {
+        uint16_t u = info->service_uuids[i];
+        const char *nm = bt_assigned_service_uuid_name(u);
+        char item[96];
+        if (nm && strcmp(nm, "Unknown") != 0)
+            snprintf(item, sizeof(item), "%s (0x%04X)", nm, u);
+        else
+            snprintf(item, sizeof(item), "0x%04X", u);
+        int w = snprintf(out + pos, pos < cap ? cap - pos : 0u,
+                         "%s%s", pos ? ", " : "", item);
+        if (w > 0)
+            pos += (size_t)w;
+        if (pos >= cap)
+            break;
+    }
+    for (unsigned int i = 0; i < info->service32_count; i++) {
+        char item[32];
+        snprintf(item, sizeof(item), "0x%08X", info->service_uuids32[i]);
+        int w = snprintf(out + pos, pos < cap ? cap - pos : 0u,
+                         "%s%s", pos ? ", " : "", item);
+        if (w > 0)
+            pos += (size_t)w;
+        if (pos >= cap)
+            break;
+    }
+    if (info->uuid128_total > 0) {
+        char item[64];
+        if (info->uuid128_total > info->uuid128_count)
+            snprintf(item, sizeof(item), "+%u custom 128-bit",
+                     info->uuid128_total - info->uuid128_count);
+        else
+            snprintf(item, sizeof(item), "%u custom 128-bit",
+                     info->uuid128_total);
+        /* If we stored the first 128-bit UUIDs, show the first in full. */
+        char first[40] = "";
+        if (info->uuid128_count > 0) {
+            const uint8_t *u = info->uuid128[0];
+            snprintf(first, sizeof(first),
+                     "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                     u[15], u[14], u[13], u[12], u[11], u[10], u[9], u[8],
+                     u[7], u[6], u[5], u[4], u[3], u[2], u[1], u[0]);
+        }
+        int w;
+        if (first[0])
+            w = snprintf(out + pos, pos < cap ? cap - pos : 0u,
+                         "%s%s [%s%s]", pos ? ", " : "", item, first,
+                         info->uuid128_total > 1 ? ", ...]" : "");        else
+            w = snprintf(out + pos, pos < cap ? cap - pos : 0u,
+                         "%s%s", pos ? ", " : "", item);
+        if (w > 0)
+            pos += (size_t)w;
+    }
+}
+
+void ble_adv_flags_format(uint8_t flags, char *out, size_t cap)
+{
+    if (!out || cap == 0u)
+        return;
+    out[0] = '\0';
+    size_t pos = 0u;
+#define FLAG_APPEND(bit, label)                                              \
+    do {                                                                     \
+        if ((flags >> (bit)) & 1u) {                                         \
+            int w = snprintf(out + pos, pos < cap ? cap - pos : 0u,          \
+                             "%s%s", pos ? ", " : "", (label));              \
+            if (w > 0)                                                       \
+                pos += (size_t)w;                                            \
+        }                                                                    \
+    } while (0)
+    FLAG_APPEND(0, "LE-LimitedDisc");
+    FLAG_APPEND(1, "LE-GeneralDisc");
+    FLAG_APPEND(2, "BR/EDR-NotSupp");
+    FLAG_APPEND(3, "Simul-LE/BR-Ctrl");
+    FLAG_APPEND(4, "Simul-LE/BR-Host");
+#undef FLAG_APPEND
+    if (!out[0])
+        snprintf(out, cap, "0x%02X", flags);
 }
 

@@ -72,6 +72,14 @@ typedef enum {
 #define DEVICE_ADDRTYPE_MAX 16u
 /** BLE manufacturer (Company ID -> name) buffer. */
 #define DEVICE_MANUF_MAX    32u
+/** BLE advertised services buffer ("Heart Rate (0x180D), ..."). */
+#define DEVICE_SERVICES_MAX 160u
+/** BLE appearance buffer ("Watch: Smartwatch (0x00C2)"). */
+#define DEVICE_APPEARANCE_MAX 48u
+/** BLE flags buffer ("LE-GeneralDisc, BR/EDR-NotSupp"). */
+#define DEVICE_FLAGS_MAX    64u
+/** BLE Class of Device buffer ("Audio/Video / Headset (services: ...)"). */
+#define DEVICE_COD_MAX      96u
 
 #define ENTITY_COMMON_FIELDS \
     uint64_t       id;            /**< device_id or connection_id (stable) */ \
@@ -138,6 +146,12 @@ typedef struct {
     char     addr_type[DEVICE_ADDRTYPE_MAX];
     char     name[DEVICE_NAME_MAX];        /**< LE local name (if known) */
     char     manufacturer[DEVICE_MANUF_MAX]; /**< AD Company ID name (if known) */
+    char     services[DEVICE_SERVICES_MAX]; /**< merged advertised service UUIDs */
+    char     appearance[DEVICE_APPEARANCE_MAX]; /**< GAP appearance (if known) */
+    char     flags[DEVICE_FLAGS_MAX];     /**< AD flags description (if known) */
+    char     device_class[DEVICE_COD_MAX]; /**< Class of Device (if advertised) */
+    int8_t   tx_power;                    /**< AD Tx Power dBm */
+    int      tx_power_valid;
 } ble_device_snapshot_t;
 
 /* ---------------------------------------------------------------------------
