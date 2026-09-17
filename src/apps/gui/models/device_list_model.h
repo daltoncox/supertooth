@@ -18,7 +18,7 @@
  * Each row is a single observed radio entity: a BLE advertiser, a BR/EDR
  * connection member (central or a specific peripheral slot), a BR/EDR
  * connection, or an LE connection. Rows are produced by the core registries
- * and delivered via setRows() on a 4 Hz poll driven by ReceiverController
+ * and delivered via setRows() on a 1 Hz poll driven by ReceiverController
  * (which calls backend_session_poll_entities). The core supplies a stable
  * entity id, a 1-second average RSSI, and first/last-seen timestamps.
  *
@@ -140,7 +140,7 @@ private:
     void maybeResort();
     void rebuildLookup();
 
-    static constexpr int kMaxSeriesPoints = 600;   // ~150 s at 4 Hz
+    static constexpr int kMaxSeriesPoints = 600;   // ~600 s at 1 Hz
 
     QVector<Row> m_rows;
     QHash<int, int> m_rowById;          // stable device id -> display row

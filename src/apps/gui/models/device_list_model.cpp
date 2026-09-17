@@ -109,7 +109,7 @@ void DeviceListModel::setRows(const QVariantList &rows)
             m.value(QStringLiteral("packetsSeen")).toULongLong();
         const qulonglong prev = m_prevPackets.value(r.id, pk);
         const qulonglong delta = (pk >= prev) ? (pk - prev) : 0;
-        r.lastRate = (int)qMin(delta * 4ULL, 100000ULL);
+        r.lastRate = (int)qMin(delta, 100000ULL);
         m_prevPackets[r.id] = pk;
         r.packetsSeen = pk;
 
@@ -142,10 +142,10 @@ void DeviceListModel::setRows(const QVariantList &rows)
      * is correct:
      *   - same ids, same order  -> dataChanged      (delegates untouched)
      *   - same ids, new order   -> layoutChanged     (delegates reused, reordered)
-     *   - ids added/removed     -> full reset        (rare)
+     *   - ids added/removed     -> incremental insert/remove (see below)
      * beginResetModel()/endResetModel() must be avoided for the common
      * data-refresh case: it destroys and recreates every delegate on the GUI
-     * thread 4x/second and starves input handling during a live capture. */
+     * thread every poll and starves input handling during a live capture. */
     bool sameSet = (next.size() == m_rows.size());
     if (sameSet && next.size() > 0)
     {
@@ -178,7 +178,11 @@ void DeviceListModel::setRows(const QVariantList &rows)
         if (sameOrder)
         {
             if (!m_rows.isEmpty())
-                emit dataChanged(index(0, 0), index(m_rows.size() - 1, 0));
+                emit dataChanged(index(0, 0), index(m_rows.size() - 1, 0),
+                                 {RssiRole, ProtoRole, TypeRole, AddrRole,
+                                  DeviceRole, IdentifierRole, FirstSeenRole,
+                                  LastSeenRole, PacketsSeenRole, PacketRateRole,
+                                  DeviceIdRole});
         }
         else
         {
@@ -188,11 +192,110 @@ void DeviceListModel::setRows(const QVariantList &rows)
     }
     else
     {
-        beginResetModel();
-        m_rows = next;
+        /* Membership changed (devices joined/left): update incrementally so
+         * delegates are reused instead of destroyed. beginResetModel() would
+         * recreate every delegate and stall input for the whole table; the
+         * sequence below costs O(delta). */
+        const int oldSize = m_rows.size();
+
+        QSet<int> newIds;
+        newIds.reserve(next.size());
+        for (const Row &r : next)
+            newIds.insert(r.id);
+
+        // Drop rate history for departed ids so m_prevPackets can't grow
+        // without bound across long captures with heavy device churn.
+        for (auto it = m_prevPackets.begin(); it != m_prevPackets.end();)
+        {
+            if (!newIds.contains(it.key()))
+                it = m_prevPackets.erase(it);
+            else
+                ++it;
+        }
+
+        // Step 1: precise removals, descending so indexes stay valid.
+        for (int i = m_rows.size() - 1; i >= 0; --i)
+        {
+            if (!newIds.contains(m_rows.at(i).id))
+            {
+                beginRemoveRows(QModelIndex(), i, i);
+                m_rows.removeAt(i);
+                endRemoveRows();
+            }
+        }
         rebuildLookup();
-        endResetModel();
-        emit countChanged();
+
+        // Step 2: refresh survivor payloads in place (by stable id).
+        QHash<int, Row> freshById;
+        freshById.reserve(next.size());
+        for (const Row &r : next)
+            freshById.insert(r.id, r);
+        for (int i = 0; i < m_rows.size(); ++i)
+        {
+            const int id = m_rows.at(i).id;
+            auto it = freshById.find(id);
+            if (it != freshById.end())
+                m_rows[i] = it.value();
+        }
+
+        // Step 3: do survivors sit in final relative order already?
+        // Walk `next`, skipping ids that are new arrivals; the remaining
+        // sequence must match m_rows exactly for pure inserts to be valid.
+        bool survivorsOrdered = true;
+        {
+            int cur = 0;
+            for (const Row &r : next)
+            {
+                if (!m_rowById.contains(r.id))
+                    continue; // new arrival, handled by the insert below
+                if (cur >= m_rows.size() || m_rows.at(cur).id != r.id)
+                {
+                    survivorsOrdered = false;
+                    break;
+                }
+                ++cur;
+            }
+            if (cur != m_rows.size())
+                survivorsOrdered = false;
+        }
+
+        if (survivorsOrdered)
+        {
+            // Step 4a: pure inserts at final sorted positions.
+            int pos = 0;
+            for (const Row &r : next)
+            {
+                if (pos < m_rows.size() && m_rows.at(pos).id == r.id)
+                {
+                    ++pos;
+                    continue;
+                }
+                beginInsertRows(QModelIndex(), pos, pos);
+                m_rows.insert(pos, r);
+                endInsertRows();
+                ++pos;
+            }
+            rebuildLookup();
+            if (!m_rows.isEmpty())
+                emit dataChanged(index(0, 0), index(m_rows.size() - 1, 0),
+                                 {RssiRole, ProtoRole, TypeRole, AddrRole,
+                                  DeviceRole, IdentifierRole, FirstSeenRole,
+                                  LastSeenRole, PacketsSeenRole, PacketRateRole,
+                                  DeviceIdRole});
+        }
+        else
+        {
+            // Step 4b: survivors reordered as well — assign the pre-sorted
+            // `next` wholesale and reuse delegates via layoutChanged (still
+            // no reset, so no delegate destruction).
+            m_rows = next;
+            rebuildLookup();
+            emit layoutAboutToBeChanged();
+            emit layoutChanged();
+        }
+
+        if (m_rows.size() != oldSize)
+            emit countChanged();
     }
 }
 

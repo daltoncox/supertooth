@@ -88,7 +88,7 @@ private:
     // and releases the session, then flips running() to false.
     void onFinish(int result);
     void setRunning(bool running);
-    // 4 Hz poll: snapshot the core trackers and emit devicesUpdated().
+    // 1 Hz poll: snapshot the core trackers and emit devicesUpdated().
     void pollDevices();
 
     backend_session_t *m_session = nullptr;

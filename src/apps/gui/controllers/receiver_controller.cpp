@@ -28,7 +28,7 @@ ReceiverController::ReceiverController(QObject *parent)
         qCInfo(lcSession) << "Receiver session created";
     }
 
-    m_poll.setInterval(250);   /* 4 Hz device-list poll */
+    m_poll.setInterval(1000);   /* 1 Hz device-list poll */
     connect(&m_poll, &QTimer::timeout, this, &ReceiverController::pollDevices);
 }
 

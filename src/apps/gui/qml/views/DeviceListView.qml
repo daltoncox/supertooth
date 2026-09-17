@@ -218,7 +218,7 @@ Item {
 
     Timer {
         id: scrollGuardTimer
-        interval: 250
+        interval: 100
         repeat: false
         onTriggered: root.scrollGuardY = -1
     }
@@ -246,7 +246,7 @@ Item {
     // pane so its values (RSSI, rate, last seen) track the 1 Hz model tick.
     Timer {
         id: chartRefreshTimer
-        interval: 500
+        interval: 1000
         repeat: true
         running: root.selectedDeviceId > 0
         onTriggered: {
