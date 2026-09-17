@@ -77,6 +77,7 @@ public:
     Q_INVOKABLE void sortBy(const QString &roleName, Qt::SortOrder order);
 
     Q_INVOKABLE int rowForDeviceId(int id) const;
+    Q_INVOKABLE int deviceIdAt(int row) const;
 
     /// Sentinel for "no RSSI yet" (pinned to bottom of any RSSI sort).
     static constexpr double kRssiSentinel = -999.0;

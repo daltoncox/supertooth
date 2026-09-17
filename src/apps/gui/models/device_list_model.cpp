@@ -397,6 +397,13 @@ int DeviceListModel::rowForDeviceId(int id) const
     return m_rowById.value(id, -1);
 }
 
+int DeviceListModel::deviceIdAt(int row) const
+{
+    if (row < 0 || row >= m_rows.size())
+        return 0;
+    return m_rows.at(row).id;
+}
+
 void DeviceListModel::setSortRoleName(const QString &name)
 {
     if (m_sortRoleName == name)
