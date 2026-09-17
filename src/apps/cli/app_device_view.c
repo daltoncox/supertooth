@@ -46,7 +46,6 @@ typedef struct
     char    addr_type[DEVICE_ADDRTYPE_MAX];
     char    name[DEVICE_NAME_MAX];
     char    manufacturer[DEVICE_MANUF_MAX];
-    char    services[DEVICE_SERVICES_MAX];
     char    appearance[DEVICE_APPEARANCE_MAX];
     char    flags[DEVICE_FLAGS_MAX];
     char    device_class[DEVICE_COD_MAX];
@@ -58,6 +57,13 @@ typedef struct
     uint64_t last_seen_ms;
     unsigned long total_packets;
     unsigned int  packet_rate;
+    uint64_t group_id;      /* BR/EDR piconet linkage: member -> owning
+                               connection_id, connection -> own id,
+                               0 = standalone / LE (no group) */
+    int     lt_slot;        /* -1 = BR/EDR connection, 255 = central,
+                               0..7 = peripheral, -2 = other */
+    int     is_last_child;  /* 1 when last member of its piconet group */
+    int     has_children;   /* 1 when a connection has member rows beneath it */
     char    type[32];                       /* derived Type column */
     char    identifier[96];                 /* derived Identifier column */
 } dev_entity_t;
@@ -96,16 +102,58 @@ static void compute_type(const char *proto, const char *device,
     snprintf(out, n, "--");
 }
 
-/* Replicates DeviceListModel::identifierLabelFor(row). */
+/* Mirrors DeviceListModel::identifierLabelFor(row): BR/EDR piconets render
+ * hardcoded-expanded (connection as plain address parent, members as
+ * ├─/└─ children with short labels). INQUIRY / standalone / LE rows keep
+ * the old format. */
+static int is_piconet_connection(const dev_entity_t *e)
+{
+    return strcmp(e->proto, "BR/EDR") == 0 &&
+           strcmp(e->device, "connection") == 0 && e->lt_slot == -1;
+}
+
+static int is_piconet_member(const dev_entity_t *e)
+{
+    return strcmp(e->proto, "BR/EDR") == 0 &&
+           e->group_id != 0u && e->lt_slot >= 0;
+}
+
+static int tree_rank(const dev_entity_t *e)
+{
+    if (is_piconet_connection(e))
+        return 0;
+    if (e->lt_slot == 255)
+        return 1;
+    return 2;
+}
+
 static void compute_identifier(const char *proto, const char *device,
                                const char *addr, const char *addr_type,
-                               const char *name, char *out, size_t n)
+                               const char *name, int lt_slot, uint64_t group_id,
+                               int is_last, int has_children,
+                               char *out, size_t n)
 {
+    (void)addr_type;
+    (void)has_children;
     if (strcmp(proto, "BR/EDR") == 0)
     {
-        if (strcmp(device, "connection") == 0 || strcmp(device, "INQUIRY") == 0)
+        if (strcmp(device, "INQUIRY") == 0)
         {
             snprintf(out, n, "%s", addr ? addr : "");
+            return;
+        }
+        if (strcmp(device, "connection") == 0 && lt_slot == -1)
+        {
+            snprintf(out, n, "%s", addr ? addr : "");
+            return;
+        }
+        if (group_id != 0u && lt_slot >= 0)
+        {
+            const char *prefix = is_last ? "└─ " : "├─ ";
+            if (strcmp(device, "Central") == 0)
+                snprintf(out, n, "%sCentral", prefix);
+            else
+                snprintf(out, n, "%s%s", prefix, device);
             return;
         }
         const char *suffix = "";
@@ -168,10 +216,92 @@ static int cmp_identifier(const void *a, const void *b)
     int t = strcmp(ea->proto, eb->proto);
     if (t != 0)
         return t;
+    /* BR/EDR piconets stay contiguous: connection first, then Central,
+     * then LT_ADDR numeric. Grouped rows sort before ungrouped BR/EDR
+     * singletons so a group is never split. */
+    if (strcmp(ea->proto, "BR/EDR") == 0)
+    {
+        int ga = is_piconet_connection(ea) || is_piconet_member(ea);
+        int gb = is_piconet_connection(eb) || is_piconet_member(eb);
+        if (ga && gb)
+        {
+            /* Group by stable piconet linkage, not the address string:
+             * member rows force the UAP to known while the connection
+             * shows 0x?? until UAP recovery. Piconets order by LAP (addr
+             * suffix); the numeric group_id only breaks LAP ties. Parent
+             * always first; only piconet-to-piconet order is directional
+             * (CLI is ascending-only). Final tie-breaks use raw fields,
+             * never the ├─/└─ prefixed identifier (assigned post-sort). */
+            if (ea->group_id != eb->group_id)
+            {
+                const char *as = ea->addr;
+                const char *bs = eb->addr;
+                size_t al = strlen(as), bl = strlen(bs);
+                const char *ak = (al >= 6u) ? as + al - 6u : as;
+                const char *bk = (bl >= 6u) ? bs + bl - 6u : bs;
+                int lt = strcmp(ak, bk);
+                if (lt != 0)
+                    return lt;
+                return (ea->group_id < eb->group_id) ? -1 : 1;
+            }
+            int ra = tree_rank(ea);
+            int rb = tree_rank(eb);
+            if (ra != rb)
+                return ra - rb;
+            if (ea->lt_slot != eb->lt_slot)
+                return ea->lt_slot - eb->lt_slot;
+            t = strcmp(ea->addr, eb->addr);
+            if (t != 0)
+                return t;
+            return strcmp(ea->device, eb->device);
+        }
+        if (ga != gb)
+            return ga ? -1 : 1;
+    }
     t = strcmp(ea->type, eb->type);
     if (t != 0)
         return t;
     return strcmp(ea->identifier, eb->identifier);
+}
+
+/* Mark the last member of each piconet group (└─ vs ├─). Expects rows in
+ * display order. */
+static void assign_tree_flags(dev_entity_t *e, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+    {
+        e[i].is_last_child = 0;
+        e[i].has_children = 0;
+    }
+    for (size_t i = 0; i < n; i++)
+    {
+        if (!is_piconet_member(&e[i]))
+            continue;
+        int last = 1;
+        for (size_t j = i + 1u; j < n; j++)
+        {
+            if (is_piconet_member(&e[j]) && e[j].group_id == e[i].group_id)
+            {
+                last = 0;
+                break;
+            }
+        }
+        e[i].is_last_child = last;
+    }
+    for (size_t i = 0; i < n; i++)
+    {
+        if (!is_piconet_connection(&e[i]))
+            continue;
+        for (size_t j = 0; j < n; j++)
+        {
+            if (is_piconet_member(&e[j]) &&
+                (e[j].group_id == e[i].group_id || e[j].group_id == e[i].id))
+            {
+                e[i].has_children = 1;
+                break;
+            }
+        }
+    }
 }
 
 /* 1-second packet rate = delta of total_packets since the previous poll. */
@@ -234,6 +364,10 @@ static size_t collect(app_device_view_t *v, dev_entity_t *out)
         snprintf(e->proto, sizeof(e->proto), "BR/EDR");
         snprintf(e->addr, sizeof(e->addr), "%s", bd[i].addr_str);
         snprintf(e->device, sizeof(e->device), "%s", bd[i].label);
+        e->group_id = bd[i].connection_id;
+        e->lt_slot = (bd[i].connection_id == 0u) ? -2 : (int)bd[i].lt_addr;
+        e->is_last_child = 0;
+        e->has_children = 0;
         e->rssi_valid = bd[i].rssi_valid; e->rssi_db = bd[i].rssi_db;
         e->first_seen_ms = bd[i].first_seen_ms;
         e->last_seen_ms = bd[i].last_seen_ms;
@@ -247,6 +381,10 @@ static size_t collect(app_device_view_t *v, dev_entity_t *out)
         snprintf(e->proto, sizeof(e->proto), "BR/EDR");
         snprintf(e->addr, sizeof(e->addr), "%s", bp[i].addr_str);
         snprintf(e->device, sizeof(e->device), "%s", bp[i].label);
+        e->group_id = bp[i].id;
+        e->lt_slot = -1;
+        e->is_last_child = 0;
+        e->has_children = 0;
         e->rssi_valid = bp[i].rssi_valid; e->rssi_db = bp[i].rssi_db;
         e->first_seen_ms = bp[i].first_seen_ms;
         e->last_seen_ms = bp[i].last_seen_ms;
@@ -263,7 +401,6 @@ static size_t collect(app_device_view_t *v, dev_entity_t *out)
         snprintf(e->addr_type, sizeof(e->addr_type), "%s", ld[i].addr_type);
         snprintf(e->name, sizeof(e->name), "%s", ld[i].name);
         snprintf(e->manufacturer, sizeof(e->manufacturer), "%s", ld[i].manufacturer);
-        snprintf(e->services, sizeof(e->services), "%s", ld[i].services);
         snprintf(e->appearance, sizeof(e->appearance), "%s", ld[i].appearance);
         snprintf(e->flags, sizeof(e->flags), "%s", ld[i].flags);
         snprintf(e->device_class, sizeof(e->device_class), "%s", ld[i].device_class);
@@ -289,10 +426,23 @@ static size_t collect(app_device_view_t *v, dev_entity_t *out)
 
     for (size_t i = 0; i < n; i++)
     {
+        /* LE rows carry no piconet linkage; mark explicitly (memset left
+         * lt_slot 0, which would collide with peripheral LT_ADDR 0). */
+        if (strcmp(out[i].proto, "LE") == 0)
+        {
+            out[i].group_id = 0u;
+            out[i].lt_slot = -2;
+            out[i].is_last_child = 0;
+            out[i].has_children = 0;
+        }
         compute_type(out[i].proto, out[i].device, out[i].addr_type,
                      out[i].type, sizeof(out[i].type));
+        /* Provisional prefixes; the post-sort pass in dev_view_tick
+         * corrects member tails (└─ vs ├─). The comparator ignores
+         * prefixes for grouped rows, so order is unaffected. */
         compute_identifier(out[i].proto, out[i].device, out[i].addr,
                            out[i].addr_type, out[i].name,
+                           out[i].lt_slot, out[i].group_id, 0, 0,
                            out[i].identifier, sizeof(out[i].identifier));
     }
 
@@ -300,28 +450,72 @@ static size_t collect(app_device_view_t *v, dev_entity_t *out)
     return n;
 }
 
+/* Re-derive tree identifiers after sorting: members get ├─/└─ tails. */
+static void relabel_tree_prefixes(dev_entity_t *e, size_t n)
+{
+    assign_tree_flags(e, n);
+    for (size_t i = 0; i < n; i++)
+    {
+        if (!is_piconet_member(&e[i]) && !is_piconet_connection(&e[i]))
+            continue;
+        compute_identifier(e[i].proto, e[i].device, e[i].addr,
+                           e[i].addr_type, e[i].name,
+                           e[i].lt_slot, e[i].group_id,
+                           e[i].is_last_child, e[i].has_children,
+                           e[i].identifier, sizeof(e[i].identifier));
+    }
+}
+
+/* Display-cell width of a UTF-8 string: continuation bytes (10xxxxxx) occupy
+ * no terminal cells, so subtract them from the byte length. Covers the tree
+ * glyphs (├ U+251C, └ U+2514, ─ U+2500, all 3-byte). */
+static size_t disp_width(const char *s)
+{
+    size_t cells = 0u;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++)
+        if ((*p & 0xC0u) != 0x80u)
+            cells++;
+    return cells;
+}
+
+/* Copy @p src into @p dst padded with spaces to @p width display cells. */
+static void pad_cell(const char *src, char *dst, size_t dstn, size_t width)
+{
+    size_t w = disp_width(src);
+    snprintf(dst, dstn, "%s", src ? src : "");
+    if (w >= width)
+        return;
+    size_t have = strlen(dst);
+    size_t pad = width - w;
+    if (have + pad + 1u > dstn)
+        pad = dstn - have - 1u;
+    memset(dst + have, ' ', pad);
+    dst[have + pad] = '\0';
+}
+
+#define DEV_VIEW_IDENT_WIDTH 26u
+
 /* Print the table; returns the number of lines emitted (for TTY redraw). */
 static size_t print_table(app_device_view_t *v, dev_entity_t *e, size_t n)
 {
     (void)v;
     size_t lines = 0u;
 
-    printf("%-8s %-7s %-13s %-24s %-30s %-12s %-12s %-8s %-9s\n",
-           "RSSI", "Proto", "Type", "Identifier", "Services", "First", "Last", "Pkts", "Pkts/s");
+    printf("%-8s %-7s %-13s %-26s %-12s %-12s %-8s %-9s\n",
+           "RSSI", "Proto", "Type", "Identifier", "First", "Last", "Pkts", "Pkts/s");
     lines++;
-    printf("-------- ------- ------------- ------------------------ ------------------------------ ------------ ------------ -------- ---------\n");
+    printf("-------- ------- ------------- -------------------------- ------------ ------------ -------- ---------\n");
     lines++;
 
     for (size_t i = 0; i < n; i++)
     {
-        char rssi[16], first[16], last[16], idisp[25], sdisp[31];
+        char rssi[16], first[16], last[16], idisp[40];
         fmt_rssi(e[i].rssi_valid, e[i].rssi_db, rssi, sizeof(rssi));
         fmt_ts(e[i].first_seen_ms, first, sizeof(first));
         fmt_ts(e[i].last_seen_ms, last, sizeof(last));
-        snprintf(idisp, sizeof(idisp), "%s", e[i].identifier);
-        snprintf(sdisp, sizeof(sdisp), "%s", e[i].services);
-        printf("%-8s %-7s %-13s %-24s %-30s %-12s %-12s %-8lu %-9u\n",
-               rssi, e[i].proto, e[i].type, idisp, sdisp, first, last,
+        pad_cell(e[i].identifier, idisp, sizeof(idisp), DEV_VIEW_IDENT_WIDTH);
+        printf("%-8s %-7s %-13s %s %-12s %-12s %-8lu %-9u\n",
+               rssi, e[i].proto, e[i].type, idisp, first, last,
                e[i].total_packets, e[i].packet_rate);
         lines++;
         /* Extra detail line for LE advertisers carrying appearance /
@@ -356,6 +550,7 @@ static void dev_view_tick(app_device_view_t *v)
 
     size_t n = collect(v, ents);
     qsort(ents, n, sizeof(*ents), cmp_identifier);
+    relabel_tree_prefixes(ents, n);
     for (size_t i = 0; i < n; i++)
         ents[i].packet_rate =
             compute_rate(v, ents[i].kind, ents[i].id, ents[i].total_packets);

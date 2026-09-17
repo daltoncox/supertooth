@@ -123,6 +123,12 @@ typedef struct
     uint32_t crc_init;              /**< BLE connection CRCInit (0 if not found) */
     int      crc_init_confirmed;    /**< 0 while CRCInit is still unconfirmed */
     unsigned int crc_init_candidates; /**< distinct CRCInit candidates accumulated */
+    uint64_t group_id;              /**< BR/EDR piconet linkage: member -> owning
+                                         connection_id, connection -> own id,
+                                         0 = standalone / LE (no group) */
+    int      lt_slot;               /**< -1 = BR/EDR connection, 255 = central,
+                                         0..7 = peripheral LT_ADDR,
+                                         -2 = other (LE / standalone) */
 } backend_entity_t;
 
 /**

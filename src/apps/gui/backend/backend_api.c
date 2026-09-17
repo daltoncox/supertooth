@@ -1078,6 +1078,8 @@ size_t backend_session_poll_entities(backend_session_t *session,
         EMIT_BASE(e, &bd[i]);
         snprintf(e->proto, sizeof(e->proto), "BR/EDR");
         snprintf(e->device, sizeof(e->device), "%s", bd[i].label);
+        e->group_id = (bd[i].connection_id == 0u) ? 0u : bd[i].connection_id + 100000000u;
+        e->lt_slot = (bd[i].connection_id == 0u) ? -2 : (int)bd[i].lt_addr;
     }
     for (size_t i = 0; i < np && n < cap; i++)
     {
@@ -1091,6 +1093,10 @@ size_t backend_session_poll_entities(backend_session_t *session,
         e->id = bp[i].id + 100000000u;
         snprintf(e->proto, sizeof(e->proto), "BR/EDR");
         snprintf(e->device, sizeof(e->device), "%s", bp[i].label);
+        /* Piconet linkage: the connection owns its group. Offset the group
+         * the same way so member group_ids resolve to this row's id. */
+        e->group_id = bp[i].id + 100000000u;
+        e->lt_slot = -1;
     }
     for (size_t i = 0; i < nl && n < cap; i++)
     {
@@ -1110,6 +1116,8 @@ size_t backend_session_poll_entities(backend_session_t *session,
         snprintf(e->device_class, sizeof(e->device_class), "%s", ld[i].device_class);
         e->tx_power = ld[i].tx_power;
         e->tx_power_valid = ld[i].tx_power_valid;
+        e->group_id = 0u;
+        e->lt_slot = -2;
     }
     for (size_t i = 0; i < nq && n < cap; i++)
     {
@@ -1122,6 +1130,8 @@ size_t backend_session_poll_entities(backend_session_t *session,
         e->crc_init = lp[i].crc_init;
         e->crc_init_confirmed = lp[i].crc_init_confirmed;
         e->crc_init_candidates = lp[i].candidate_count;
+        e->group_id = 0u;
+        e->lt_slot = -2;
     }
 
     #undef EMIT_BASE

@@ -117,6 +117,13 @@ void DeviceListModel::setRows(const QVariantList &rows)
         r.crcInitConfirmed = m.value(QStringLiteral("crcInitConfirmed")).toBool() ? 1 : 0;
         r.crcInitCandidates = m.value(QStringLiteral("crcInitCandidates")).toInt();
 
+        r.groupId = m.value(QStringLiteral("groupId")).toULongLong();
+        r.ltSlot = m.contains(QStringLiteral("ltSlot"))
+                       ? m.value(QStringLiteral("ltSlot")).toInt()
+                       : -2;
+        r.isLastChild = 0;
+        r.hasChildren = 0;
+
         QVector<QPointF> series = oldSeries.value(r.id);
         if (r.rssiValid)
         {
@@ -137,6 +144,7 @@ void DeviceListModel::setRows(const QVariantList &rows)
     if (!m_sortRoleName.isEmpty() && next.size() >= 2)
         std::stable_sort(next.begin(), next.end(),
                          [this](const Row &a, const Row &b) { return lessThan(a, b); });
+    assignTreeFlags(next);
 
     /* Decide how much of the model changed and emit the lightest signal that
      * is correct:
@@ -329,6 +337,8 @@ QVariantList DeviceListModel::detailFor(int index) const
 
     add(QStringLiteral("Protocol"), r.proto);
     add(QStringLiteral("Address"), r.addr);
+    if (isPiconetMember(r))
+        add(QStringLiteral("Piconet"), r.addr);
     add(QStringLiteral("Device"), r.device);
     if (!r.displayName.isEmpty())
         add(QStringLiteral("Device Name"), r.displayName);
@@ -458,13 +468,82 @@ QString DeviceListModel::typeLabelFor(const QString &proto, const QString &devic
     return QStringLiteral("--");
 }
 
+bool DeviceListModel::isPiconetConnection(const Row &r)
+{
+    return r.proto == QStringLiteral("BR/EDR") &&
+           r.device == QStringLiteral("connection") && r.ltSlot == -1;
+}
+
+bool DeviceListModel::isPiconetMember(const Row &r)
+{
+    return r.proto == QStringLiteral("BR/EDR") && r.groupId != 0u &&
+           r.ltSlot >= 0;
+}
+
+int DeviceListModel::treeRank(const Row &r)
+{
+    if (isPiconetConnection(r))
+        return 0;
+    if (r.ltSlot == 255)
+        return 1;
+    return 2;
+}
+
+void DeviceListModel::assignTreeFlags(QVector<Row> &rows)
+{
+    // Rows are in display order: within each piconet group the connection
+    // comes first, then members. The last member of each group gets └─
+    // (other members get ├─).
+    QHash<qulonglong, int> lastMemberIdx;
+    QSet<qulonglong> groupsWithMembers;
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        rows[i].isLastChild = 0;
+        rows[i].hasChildren = 0;
+        if (!isPiconetMember(rows[i]))
+            continue;
+        const qulonglong key = rows[i].groupId;
+        groupsWithMembers.insert(key);
+        auto it = lastMemberIdx.find(key);
+        if (it != lastMemberIdx.end())
+            rows[it.value()].isLastChild = 0;
+        rows[i].isLastChild = 1;
+        if (it != lastMemberIdx.end())
+            it.value() = i;
+        else
+            lastMemberIdx.insert(key, i);
+    }
+    // Connections render as a plain address. Members whose parent
+    // connection hasn't been polled yet still group by groupId and get
+    // └─/├─ among themselves.
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        if (!isPiconetConnection(rows[i]))
+            continue;
+        if (groupsWithMembers.contains(rows[i].groupId) ||
+            groupsWithMembers.contains((qulonglong)rows[i].id))
+            rows[i].hasChildren = 1;
+    }
+    Q_UNUSED(lastMemberIdx);
+}
+
 QString DeviceListModel::identifierLabelFor(const Row &r)
 {
     if (r.proto == QStringLiteral("BR/EDR"))
     {
-        if (r.device == QStringLiteral("connection") ||
-            r.device == QStringLiteral("INQUIRY"))
+        if (r.device == QStringLiteral("INQUIRY"))
             return r.addr;
+        if (isPiconetConnection(r))
+            return r.addr;
+        if (isPiconetMember(r))
+        {
+            const QString prefix = r.isLastChild
+                                       ? QStringLiteral("└─ ")
+                                       : QStringLiteral("├─ ");
+            if (r.device == QStringLiteral("Central"))
+                return prefix + QStringLiteral("Central");
+            return prefix + r.device;
+        }
         QString suffix;
         if (r.device == QStringLiteral("Central"))
             suffix = QStringLiteral("C");
@@ -517,6 +596,55 @@ bool DeviceListModel::lessThan(const Row &a, const Row &b) const
     {
         if (a.proto != b.proto)
             return cmpStr(a.proto, b.proto);
+        // BR/EDR piconets stay contiguous: the connection renders expanded
+        // with its members directly below (connection, Central, LT_ADDR N).
+        // Grouped rows sort before ungrouped BR/EDR singletons (INQUIRY /
+        // standalone) so a group is never split.
+        if (a.proto == QStringLiteral("BR/EDR"))
+        {
+            const bool ag = isPiconetConnection(a) || isPiconetMember(a);
+            const bool bg = isPiconetConnection(b) || isPiconetMember(b);
+            if (ag && bg)
+            {
+                // Group identity is the stable piconet linkage, not the
+                // address string: member rows force the UAP to known while
+                // the connection shows 0x?? until UAP recovery, so addr
+                // strings can disagree within one piconet. Piconets order
+                // by LAP (addr suffix: the UAP prefix may disagree); the
+                // numeric groupId only breaks LAP ties.
+                if (a.groupId != b.groupId)
+                {
+                    const QString al = a.addr.length() >= 6
+                                           ? a.addr.right(6)
+                                           : a.addr;
+                    const QString bl = b.addr.length() >= 6
+                                           ? b.addr.right(6)
+                                           : b.addr;
+                    if (al != bl)
+                        return cmpStr(al, bl);
+                    if (asc)
+                        return a.groupId < b.groupId;
+                    return a.groupId > b.groupId;
+                }
+                // Parent always first; members Central then LT_ADDR numeric,
+                // regardless of sort direction. Only piconet-to-piconet
+                // order follows asc/desc.
+                const int ra = treeRank(a);
+                const int rb = treeRank(b);
+                if (ra != rb)
+                    return ra < rb;
+                if (a.ltSlot != b.ltSlot)
+                    return a.ltSlot < b.ltSlot;
+                // Raw fields only: identifierLabelFor() embeds the ├─/└─
+                // prefixes, which are assigned after sorting and would feed
+                // stale flags back into the comparator.
+                if (a.addr != b.addr)
+                    return cmpStr(a.addr, b.addr);
+                return cmpStr(a.device, b.device);
+            }
+            if (ag != bg)
+                return ag ? true : false;
+        }
         const QString ta = typeLabelFor(a.proto, a.device, a.addrType);
         const QString tb = typeLabelFor(b.proto, b.device, b.addrType);
         if (ta != tb)
@@ -570,6 +698,7 @@ void DeviceListModel::maybeResort()
 
     std::stable_sort(m_rows.begin(), m_rows.end(),
                      [this](const Row &a, const Row &b) { return lessThan(a, b); });
+    assignTreeFlags(m_rows);
 
     for (int i = 0; i < m_rows.size(); ++i)
     {

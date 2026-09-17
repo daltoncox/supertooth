@@ -129,12 +129,30 @@ private:
         int crcInitConfirmed = 0;       // 0 while still unconfirmed
         int crcInitCandidates = 0;      // distinct CRCInit candidates accumulated
 
+        qulonglong groupId = 0;         // BR/EDR piconet linkage (0 = no group)
+        int ltSlot = -2;                // -1 = connection, 255 = central,
+                                        // 0..7 = peripheral, -2 = other
+        int isLastChild = 0;            // 1 when this member is the last child
+                                        // of its piconet group (└─ vs ├─)
+        int hasChildren = 0;            // 1 when a connection row has member
+                                        // rows broken out beneath it
+
         QVector<QPointF> avgSeries;     // (seconds, dB)
     };
 
     static QString typeLabelFor(const QString &proto, const QString &device,
                                 const QString &addrType);
     static QString identifierLabelFor(const Row &r);
+    // BR/EDR piconet tree helpers (hardcoded-expanded Option 2). A row is a
+    // group parent when it is a BR/EDR "connection" member-row source, and a
+    // group child when it carries a nonzero groupId with a member ltSlot.
+    // INQUIRY / standalone / LE rows are never grouped.
+    static bool isPiconetConnection(const Row &r);
+    static bool isPiconetMember(const Row &r);
+    static int treeRank(const Row &r);
+    // Marks isLastChild for every member of each piconet group. Expects rows
+    // already in display order (connection first, then members).
+    static void assignTreeFlags(QVector<Row> &rows);
     static QString formatLastSeen(qint64 ms);
     bool lessThan(const Row &a, const Row &b) const;
     QVariant sortKey(const Row &r) const;

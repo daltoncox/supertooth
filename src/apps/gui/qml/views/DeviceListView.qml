@@ -561,6 +561,14 @@ ListModel {
                         // row instead of showing a stale snapshot.
                         property var cells: [rssi, proto, type, identifier, firstSeen, lastSeen, packetRate]
 
+                        // BR/EDR piconet tree state is encoded in the
+                        // identifier prefix (├─/└─ child). The
+                        // model hardcodes the expanded layout, so the view
+                        // only reflects it with emphasis.
+                        // All connections (BR/EDR with or without members,
+                        // LE) render bold; members/standalone rows do not.
+                        property bool isConnection: String(cells[2]) === "CONN"
+
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
@@ -584,6 +592,8 @@ ListModel {
                                     verticalAlignment: Text.AlignVCenter
                                     leftPadding: 8
                                     rightPadding: 8
+                                    font.bold: columns.get(index).role === "identifier"
+                                               && rowDelegate.isConnection
                                     elide: Text.ElideRight
                                     clip: true
                                 }

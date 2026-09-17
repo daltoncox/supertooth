@@ -326,6 +326,8 @@ void ReceiverController::pollDevices()
         m.insert(QStringLiteral("crcInit"), (qulonglong)e->crc_init);
         m.insert(QStringLiteral("crcInitConfirmed"), e->crc_init_confirmed ? true : false);
         m.insert(QStringLiteral("crcInitCandidates"), (int)e->crc_init_candidates);
+        m.insert(QStringLiteral("groupId"), (qulonglong)e->group_id);
+        m.insert(QStringLiteral("ltSlot"), (int)e->lt_slot);
         list.append(m);
     }
     emit devicesUpdated(list);
