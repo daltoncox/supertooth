@@ -75,8 +75,8 @@ static void print_usage(const char *argv0)
 {
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
-            "[-d|--device [<type>:<id>]] [--debug] "
-            "[--enforce-crc on|off] [--record PATH]\n", argv0);
+             "[-d|--device [<type>:<id>]] [--debug] "
+            "[--enforce-crc on|off] [--record]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of consecutive LE RF channels (1-%u, default: %u)\n",
             "-c, --channels N",
@@ -157,7 +157,7 @@ int main(int argc, char *argv[])
         {"version", no_argument, NULL, 'V'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
         {"enforce-crc", required_argument, NULL, APP_OPT_ENFORCE_CRC},
-        {"record", required_argument, NULL, APP_OPT_RECORD},
+        {"record", no_argument, NULL, APP_OPT_RECORD},
         {"exhaustive", no_argument, NULL, APP_OPT_EXHAUSTIVE},
         {"help", no_argument, NULL, 'h'},
         {0, 0, 0, 0}
@@ -165,7 +165,7 @@ int main(int argc, char *argv[])
 
     int g_list_devices = 0;
     const char *g_device_spec = NULL;
-    const char *g_record_path = NULL;
+    int g_record = 0;
     int g_exhaustive = 0;
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
@@ -212,7 +212,7 @@ int main(int argc, char *argv[])
             g_debug = 1;
             break;
         case APP_OPT_RECORD:
-            g_record_path = optarg;
+            g_record = 1;
             break;
         case APP_OPT_EXHAUSTIVE:
             g_exhaustive = 1;
@@ -285,7 +285,7 @@ int main(int argc, char *argv[])
     int is_file_input = g_device_selected &&
                         g_device_spec_parsed.type == RADIO_DEVICE_FILE;
 
-    if (g_record_path && is_file_input)
+    if (g_record && is_file_input)
     {
         fprintf(stderr, "--record cannot be used with file replay input.\n");
         return EXIT_FAILURE;
@@ -295,7 +295,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "--exhaustive is only meaningful with file replay input (-d file:...).\n");
         return EXIT_FAILURE;
     }
-    if (g_record_path)
+    if (g_record)
     {
         app_record_config_t rcfg = {
             .device_type = g_device_spec_parsed.type,
@@ -304,8 +304,8 @@ int main(int argc, char *argv[])
             .sample_rate_hz = tune_rate_hz,
             .debug = g_debug,
         };
-        return app_record_run(&rcfg, g_record_path) == 0 ? EXIT_SUCCESS
-                                                         : EXIT_FAILURE;
+        return app_record_run(&rcfg) == 0 ? EXIT_SUCCESS
+                                          : EXIT_FAILURE;
     }
 
     uint64_t file_center_hz = 0u;

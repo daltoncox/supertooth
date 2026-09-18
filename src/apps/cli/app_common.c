@@ -173,8 +173,8 @@ void app_print_device_usage_line(void)
 
 void app_print_record_usage_line(void)
 {
-    fprintf(stderr, "  %-30s Record raw IQ to a WAV file (record-only, no decode)\n",
-            "--record PATH");
+    fprintf(stderr, "  %-30s Record raw IQ to a WAV file in the current directory (record-only, no decode)\n",
+            "--record");
     fprintf(stderr, "  %-30s Replay a capture: -d file:/path/to/cap.wav\n",
             "");
 }

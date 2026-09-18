@@ -21,7 +21,7 @@ static void app_record_handle_sigint(int sig)
     sample_reader_signal(g_record_reader);
 }
 
-int app_record_run(const app_record_config_t *cfg, const char *out_path)
+int app_record_run(const app_record_config_t *cfg)
 {
     /* NB: the dispatcher owns 64 x 256K-sample blocks (~128 MB) and must
      * live on the heap, same as in session_init(). */
@@ -37,9 +37,9 @@ int app_record_run(const app_record_config_t *cfg, const char *out_path)
     unsigned long blocks = 0ul;
     int result = 1;
 
-    if (!cfg || !out_path || out_path[0] == '\0')
+    if (!cfg)
     {
-        fprintf(stderr, "--record: missing output path\n");
+        fprintf(stderr, "--record: missing config\n");
         return 1;
     }
     if (cfg->device_type == RADIO_DEVICE_FILE)
@@ -53,44 +53,22 @@ int app_record_run(const app_record_config_t *cfg, const char *out_path)
         return 1;
     }
 
-    /* Resolve directory → self-describing filename. */
+    /* Always record to the directory the program was run in (cwd):
+     * generate a self-describing filename here. */
     {
-        size_t len = strlen(out_path);
-        int is_dir = (len > 0u && out_path[len - 1u] == '/');
-        struct stat st;
-        if (!is_dir && stat(out_path, &st) == 0 && S_ISDIR(st.st_mode))
-            is_dir = 1;
-        if (is_dir)
+        char name[256];
+        if (wav_build_recording_filename(cfg->lo_freq_hz,
+                                         cfg->sample_rate_hz,
+                                         name, sizeof(name)) != 0)
         {
-            char name[256];
-            if (wav_build_recording_filename(cfg->lo_freq_hz,
-                                             cfg->sample_rate_hz,
-                                             name, sizeof(name)) != 0)
-            {
-                fprintf(stderr, "--record: cannot build filename\n");
-                return 1;
-            }
-            int needed;
-            if (len > 0u && out_path[len - 1u] == '/')
-                needed = snprintf(resolved, sizeof(resolved), "%s%s",
-                                  out_path, name);
-            else
-                needed = snprintf(resolved, sizeof(resolved), "%s/%s",
-                                  out_path, name);
-            if (needed < 0 || (size_t)needed >= sizeof(resolved))
-            {
-                fprintf(stderr, "--record: output path too long\n");
-                return 1;
-            }
+            fprintf(stderr, "--record: cannot build filename\n");
+            return 1;
         }
-        else
+        int needed = snprintf(resolved, sizeof(resolved), "./%s", name);
+        if (needed < 0 || (size_t)needed >= sizeof(resolved))
         {
-            if (len >= sizeof(resolved))
-            {
-                fprintf(stderr, "--record: output path too long\n");
-                return 1;
-            }
-            memcpy(resolved, out_path, len + 1u);
+            fprintf(stderr, "--record: output path too long\n");
+            return 1;
         }
     }
 

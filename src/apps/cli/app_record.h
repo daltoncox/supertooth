@@ -8,10 +8,10 @@
 /* Record-only raw IQ capture: streams the live radio straight to a
  * self-describing WAV file (see wav.h) with no DSP or decoding.
  *
- * @p out_path is either a file path (used verbatim) or a directory / trailing
- * -slash path, in which case a self-describing filename of the form
- * supertooth_baseband_<LO>Hz_<RATE>Msps_<UTC-timestamp>.wav is generated
- * inside it. Blocks until Ctrl+C. Returns 0 on success, non-zero on error. */
+ * The file is always written to the directory the program was run in
+ * (current working directory) with a self-describing filename of the form
+ * supertooth_baseband_<LO>Hz_<RATE>Msps_<UTC-timestamp>.wav.
+ * Blocks until Ctrl+C. Returns 0 on success, non-zero on error. */
 typedef struct
 {
     radio_device_type_t device_type; /* must be a live radio, not FILE */
@@ -21,6 +21,6 @@ typedef struct
     int debug;
 } app_record_config_t;
 
-int app_record_run(const app_record_config_t *cfg, const char *out_path);
+int app_record_run(const app_record_config_t *cfg);
 
 #endif /* APP_RECORD_H */

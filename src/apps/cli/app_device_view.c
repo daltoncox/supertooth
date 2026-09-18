@@ -518,21 +518,6 @@ static size_t print_table(app_device_view_t *v, dev_entity_t *e, size_t n)
                rssi, e[i].proto, e[i].type, idisp, first, last,
                e[i].total_packets, e[i].packet_rate);
         lines++;
-        /* Extra detail line for LE advertisers carrying appearance /
-         * flags / class-of-device / manufacturer info. */
-        if (strcmp(e[i].proto, "LE") == 0 &&
-            (e[i].appearance[0] || e[i].flags[0] ||
-             e[i].device_class[0] || e[i].manufacturer[0]))
-        {
-            char extra[256];
-            snprintf(extra, sizeof(extra), "         appearance=%s flags=%s class=%s manuf=%s",
-                     e[i].appearance[0] ? e[i].appearance : "--",
-                     e[i].flags[0] ? e[i].flags : "--",
-                     e[i].device_class[0] ? e[i].device_class : "--",
-                     e[i].manufacturer[0] ? e[i].manufacturer : "--");
-            printf("%s\n", extra);
-            lines++;
-        }
     }
     if (n == 0u)
     {
