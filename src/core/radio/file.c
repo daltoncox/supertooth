@@ -10,9 +10,10 @@
 #include "wav.h"
 
 /* Frames decoded per reader iteration; split into dispatcher blocks of at
- * most SAMPLE_BLOCK_SAMPLE_CAPACITY. 65536 frames = 256 KiB scratch at the
- * widest depth, well under one block. */
-#define FILE_RADIO_READ_FRAMES 65536u
+ * most SAMPLE_BLOCK_SAMPLE_CAPACITY. Sized to SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES
+ * (256 KiB scratch at the widest depth, well under one block) so file replay
+ * pushes the same RF granularity as every other radio backend. */
+#define FILE_RADIO_READ_FRAMES SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES
 
 typedef struct
 {
@@ -164,7 +165,14 @@ static void *file_radio_reader_thread(void *arg)
                 {
                     sample_dispatcher_note_drop(radio->dispatcher,
                                                 radio->debug_enabled);
-                    /* Drop this slice but keep the stream position advancing. */
+                    /* Drop this slice but keep the stream timelines advancing
+                     * on both axes: the file position (off) and the radio
+                     * sample clock (samples_sent, which drives all downstream
+                     * rx_clk_1600/CLKN timestamps). Advancing only the file
+                     * position compresses the radio timeline, making the
+                     * receiver slot clock run slow and breaking BR/EDR
+                     * UAP/clock tracking under load. */
+                    radio->samples_sent += (uint64_t)n;
                     off += n;
                     continue;
                 }

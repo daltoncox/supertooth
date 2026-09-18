@@ -6,6 +6,16 @@
 #include <stdint.h>
 
 #define SAMPLE_BLOCK_SAMPLE_CAPACITY 262144u
+/* RF-producer chunk size: every radio backend (HackRF, file replay, and any
+ * future radio) must push RF input in blocks of at most this many samples.
+ * Under overload the RF queues stay full and loss degenerates into
+ * alternating survive/hole runs of one RF block; 131072-sample (6.5 ms)
+ * holes swallow whole multi-slot packets *and* their ARQ retries together
+ * while 65536-sample (3.3 ms) holes give retries an independent chance in
+ * the next survivor run (measured ~3.5x better BR/EDR header decode on
+ * identical samples). Keep producers uniform so no backend degrades worse
+ * than the others. Must stay <= SAMPLE_BLOCK_SAMPLE_CAPACITY. */
+#define SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES 65536u
 #define SAMPLE_READER_QUEUE_CAPACITY 8u
 /* Worst-case fan-out: 20 BR/EDR channel workers + 10 BLE channel workers
  * in a hybrid session. */

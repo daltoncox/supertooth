@@ -55,24 +55,40 @@ static int hackrf_rx_cb(hackrf_transfer *transfer)
     if (num_samples > SAMPLE_BLOCK_SAMPLE_CAPACITY)
         num_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY;
 
-    block = sample_dispatcher_acquire_block(radio->dispatcher);
-    if (!block)
+    /* Fan large USB transfers out in SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES
+     * chunks (see sample_dispatcher.h): the file backend pushes that same
+     * granularity, and larger holes swallow packet + ARQ retry together.
+     * Bases stay consecutive, keeping sample clocks true. */
     {
-        sample_dispatcher_note_drop(radio->dispatcher, radio->debug_enabled);
-        return 0;
+        unsigned int off = 0u;
+        samples = (const int8_t *)transfer->buffer;
+        while (off < num_samples)
+        {
+            unsigned int n = num_samples - off;
+            if (n > SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES)
+                n = SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES;
+            block = sample_dispatcher_acquire_block(radio->dispatcher);
+            if (!block)
+            {
+                sample_dispatcher_note_drop(radio->dispatcher,
+                                            radio->debug_enabled);
+                /* Keep the sample timeline truthful across the drop (see
+                 * above): the dropped chunk's duration must still advance
+                 * the clock that downstream rx_clk_1600/CLKN derive from. */
+                radio->samples_received += (uint64_t)(num_samples - off);
+                return 0;
+            }
+            block->num_samples = n;
+            block->block_base_sample = radio->samples_received;
+            radio->samples_received += n;
+            for (unsigned int i = 0u; i < n; i++)
+                block->samples[i] = hackrf_iq_to_complex(samples, off + i);
+            __atomic_thread_fence(__ATOMIC_RELEASE);
+            sample_dispatcher_push_block(radio->dispatcher, block);
+            sample_block_release(block);
+            off += n;
+        }
     }
-
-    block->num_samples = num_samples;
-    block->block_base_sample = radio->samples_received;
-    radio->samples_received += num_samples;
-
-    samples = (const int8_t *)transfer->buffer;
-    for (unsigned int i = 0; i < num_samples; i++)
-        block->samples[i] = hackrf_iq_to_complex(samples, i);
-
-    __atomic_thread_fence(__ATOMIC_RELEASE);
-    sample_dispatcher_push_block(radio->dispatcher, block);
-    sample_block_release(block);
 
     static unsigned long rx_dbg = 0;
     if (radio->debug_enabled && (rx_dbg++ % 500u) == 0u)
