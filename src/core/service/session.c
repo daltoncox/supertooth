@@ -11,6 +11,38 @@
 #include "radio_common.h"
 #include "collector.h"
 
+/* Allocate + init one sample dispatcher (pool + reader table). */
+static int alloc_dispatcher(sample_dispatcher_t **out)
+{
+    *out = (sample_dispatcher_t *)calloc(1, sizeof(**out));
+    if (!*out)
+        return -1;
+    if (sample_dispatcher_init(*out) != 0)
+    {
+        free(*out);
+        *out = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+/* Tear down + free one dispatcher; NULL-safe. */
+static void free_dispatcher(sample_dispatcher_t **dispatcher)
+{
+    if (!dispatcher || !*dispatcher)
+        return;
+    sample_dispatcher_destroy(*dispatcher);
+    free(*dispatcher);
+    *dispatcher = NULL;
+}
+
+/* A missing dispatcher is idle by definition (e.g. no BLE bank exists in a
+ * hybrid session, so there is nothing to drain). */
+static int dispatcher_idle_or_absent(const sample_dispatcher_t *dispatcher)
+{
+    return !dispatcher || sample_dispatcher_all_free(dispatcher);
+}
+
 static void session_signal_readers(session_t *session)
 {
     if (!session) return;
@@ -36,34 +68,23 @@ int session_init(session_t *session, const session_config_t *cfg)
     session->stopped_user = NULL;
     atomic_store_explicit(&session->shutdown_requested, 0u, memory_order_release);
 
-    session->dispatcher = (sample_dispatcher_t *)calloc(1, sizeof(*session->dispatcher));
-    if (!session->dispatcher) return -1;
-    if (sample_dispatcher_init(session->dispatcher) != 0)
-    {
-        free(session->dispatcher);
-        session->dispatcher = NULL;
+    session->dispatcher = NULL;
+    session->bredr_chan_dispatcher = NULL;
+    session->ble_chan_dispatcher = NULL;
+    if (alloc_dispatcher(&session->dispatcher) != 0)
         return -1;
-    }
-
-    session->bredr_chan_dispatcher = (sample_dispatcher_t *)calloc(1, sizeof(*session->bredr_chan_dispatcher));
-    if (!session->bredr_chan_dispatcher) return -1;
-    if (sample_dispatcher_init(session->bredr_chan_dispatcher) != 0)
+    /* The BLE output dispatcher is allocated lazily in
+     * session_create_channels: only BLE-only sessions run a second bank.
+     * (Each pool is 64 x 2 MB blocks, so an unused dispatcher is pure
+     * address-space waste.) */
+    if (alloc_dispatcher(&session->bredr_chan_dispatcher) != 0)
     {
-        free(session->bredr_chan_dispatcher);
-        session->bredr_chan_dispatcher = NULL;
+        free_dispatcher(&session->dispatcher);
         return -1;
     }
     memset(&session->bredr_channelizer, 0, sizeof(session->bredr_channelizer));
     session->bredr_channelizer_running = 0;
 
-    session->ble_chan_dispatcher = (sample_dispatcher_t *)calloc(1, sizeof(*session->ble_chan_dispatcher));
-    if (!session->ble_chan_dispatcher) return -1;
-    if (sample_dispatcher_init(session->ble_chan_dispatcher) != 0)
-    {
-        free(session->ble_chan_dispatcher);
-        session->ble_chan_dispatcher = NULL;
-        return -1;
-    }
     memset(&session->ble_channelizer, 0, sizeof(session->ble_channelizer));
     session->ble_channelizer_running = 0;
 
@@ -134,43 +155,31 @@ int session_tune(session_t *session,
         ref != SESSION_REF_BREDR)
         return -1;
 
-    double lo_mhz, bredr_span_mhz, ble_span_mhz;
-    unsigned int bredr_rate_mhz;
+    double lo_mhz;
+    unsigned int rate_mhz;
 
     if (ref == SESSION_REF_BLE)
     {
         if (channel_count > BLE_RF_CHANNEL_COUNT ||
             bottom_channel + channel_count > BLE_RF_CHANNEL_COUNT)
             return -1;
-        lo_mhz        = 2401.0 + 2.0 * (double)bottom_channel + (double)channel_count;
+        lo_mhz = 2401.0 + 2.0 * (double)bottom_channel + (double)channel_count;
         /* BLE channels are 2 MHz apart, so an N-channel BLE window needs a
          * 2*N MHz span; the LO is already a whole-MHz frequency. */
-        ble_span_mhz  = 2.0 * (double)channel_count;
-        bredr_span_mhz = ble_span_mhz;
-        bredr_rate_mhz = (unsigned int)bredr_span_mhz;
-        if (bredr_rate_mhz < 4u) bredr_rate_mhz = 4u;
+        rate_mhz = 2u * channel_count;
     }
     else
     {
         if (channel_count > BREDR_SESSION_MAX_CHANNELS ||
             bottom_channel + channel_count > BREDR_SESSION_MAX_CHANNELS)
             return -1;
-        lo_mhz         = 2402.0 + (double)bottom_channel + ((double)channel_count - 1.0) / 2.0;
-        bredr_span_mhz = (double)channel_count;
-        bredr_rate_mhz = (unsigned int)bredr_span_mhz;
-        if (bredr_rate_mhz < 4u) bredr_rate_mhz = 4u;
-        ble_span_mhz   = bredr_span_mhz;
+        lo_mhz   = 2402.0 + (double)bottom_channel + ((double)channel_count - 1.0) / 2.0;
+        rate_mhz = channel_count;
     }
+    if (rate_mhz < 4u) rate_mhz = 4u;
 
-    session->tune_ref        = ref;
-    session->tune_bottom     = bottom_channel;
-    session->tune_count      = channel_count;
     session->lo_frequency_hz = (uint32_t)((uint64_t)(lo_mhz * 1e6));
-    session->sample_rate_hz  = bredr_rate_mhz * 1000000u;
-    session->decimation      = session->sample_rate_hz / 2000000u;
-    if (session->decimation < 1u) session->decimation = 1u;
-
-    (void)ble_span_mhz;
+    session->sample_rate_hz  = rate_mhz * 1000000u;
 
     /* Reject capture windows the radio cannot sustain (e.g. >20 BR/EDR channels
      * at 1 MHz each would request >20 Msps, beyond the HackRF ceiling). */
@@ -180,10 +189,51 @@ int session_tune(session_t *session,
     return 0;
 }
 
+/* Fan out BLE workers over one channelizer bank's output dispatcher.
+ * @p grid selects the bin mapping (2 MHz BLE raster where M is even, else
+ * the 1 MHz raster); @p stride decimates the bank's 2*grid-Msps bins down
+ * to the 2 Msps the demodulator expects. The shared hybrid bank is always
+ * 1 MHz/stride 1: every BLE center lies on the 1 MHz raster, so each BLE
+ * channel is the shared bank's center-bin slice. Workers are appended to
+ * session->ble_channels (already allocated); returns the worker count. */
+static size_t session_add_ble_workers(session_t *session,
+                                      sample_dispatcher_t *out,
+                                      unsigned int M,
+                                      unsigned int M2,
+                                      uint32_t lo_eff_hz,
+                                      uint32_t grid_hz,
+                                      unsigned int stride)
+{
+    size_t count = 0u;
+    for (unsigned int rf = 0u; rf < BLE_RF_CHANNEL_COUNT; rf++)
+    {
+        uint32_t center = ble_rf_channel_freq_hz(rf);
+        int32_t offset  = (int32_t)center - (int32_t)session->lo_frequency_hz;
+        if (labs((long)offset) >= (int32_t)(session->sample_rate_hz / 2u))
+            continue;
+
+        int bin = channelizer_bank_bin_for_center(M, lo_eff_hz, center,
+                                                  grid_hz);
+        if (bin < 0)
+            continue;
+
+        /* The decoder is a pure framing stage; the per-session BLE
+         * registry owns CRC gating and CRCInit recovery. */
+        ble_channel_processor_t *proc = &session->ble_channels[count];
+        if (ble_channel_processor_init(proc, out, rf, center,
+                                       session->sample_rate_hz,
+                                       (unsigned int)bin, M, M2, stride,
+                                       CHANNELIZER_BANK_RSSI_CAL_DB) != 0)
+            continue;
+        proc->session = session;
+        count++;
+    }
+    return count;
+}
+
 static int session_create_channels(session_t *session)
 {
     int debug = session->config.debug;
-    size_t total = 0u;
     /* Hybrid sessions share one 1 MHz channelizer (built in the BR/EDR
      * block below): BLE workers attach to its output dispatcher with
      * frame_stride=1 instead of running a second 2 MHz bank over the same
@@ -195,18 +245,15 @@ static int session_create_channels(session_t *session)
 
     if (session->ble_enabled && !shared)
     {
-        session->ble_channel_count = 0u;
-        session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT, sizeof(ble_channel_processor_t));
-        if (!session->ble_channels) return -1;
-
         /* Prefer the 2 MHz BLE raster (one bin per BLE channel => efficient),
          * but firpfbch2 needs an even bin count, so fall back to the 1 MHz
          * raster when 2 MHz would yield an odd M (e.g. a 10 MHz window). */
         uint32_t ble_grid = CHANNELIZER_BANK_GRID_BLE_HZ;
         if (channelizer_bank_bins_for_rate(session->sample_rate_hz, ble_grid) == 0u)
             ble_grid = CHANNELIZER_BANK_GRID_BR_EDR_HZ;
-        unsigned int ble_frame_stride = ble_grid / 1000000u;
 
+        if (alloc_dispatcher(&session->ble_chan_dispatcher) != 0)
+            return -1;
         if (channelizer_init(&session->ble_channelizer,
                               session->dispatcher,
                               session->ble_chan_dispatcher,
@@ -221,40 +268,18 @@ static int session_create_channels(session_t *session)
         }
         session->ble_channelizer.exhaustive = session->config.file_exhaustive;
 
-        for (unsigned int rf = 0u; rf < BLE_RF_CHANNEL_COUNT; rf++)
+        session->ble_channel_count = 0u;
+        session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT, sizeof(ble_channel_processor_t));
+        if (!session->ble_channels)
         {
-            uint32_t center = ble_rf_channel_freq_hz(rf);
-            int32_t offset  = (int32_t)center - (int32_t)session->lo_frequency_hz;
-            if (labs((long)offset) >= (int32_t)(session->sample_rate_hz / 2u))
-                continue;
-
-            ble_channel_processor_t *proc = &session->ble_channels[session->ble_channel_count];
-            int bin = (ble_grid == CHANNELIZER_BANK_GRID_BLE_HZ)
-                ? channelizer_bank_bin_for_center_ble(
-                      session->ble_channelizer.bank.M,
-                      session->ble_channelizer.bank.lo_eff_hz, center)
-                : (int)channelizer_bank_bin_for_center(
-                      session->ble_channelizer.bank.M,
-                      session->ble_channelizer.bank.lo_eff_hz,
-                      center, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
-            if (bin < 0)
-                continue;
-
-            /* The decoder is a pure framing stage; the per-session BLE
-             * registry owns CRC gating and CRCInit recovery. */
-            int ok = ble_channel_processor_init(
-                proc, session->ble_chan_dispatcher, rf, center,
-                session->sample_rate_hz, (unsigned int)bin,
-                session->ble_channelizer.bank.M,
-                session->ble_channelizer.bank.M2,
-                ble_frame_stride,
-                CHANNELIZER_BANK_RSSI_CAL_DB);
-
-            if (ok != 0)
-                continue;
-            proc->session = session;
-            session->ble_channel_count++;
+            channelizer_destroy(&session->ble_channelizer);
+            return -1;
         }
+        session->ble_channel_count = session_add_ble_workers(
+            session, session->ble_chan_dispatcher,
+            session->ble_channelizer.bank.M, session->ble_channelizer.bank.M2,
+            session->ble_channelizer.bank.lo_eff_hz,
+            ble_grid, ble_grid / 1000000u);
 
         if (session->ble_channel_count == 0u)
         {
@@ -332,61 +357,42 @@ static int session_create_channels(session_t *session)
         session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT, sizeof(ble_channel_processor_t));
         if (!session->ble_channels) return -1;
 
-        unsigned int M = session->bredr_channelizer.bank.M;
-        uint32_t lo_eff = session->bredr_channelizer.bank.lo_eff_hz;
-
-        for (unsigned int rf = 0u; rf < BLE_RF_CHANNEL_COUNT; rf++)
-        {
-            uint32_t center = ble_rf_channel_freq_hz(rf);
-            int32_t offset  = (int32_t)center - (int32_t)session->lo_frequency_hz;
-            if (labs((long)offset) >= (int32_t)(session->sample_rate_hz / 2u))
-                continue;
-
-            ble_channel_processor_t *proc = &session->ble_channels[session->ble_channel_count];
-            int bin = channelizer_bank_bin_for_center(
-                M, lo_eff, center, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
-            if (bin < 0)
-                continue;
-
-            int ok = ble_channel_processor_init(
-                proc, session->bredr_chan_dispatcher, rf, center,
-                session->sample_rate_hz, (unsigned int)bin,
-                M,
-                session->bredr_channelizer.bank.M2,
-                1u,
-                CHANNELIZER_BANK_RSSI_CAL_DB);
-
-            if (ok != 0)
-                continue;
-            proc->session = session;
-            session->ble_channel_count++;
-        }
+        session->ble_channel_count = session_add_ble_workers(
+            session, session->bredr_chan_dispatcher,
+            session->bredr_channelizer.bank.M,
+            session->bredr_channelizer.bank.M2,
+            session->bredr_channelizer.bank.lo_eff_hz,
+            CHANNELIZER_BANK_GRID_BR_EDR_HZ, 1u);
 
         if (session->ble_channel_count == 0u)
             return -1;
     }
 
-    total = session->ble_channel_count + session->bredr_channel_count +
-            (session->bredr_channelizer.active ? 1u : 0u);
+    if (session->ble_channel_count == 0u && session->bredr_channel_count == 0u)
+        return -1;
     if (debug)
     {
         fprintf(stderr,
                 "[session] lo=%u Hz rate=%u Hz decim=%u : %zu BLE + %zu BR/EDR processors\n",
-                session->lo_frequency_hz, session->sample_rate_hz, session->decimation,
+                session->lo_frequency_hz, session->sample_rate_hz,
+                session->sample_rate_hz / 2000000u,
                 session->ble_channel_count, session->bredr_channel_count);
     }
-    if (total == 0u) return -1;
     return 0;
 }
 
-static void *session_ble_worker_shim(void *arg)
+/* Spawn one worker thread, tracked for join-on-teardown via worker_threads.
+ * Returns 0 when started, -1 on pthread failure (callers treat that as
+ * fatal and tear the session down). */
+static int spawn_worker(session_t *session, size_t *started,
+                        void *(*fn)(void *), void *arg)
 {
-    return ble_channel_worker(arg);
-}
-
-static void *session_bredr_worker_shim(void *arg)
-{
-    return bredr_channel_worker(arg);
+    if (!session || !started || !fn)
+        return -1;
+    if (pthread_create(&session->worker_threads[*started], NULL, fn, arg) != 0)
+        return -1;
+    (*started)++;
+    return 0;
 }
 
 /* Drains the BLE collector queue and runs the tracker + presentation callback
@@ -439,8 +445,7 @@ static void session_drain_exhaustive(session_t *session)
             return;
 
         if (sample_dispatcher_all_free(session->dispatcher) &&
-            (session->ble_chan_dispatcher == NULL ||
-             sample_dispatcher_all_free(session->ble_chan_dispatcher)) &&
+            dispatcher_idle_or_absent(session->ble_chan_dispatcher) &&
             sample_dispatcher_all_free(session->bredr_chan_dispatcher) &&
             collector_count(&session->ble_collector) == 0u &&
             collector_count(&session->bredr_collector) == 0u)
@@ -483,71 +488,59 @@ int session_run(session_t *session)
 
     size_t started = 0u;
     for (size_t w = 0u; w < session->ble_channel_count; w++)
-    {
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           session_ble_worker_shim, &session->ble_channels[w]) != 0)
+        if (spawn_worker(session, &started,
+                         ble_channel_worker, &session->ble_channels[w]) != 0)
             break;
-        started++;
-    }
     for (size_t w = 0u; w < session->bredr_channel_count; w++)
-    {
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           session_bredr_worker_shim, &session->bredr_channels[w]) != 0)
+        if (spawn_worker(session, &started,
+                         bredr_channel_worker, &session->bredr_channels[w]) != 0)
             break;
-        started++;
-    }
 
     if (session->ble_channelizer.active)
     {
         session->ble_channelizer.shutdown = &session->shutdown_requested;
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           channelizer_worker, &session->ble_channelizer) != 0)
+        if (spawn_worker(session, &started,
+                         channelizer_worker, &session->ble_channelizer) != 0)
         {
             session_destroy(session);
             return -1;
         }
-        session->ble_channelizer_thread = session->worker_threads[started];
         session->ble_channelizer_running = 1;
-        started++;
     }
 
     if (session->bredr_channelizer.active)
     {
         session->bredr_channelizer.shutdown = &session->shutdown_requested;
-        if (pthread_create(&session->worker_threads[started], NULL,
-                            channelizer_worker, &session->bredr_channelizer) != 0)
+        if (spawn_worker(session, &started,
+                         channelizer_worker, &session->bredr_channelizer) != 0)
         {
             /* Channelizer thread failed to start: keep BR/EDR workers but they
              * would starve, so treat it as a hard failure. */
             session_destroy(session);
             return -1;
         }
-        session->bredr_channelizer_thread = session->worker_threads[started];
         session->bredr_channelizer_running = 1;
-        started++;
     }
 
     /* Collector threads are spawned last (joined last) so they drain any
      * remaining events after the channel workers have stopped producing. */
     if (session->ble_enabled)
     {
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           session_ble_collector_shim, session) != 0)
+        if (spawn_worker(session, &started,
+                         session_ble_collector_shim, session) != 0)
         {
             session_destroy(session);
             return -1;
         }
-        started++;
     }
     if (session->bredr_enabled)
     {
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           session_bredr_collector_shim, session) != 0)
+        if (spawn_worker(session, &started,
+                         session_bredr_collector_shim, session) != 0)
         {
             session_destroy(session);
             return -1;
         }
-        started++;
     }
 
     if (started == 0u)
@@ -668,12 +661,11 @@ int session_destroy(session_t *session)
     /* Snapshot the drop counters now: the dispatcher resets below zero them,
      * and session_run() calls session_destroy() before returning, so any
      * post-run query must read this snapshot rather than the live (now-zero)
-     * counters. */
-    session->dropped_blocks_total = sample_dispatcher_total_dropped(session->dispatcher);
-    if (session->ble_chan_dispatcher)
-        session->dropped_blocks_total += sample_dispatcher_total_dropped(session->ble_chan_dispatcher);
-    if (session->bredr_chan_dispatcher)
-        session->dropped_blocks_total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
+     * counters. The accumulate/total helpers are NULL-safe, so absent
+     * dispatchers (no BLE bank in hybrid) need no guards. */
+    session->dropped_blocks_total = sample_dispatcher_total_dropped(session->dispatcher)
+        + sample_dispatcher_total_dropped(session->ble_chan_dispatcher)
+        + sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
 
     /* Snapshot the per-pool breakdown so the session summary can report WHERE
      * blocks were dropped (the live counters are zeroed by the reset below). */
@@ -681,14 +673,12 @@ int session_destroy(session_t *session)
     dispatcher_accumulate(session->dispatcher,
                            &session->dropped_breakdown.rf_pool_exhausted,
                            &session->dropped_breakdown.rf_consumer_full);
-    if (session->ble_chan_dispatcher)
-        dispatcher_accumulate(session->ble_chan_dispatcher,
-                               &session->dropped_breakdown.ble_out_pool_exhausted,
-                               &session->dropped_breakdown.ble_out_consumer_full);
-    if (session->bredr_chan_dispatcher)
-        dispatcher_accumulate(session->bredr_chan_dispatcher,
-                               &session->dropped_breakdown.bredr_out_pool_exhausted,
-                               &session->dropped_breakdown.bredr_out_consumer_full);
+    dispatcher_accumulate(session->ble_chan_dispatcher,
+                           &session->dropped_breakdown.ble_out_pool_exhausted,
+                           &session->dropped_breakdown.ble_out_consumer_full);
+    dispatcher_accumulate(session->bredr_chan_dispatcher,
+                           &session->dropped_breakdown.bredr_out_pool_exhausted,
+                           &session->dropped_breakdown.bredr_out_consumer_full);
 
     if (session->workers_running)
         session_request_stop(session);
@@ -742,21 +732,11 @@ int session_destroy(session_t *session)
     collector_destroy(&session->bredr_collector);
     
     channelizer_destroy(&session->ble_channelizer);
-    if (session->ble_chan_dispatcher)
-    {
-        sample_dispatcher_destroy(session->ble_chan_dispatcher);
-        free(session->ble_chan_dispatcher);
-        session->ble_chan_dispatcher = NULL;
-    }
-    
+    free_dispatcher(&session->ble_chan_dispatcher);
+
     channelizer_destroy(&session->bredr_channelizer);
-    if (session->bredr_chan_dispatcher)
-    {
-        sample_dispatcher_destroy(session->bredr_chan_dispatcher);
-        free(session->bredr_chan_dispatcher);
-        session->bredr_chan_dispatcher = NULL;
-    }
-    sample_dispatcher_destroy(session->dispatcher);
+    free_dispatcher(&session->bredr_chan_dispatcher);
+    free_dispatcher(&session->dispatcher);
     return 0;
 }
 
@@ -840,12 +820,9 @@ unsigned long session_dropped_blocks(const session_t *session)
      * snapshot taken just before reset (see session_destroy). */
     if (session->torn_down)
         return session->dropped_blocks_total;
-    unsigned long total = sample_dispatcher_total_dropped(session->dispatcher);
-    if (session->ble_chan_dispatcher)
-        total += sample_dispatcher_total_dropped(session->ble_chan_dispatcher);
-    if (session->bredr_chan_dispatcher)
-        total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
-    return total;
+    return sample_dispatcher_total_dropped(session->dispatcher)
+         + sample_dispatcher_total_dropped(session->ble_chan_dispatcher)
+         + sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
 }
 
 void session_ble_frame_counts(const session_t *session,
@@ -902,14 +879,12 @@ void session_dropped_blocks_breakdown(const session_t *session,
         memset(out, 0, sizeof(*out));
         dispatcher_accumulate(session->dispatcher,
                                &out->rf_pool_exhausted, &out->rf_consumer_full);
-        if (session->ble_chan_dispatcher)
-            dispatcher_accumulate(session->ble_chan_dispatcher,
-                                   &out->ble_out_pool_exhausted,
-                                   &out->ble_out_consumer_full);
-        if (session->bredr_chan_dispatcher)
-            dispatcher_accumulate(session->bredr_chan_dispatcher,
-                                   &out->bredr_out_pool_exhausted,
-                                   &out->bredr_out_consumer_full);
+        dispatcher_accumulate(session->ble_chan_dispatcher,
+                               &out->ble_out_pool_exhausted,
+                               &out->ble_out_consumer_full);
+        dispatcher_accumulate(session->bredr_chan_dispatcher,
+                               &out->bredr_out_pool_exhausted,
+                               &out->bredr_out_consumer_full);
     }
 }
 

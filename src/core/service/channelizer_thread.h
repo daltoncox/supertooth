@@ -1,20 +1,22 @@
 /**
  * @file service/channelizer_thread.h
- * @brief Polyphase channelizer worker (shared by BR/EDR and BLE).
+ * @brief The channelizer bank's service adapter: threading + dispatchers.
+ *
+ * This is the threading half of channelization (the DSP half is
+ * dsp/channelizer_bank.h, which is thread-free and unit-tested directly).
+ * A channelizer owns one bank, pulls RF blocks through it on its worker
+ * thread, and publishes frame-major output for the channel processors.
+ * Sessions own one of these per bank (a single shared one in hybrid mode).
  *
  * Reads wideband RF blocks from the radio's sample dispatcher, runs them
- * through a single `channelizer_bank_t`, and writes frame-major blocks
+ * through the bank, and writes frame-major blocks
  * (layout `out[frame * M + bin]`, see channelizer_bank.h) into a second
  * dispatcher.  Each channel processor (BR/EDR or BLE) is a reader of that
  * second dispatcher and pulls its own bin with a uniform stride of M.
  *
- * BR/EDR and BLE instances are the same object configured with different
- * grids: BR/EDR uses the 1 MHz raster (CHANNELIZER_BANK_GRID_BR_EDR_HZ), BLE
- * uses the 2 MHz raster (CHANNELIZER_BANK_GRID_BLE_HZ) in BLE-only sessions.
- * Hybrid sessions run a single 1 MHz instance whose output dispatcher feeds
- * both BR/EDR workers (stride 1) and BLE workers (frame_stride 1): BLE
- * centers lie on the 1 MHz raster, so each BLE channel is the shared bank's
- * center-bin slice, and the second FIR pass is eliminated.
+ * Instances are configured by grid: the 1 MHz raster
+ * (CHANNELIZER_BANK_GRID_BR_EDR_HZ) for BR/EDR and hybrid sessions, the
+ * 2 MHz raster (CHANNELIZER_BANK_GRID_BLE_HZ) for BLE-only sessions.
  */
 
 #ifndef CHANNELIZER_THREAD_H

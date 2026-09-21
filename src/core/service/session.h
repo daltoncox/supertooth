@@ -91,11 +91,6 @@ typedef struct {
 typedef struct session {
     uint32_t lo_frequency_hz;
     uint32_t sample_rate_hz;
-    unsigned int decimation;
-
-    session_protocol_ref_t tune_ref;
-    unsigned int tune_bottom;
-    unsigned int tune_count;
 
     int ble_enabled;
     int bredr_enabled;
@@ -117,19 +112,18 @@ typedef struct session {
     sample_dispatcher_t *dispatcher;
 
     /** Frame-major channelizer output (BLE channel processors read here).
-     *  NULL in hybrid sessions: BLE workers share the BR/EDR output
-     *  dispatcher below (single 1 MHz bank, frame_stride=1) instead of a
-     *  second 2 MHz bank. */
+     *  NULL unless this is a BLE-only session: hybrid sessions share the
+     *  BR/EDR output dispatcher below (single 1 MHz bank, frame_stride=1)
+     *  instead of a second 2 MHz bank. Allocated lazily in
+     *  session_create_channels. */
     sample_dispatcher_t *ble_chan_dispatcher;
     channelizer_t        ble_channelizer;
-    pthread_t            ble_channelizer_thread;
     int                  ble_channelizer_running;
 
     /** Frame-major channelizer output (BR/EDR channel processors read here).
      *  In hybrid sessions BLE workers are readers here as well. */
     sample_dispatcher_t *bredr_chan_dispatcher;
     channelizer_t        bredr_channelizer;
-    pthread_t            bredr_channelizer_thread;
     int                  bredr_channelizer_running;
 
     ble_registry_t      ble_registry;  /**< owns BLE devices + connections. */
