@@ -18,8 +18,9 @@
 #define SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES 65536u
 #define SAMPLE_READER_QUEUE_CAPACITY 8u
 /* Worst-case fan-out: 20 BR/EDR channel workers + 10 BLE channel workers
- * in a hybrid session. */
-#define SAMPLE_DISPATCHER_READER_CAPACITY 30u
+ * sharing one output dispatcher in a hybrid session. Headroom above the
+ * 30-reader maximum so a future channel never fails init silently. */
+#define SAMPLE_DISPATCHER_READER_CAPACITY 32u
 #define SAMPLE_DISPATCHER_BLOCK_CAPACITY 64u
 
 typedef struct sample_block

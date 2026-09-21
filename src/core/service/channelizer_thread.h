@@ -10,8 +10,11 @@
  *
  * BR/EDR and BLE instances are the same object configured with different
  * grids: BR/EDR uses the 1 MHz raster (CHANNELIZER_BANK_GRID_BR_EDR_HZ), BLE
- * uses the 2 MHz raster (CHANNELIZER_BANK_GRID_BLE_HZ).  Each session owns two
- * of these — one per protocol — driven by the same worker entry point.
+ * uses the 2 MHz raster (CHANNELIZER_BANK_GRID_BLE_HZ) in BLE-only sessions.
+ * Hybrid sessions run a single 1 MHz instance whose output dispatcher feeds
+ * both BR/EDR workers (stride 1) and BLE workers (frame_stride 1): BLE
+ * centers lie on the 1 MHz raster, so each BLE channel is the shared bank's
+ * center-bin slice, and the second FIR pass is eliminated.
  */
 
 #ifndef CHANNELIZER_THREAD_H

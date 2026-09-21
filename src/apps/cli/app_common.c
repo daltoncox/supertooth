@@ -194,7 +194,7 @@ void app_print_drop_breakdown(const session_drop_breakdown_t *b)
      *   pool_exhausted : a producer could not allocate a block.
      *   consumer_full  : a reader's queue was full (a consumer fell behind). */
     printf("  Dropped blocks by pool:\n");
-    printf("    rf (radio input, shared by both channelizers):\n");
+    printf("    rf (radio input -> channelizer):\n");
     printf("        pool exhausted : %lu   (radio could not allocate an RF block)\n",
            b->rf_pool_exhausted);
     printf("        consumer full  : %lu   (a channelizer RF queue fell behind)\n",

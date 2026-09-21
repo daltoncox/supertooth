@@ -29,7 +29,6 @@ static int g_bottom_channel_explicit = 0;
 /* Maximum access-code bit errors accepted by the BR/EDR bitstream decoder.
  * Defaults to 0 (strict, byte-perfect access-code match). */
 static unsigned int g_ac_errors = 0u;
-static session_protocol_ref_t g_tune_ref = SESSION_REF_BREDR;
 static session_t *g_session = NULL;
 static app_device_view_t *g_device_view = NULL;
 static const app_output_mode_option_t s_output_modes[] = {
@@ -145,7 +144,7 @@ static void print_usage(const char *argv0)
 {
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
-             "[--tune-ref bredr|ble] [-d|--device [<type>:<id>]] [--ac-errors N] [--debug] [--enforce-crc on|off] "
+             "[-d|--device [<type>:<id>]] [--ac-errors N] [--debug] [--enforce-crc on|off] "
             "[--record]\n",
             argv0);
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
@@ -156,8 +155,6 @@ static void print_usage(const char *argv0)
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
     fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n", "--ac-errors N");
-    fprintf(stderr, "  %-30s Which protocol's channel window sets the tuning grid (default: bredr)\n",
-            "--tune-ref bredr|ble");
     app_print_device_usage_line();
     fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
     fprintf(stderr, "  %-30s Print block-drop diagnostics\n", "--debug");
@@ -219,7 +216,6 @@ int main(int argc, char *argv[])
         {"view", required_argument, NULL, 'v'},
         {"channels", required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
-        {"tune-ref", required_argument, NULL, 'r'},
         {"device", optional_argument, NULL, 'd'},
         {"ac-errors", required_argument, NULL, APP_OPT_AC_ERRORS},
         {"record", no_argument, NULL, APP_OPT_RECORD},
@@ -238,23 +234,21 @@ int main(int argc, char *argv[])
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
 
-    /* Default the BR/EDR channel count to what the radio can sustain. BR/EDR
-     * reference: max sample rate / 1 MHz per channel. BLE reference: each
-     * "BR/EDR channel" maps to 2 MHz of LE span, so / 2 MHz. For a HackRF
-     * (~20 MHz ceiling) this is 20 (BR/EDR ref) or 10 (BLE ref) channels. */
+    /* Default the BR/EDR channel count to what the radio can sustain:
+     * max sample rate / 1 MHz per channel. For a HackRF (~20 MHz ceiling)
+     * this is 20 channels. */
     {
         uint32_t max_rate = 0u;
         if (radio_get_max_sample_rate_for_type(g_device_spec_parsed.type,
                                                &max_rate) == 0 &&
             max_rate >= 1000000u)
         {
-            unsigned int divisor = (g_tune_ref == SESSION_REF_BLE) ? 2000000u : 1000000u;
-            g_num_bredr_channels = max_rate / divisor;
+            g_num_bredr_channels = max_rate / 1000000u;
         }
     }
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:c:b:r:d::Vh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:c:b:d::Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -273,18 +267,6 @@ int main(int argc, char *argv[])
             {
                 fprintf(stderr, "Invalid --channels value: %s (expected even 2-%u)\n",
                         optarg, BREDR_SESSION_MAX_CHANNELS);
-                print_usage(argv[0]);
-                return EXIT_FAILURE;
-            }
-            break;
-        case 'r':
-            if (strcmp(optarg, "ble") == 0)
-                g_tune_ref = SESSION_REF_BLE;
-            else if (strcmp(optarg, "bredr") == 0)
-                g_tune_ref = SESSION_REF_BREDR;
-            else
-            {
-                fprintf(stderr, "Invalid --tune-ref value: %s (expected bredr or ble)\n", optarg);
                 print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
@@ -390,20 +372,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    unsigned int channel_count, bottom_channel;
-    if (g_tune_ref == SESSION_REF_BLE)
-    {
-        /* Translate the BR/EDR-style CLI options into an LE RF window for the
-         * BLE reference. Each BR/EDR "channel" of the span is 2 MHz, so the LE
-         * window is that many LE RF channels wide. */
-        channel_count  = g_num_bredr_channels * 2u;
-        bottom_channel = g_bottom_bredr_channel * 2u;
-    }
-    else
-    {
-        channel_count  = g_num_bredr_channels;
-        bottom_channel = g_bottom_bredr_channel;
-    }
+    unsigned int channel_count  = g_num_bredr_channels;
+    unsigned int bottom_channel = g_bottom_bredr_channel;
 
     unsigned int sample_rate =
         (g_num_bredr_channels == 2u) ? 4000000u : g_num_bredr_channels * 1000000u;
@@ -449,8 +419,7 @@ int main(int argc, char *argv[])
     unsigned int ble_count =
         ble_channels_in_window((uint64_t)(lo_mhz * 1e6), sample_rate, ble_adv);
 
-    printf("Supertooth Hybrid (tune-ref: %s)\n",
-           g_tune_ref == SESSION_REF_BLE ? "BLE" : "BR/EDR");
+    printf("Supertooth Hybrid (BR/EDR window + BLE fan-out, shared channelizer)\n");
     printf("  BR/EDR ch%u-%u + BLE fan-out (up to %u BLE channels in window)\n",
            g_bottom_bredr_channel,
            g_bottom_bredr_channel + g_num_bredr_channels - 1u, ble_count);
@@ -505,7 +474,7 @@ int main(int argc, char *argv[])
     session_ble_config_t ble_cfg = { .enforce_crc = g_enforce_crc ? 1u : 0u };
     session_enable_ble(g_session, &ble_cfg, handle_hybrid_ble_packet, NULL);
 
-    if (session_tune(g_session, g_tune_ref, bottom_channel, channel_count) != 0)
+    if (session_tune(g_session, SESSION_REF_BREDR, bottom_channel, channel_count) != 0)
     {
         fprintf(stderr, "Failed to tune session.\n");
         session_destroy(g_session);

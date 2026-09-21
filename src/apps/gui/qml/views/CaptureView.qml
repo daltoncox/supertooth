@@ -15,29 +15,23 @@ Rectangle {
     property int acErrors: 0
     property bool running: false
 
-    // Channel layout. numChannels is the count of channels in the active
-    // grid, and the window's bottom edge snaps to one of two grids:
-    //   - BR/EDR lock: numChannels = BR/EDR channels (even, 2..maxChannels),
-    //     window = numChannels MHz, LO at a half-MHz frequency (e.g. 2411.5).
-    //   - BLE lock: numChannels = BLE channels to capture (2..maxBleChannels)
-    //     from bottomLeIndex, window = numChannels*2 MHz, LO at a whole-MHz
-    //     frequency.
-    // The lock is user-selectable in hybrid mode; BLE-only sessions are
-    // always BLE-locked and BR/EDR-only sessions always BR/EDR-locked.
+    // Channel layout. Hybrid and BR/EDR-only sessions always capture on
+    // the BR/EDR grid: numChannels = BR/EDR channels (even, 2..maxChannels),
+    // window = numChannels MHz, LO at a half-MHz frequency (e.g. 2411.5).
+    // BLE-only sessions capture on the BLE grid: numChannels = BLE channels
+    // to capture (2..maxBleChannels) from bottomLeIndex, window =
+    // numChannels*2 MHz, LO at a whole-MHz frequency.
     // CaptureView is the single source of truth — all writes (SpinBoxes,
     // spectrum drags) go through setWindowBredr/setWindowBle so clamping
     // is applied uniformly.
-    property int lockReference: 0       // 0 = BR/EDR, 1 = BLE (hybrid only)
-    property int bottomChannel: 0       // BR/EDR channel index (BR/EDR lock)
-    property int bottomLeIndex: 0       // LE RF channel index (BLE lock)
+    property int bottomChannel: 0       // BR/EDR channel index (hybrid/BR/EDR)
+    property int bottomLeIndex: 0       // LE RF channel index (BLE-only)
     property int numChannels: 20
     readonly property int maxChannels: 20        // RECEIVER_BREDR_MAX_CHANNELS
     readonly property int maxBleChannels: 10     // BLE_SESSION_MAX_CHANNELS
     readonly property int windowMaxChannels: bleLocked ? maxBleChannels : maxChannels
 
-    readonly property bool bleLocked: sessionTypeIndex === 1 ? true
-                                    : sessionTypeIndex === 2 ? false
-                                    : lockReference === 1
+    readonly property bool bleLocked: sessionTypeIndex === 1
 
     // Derived helpers shared with the spectrum + summary labels.
     readonly property real windowLeftMhz: bleLocked ? 2401 + 2 * bottomLeIndex
@@ -90,25 +84,17 @@ Rectangle {
                                              + " · LO " + (loFreqHz / 1e6) + " MHz"
 
     // ---- Backend-ready values ---------------------------------------------
-    // What actually gets captured, translated per the lock reference:
-    //   - BR/EDR grid: numChannels processors (even), window = numChannels
-    //     MHz, LO at a half-MHz.
-    //   - LE grid: numChannels BLE channels from bottomLeIndex, window =
-    //     2*numChannels MHz, LO at a whole MHz; the backend hybrid path
-    //     takes an odd channel_count one MHz wider than the window, so
-    //     2*numChannels-1 is sent; the two BR/EDR channels centered on the
-    //     Nyquist edges are not processed.
+    // Hybrid and BR/EDR sessions take numChannels BR/EDR processors and a
+    // numChannels-MHz window at a half-MHz LO. BLE fans out inside the
+    // window from the shared channelizer.
     // bleAdvChannel is the advertising channel whose center lies inside the
     // window (at most one fits a <=20 MHz window), or 0 = none — the hybrid
     // BLE worker idles and BLE-only sessions fall back to ch37.
-    readonly property int backendChannelCount: bleLocked ? numChannels * 2 - 1
-                                                         : numChannels
-    readonly property int backendBottomChannel: bleLocked ? Math.min(78, bottomLeIndex * 2)
-                                                          : bottomChannel
+    readonly property int backendChannelCount: numChannels
+    readonly property int backendBottomChannel: bottomChannel
     // BLE-only sessions take their window in LE RF units (numChannels
     // channels from bottomLeIndex).
     readonly property int backendLeChannelCount: numChannels
-    readonly property int backendLeGrid: bleLocked ? 1 : 0
     readonly property int backendBleAdvChannel: {
         if (leFirstRf <= 0 && leLastRf >= 0) return 37
         if (leFirstRf <= 12 && leLastRf >= 12) return 38
@@ -138,9 +124,9 @@ Rectangle {
         if (k !== bottomLeIndex) bottomLeIndex = k
     }
 
-    // Re-align the window when the lock changes (mode switch or hybrid lock
-    // toggle): reset to the new grid's defaults — the lowest bottom channel
-    // (0) and the maximum channel count (maxBleChannels/maxChannels).
+    // Re-align the window on session-type switch: reset to the new grid's
+    // defaults — the lowest bottom channel (0) and the maximum channel
+    // count (maxBleChannels/maxChannels).
     onBleLockedChanged: {
         if (bleLocked)
             setWindowBle(0, maxBleChannels)
@@ -333,38 +319,6 @@ Rectangle {
                 }
             }
 
-            ColumnLayout {
-                spacing: 2
-
-                Label {
-                    text: qsTr("Lock Reference")
-                    color: "#cccccc"
-                    font.bold: true
-                }
-
-                ComboBox {
-                    id: lockCombo
-                    // Only user-selectable in hybrid; BLE-only sessions are
-                    // always BLE-locked, BR/EDR-only always BR/EDR-locked.
-                    enabled: !root.running && root.sessionTypeIndex === 0
-                    model: ["BR/EDR", "BLE"]
-
-                    Component.onCompleted: currentIndex = root.bleLocked ? 1 : 0
-
-                    onActivated: function (index) {
-                        root.lockReference = index
-                    }
-                    Connections {
-                        target: root
-                        function onBleLockedChanged() {
-                            var want = root.bleLocked ? 1 : 0
-                            if (lockCombo.currentIndex !== want)
-                                lockCombo.currentIndex = want
-                        }
-                    }
-                }
-            }
-
             Item { Layout.fillWidth: true }
 
             ColumnLayout {
@@ -392,7 +346,7 @@ Rectangle {
         Label {
             text: root.running
                   ? qsTr("Stop the running session to change the channel layout.")
-                  : qsTr("Drag the highlighted window to retune; drag either edge to resize. In hybrid, the lock reference picks the tuning grid: BR/EDR steps 1 MHz (half-MHz LO), BLE steps 2 MHz (whole-MHz LO).")
+                  : qsTr("Drag the highlighted window to retune; drag either edge to resize. Hybrid always captures the BR/EDR grid (1 MHz steps, half-MHz LO) with BLE fanning out inside the window.")
             color: "#858585"
             Layout.fillWidth: true
             wrapMode: Text.WordWrap

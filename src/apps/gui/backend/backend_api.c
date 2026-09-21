@@ -943,7 +943,6 @@ int backend_session_run_bredr(backend_session_t *session,
 int backend_session_run_hybrid(backend_session_t *session,
                                unsigned int channel_count,
                                unsigned int bottom_channel,
-                               int le_grid,
                                uint8_t ble_channel,
                                int input_type,
                                const char *device_id,
@@ -962,41 +961,16 @@ int backend_session_run_hybrid(backend_session_t *session,
     radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
     (void)input_type; /* Only HackRF is supported by the backend today. */
 
-    /* Defensive validation of the channel window. On the BR/EDR grid the
-     * window is channel_count MHz (even count); on the LE grid it is
-     * channel_count+1 MHz (odd count, even bottom). */
+    /* Hybrid always captures the BR/EDR grid: channel_count MHz (even
+     * count) from bottom_channel. BLE fans out inside the window from the
+     * shared channelizer, so no LE-grid tune exists anymore. */
     session_protocol_ref_t ref = SESSION_REF_BREDR;
-    if (le_grid == BACKEND_GRID_LE)
-    {
-        /* The GUI passes the window in BR/EDR-style MHz units (an odd
-         * channel_count spanning channel_count+1 MHz and an even
-         * bottom_channel). session_tune() expects LE RF units on the LE
-         * grid (one LE channel per 2 MHz), so halve both before tuning. */
-        bottom_channel &= ~1u;
-        if (channel_count < 1u)
-            channel_count = 1u;
-        if (channel_count > 2u * BLE_SESSION_MAX_CHANNELS - 1u)
-            channel_count = 2u * BLE_SESSION_MAX_CHANNELS - 1u;
-        if ((channel_count & 1u) == 0u)
-            channel_count -= 1u;
-
-        channel_count = (channel_count + 1u) / 2u;
-        if (channel_count > BLE_SESSION_MAX_CHANNELS)
-            channel_count = BLE_SESSION_MAX_CHANNELS;
-        bottom_channel /= 2u;
-        ref = SESSION_REF_BLE;
-    }
-    else
-    {
-        channel_count &= ~1u;
-        if (channel_count < 2u)
-            channel_count = 2u;
-        if (channel_count > BREDR_SESSION_MAX_CHANNELS)
-            channel_count = BREDR_SESSION_MAX_CHANNELS;
-    }
-    unsigned int max_bottom = (ref == SESSION_REF_BLE)
-                                  ? BLE_RF_CHANNEL_COUNT - channel_count
-                                  : 78u - (channel_count - 1u);
+    channel_count &= ~1u;
+    if (channel_count < 2u)
+        channel_count = 2u;
+    if (channel_count > BREDR_SESSION_MAX_CHANNELS)
+        channel_count = BREDR_SESSION_MAX_CHANNELS;
+    unsigned int max_bottom = 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;
 

@@ -2,10 +2,11 @@
  *
  * Verifies:
  *  - session_tune: LO / sample-rate derivation for the BR/EDR grid
- *    (even N, half-MHz LO) and the BLE grid (2N MHz, whole-MHz LO).
+ *    (even N, half-MHz LO) and the BLE grid (2N MHz, whole-MHz LO,
+ *    BLE-only sessions).
  *  - session_create_channels_for_test: processor counts when only BLE is
- *    enabled, only BR/EDR enabled, and when the non-reference protocol fans
- *    out over the reference window (hybrid fan-out).
+ *    enabled, only BR/EDR enabled, and hybrid (shared 1 MHz bank: BLE fans
+ *    out over the BR/EDR window; BLE-ref hybrid tunes are rejected).
  *  - RF <-> LE channel mapping helpers used by the fan-out math.
  */
 #include <math.h>
@@ -119,7 +120,8 @@ static void test_processor_counts(void)
         session_destroy(&s);
     }
 
-    /* Hybrid BR/EDR-ref: BLE fans out over the BR/EDR capture window. */
+    /* Hybrid BR/EDR-ref: BLE fans out over the BR/EDR capture window from
+     * the shared 1 MHz bank (no second channelizer). */
     {
         session_t s;
         memset(&s, 0, sizeof(s));
@@ -129,23 +131,27 @@ static void test_processor_counts(void)
                   session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
         CHECK_U64("hybrid bredr-ref bredr count", bredr_n, 20u);
         CHECK_U64("hybrid bredr-ref ble count", ble_n, 10u);
+        /* Shared topology: no BLE dispatcher/bank, one RF reader total,
+         * BLE workers stride the 1 MHz bank directly. */
+        CHECK_U64("hybrid shared no ble dispatcher",
+                  s.ble_chan_dispatcher == NULL, 1);
+        CHECK_U64("hybrid shared ble bank inactive",
+                  s.ble_channelizer.active, 0);
+        CHECK_U64("hybrid shared single rf reader",
+                  s.dispatcher->reader_count, 1u);
+        for (size_t i = 0u; i < ble_n; i++)
+            CHECK_U64("hybrid shared ble stride 1",
+                      s.ble_channels[i].frame_stride, 1u);
         session_destroy(&s);
     }
 
-    /* Hybrid BLE-ref: BR/EDR fans out inside the BLE capture window. */
+    /* Hybrid BLE-ref no longer exists: BLE fans out from the shared 1 MHz
+     * bank, so a BLE-grid tune with both protocols enabled is rejected. */
     {
         session_t s;
         memset(&s, 0, sizeof(s));
-        make_session(&s, 0, 10, SESSION_REF_BLE, 1, 1);
-        size_t ble_n = 0, bredr_n = 0;
-        CHECK_U64("hybrid ble-ref setup",
-                  session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
-        CHECK_U64("hybrid ble-ref ble count", ble_n, 10u);
-        /* The 20 MHz BLE window spans 2402..2420 MHz; BR/EDR channels with
-         * centers strictly inside that (ch0..ch18) are 19 processors.
-         * Channel 19 at 2421 MHz is at the Nyquist edge and excluded by the
-         * channelizer's asymmetric bin range [-M/2, +M/2-1]. */
-        CHECK_U64("hybrid ble-ref bredr count", bredr_n, 19u);
+        CHECK_U64("hybrid ble-ref rejected",
+                  make_session(&s, 0, 10, SESSION_REF_BLE, 1, 1), -1);
         session_destroy(&s);
     }
 

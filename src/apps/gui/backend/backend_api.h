@@ -35,10 +35,6 @@ extern "C" {
 #define BACKEND_BLE_CH38 38u
 #define BACKEND_BLE_CH39 39u
 
-/* Channel-layout grids (mirror RECEIVER_BREDR_GRID_* in the core). */
-#define BACKEND_GRID_BREDR 0
-#define BACKEND_GRID_LE    1
-
 #define BACKEND_ADDR_TEXT_LEN   32
 #define BACKEND_TYPE_TEXT_LEN   32
 #define BACKEND_INFO_TEXT_LEN   160
@@ -201,12 +197,9 @@ int backend_session_run_bredr(backend_session_t *session,
 
 /**
  * Start a blocking hybrid (BR/EDR + BLE) receive session from a single
- * stream covering the configured channel window. The grid selects the LO
- * alignment: BACKEND_GRID_BREDR = window is channel_count MHz starting at
- * bottom_channel (LO at a half-MHz); BACKEND_GRID_LE = window is
- * channel_count+1 MHz starting at bottom_channel (LO at a whole MHz;
- * channel_count is odd and bottom_channel even, since the two BR/EDR
- * channels centered on the Nyquist edges are not processed). ble_channel
+ * stream covering the configured BR/EDR channel window (channel_count MHz
+ * starting at bottom_channel, LO at a half-MHz). BLE fans out inside the
+ * window from the shared 1 MHz channelizer. ble_channel
  * is the advertising channel (37/38/39) whose center lies inside the
  * window, or 0 to leave the BLE worker idle. Values are clamped/validated
  * defensively. Blocks until backend_session_request_stop() is called
@@ -220,7 +213,6 @@ int backend_session_run_bredr(backend_session_t *session,
 int backend_session_run_hybrid(backend_session_t *session,
                                unsigned int channel_count,
                                unsigned int bottom_channel,
-                               int le_grid,
                                uint8_t ble_channel,
                                int input_type,
                                const char *device_id,

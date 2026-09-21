@@ -61,7 +61,7 @@ void ReceiverController::setRunning(bool running)
 bool ReceiverController::start(int inputType, const QString &deviceId,
                                 int sessionType, bool enforceCrc,
                                 int channelCount, int bottomChannel,
-                                int leGrid, int bleChannel, int acErrors)
+                                int bleChannel, int acErrors)
 {
     qCInfo(lcSession).nospace().noquote()
         << "start() requested: inputType=" << inputType
@@ -70,7 +70,6 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         << " enforceCrc=" << enforceCrc
         << " channelCount=" << channelCount
         << " bottomChannel=" << bottomChannel
-        << " leGrid=" << leGrid
         << " bleChannel=" << bleChannel
         << " acErrors=" << acErrors
         << " running=" << m_running;
@@ -127,12 +126,11 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         << ", device=" << (idStr.isEmpty() ? QString("<default>") : idStr)
         << ", channels=" << channelCount
         << ", bottom=" << bottomChannel
-        << ", grid=" << (leGrid == BACKEND_GRID_LE ? "LE" : "BR/EDR")
         << ", bleCh=" << bleChannel << ")";
 
     m_thread = std::make_unique<std::thread>(
         [session, sessionType, inputType, idStr, enforceCrc,
-         channelCount, bottomChannel, leGrid, bleChannel, self]() {
+         channelCount, bottomChannel, bleChannel, self]() {
             QByteArray idBytes = idStr.toUtf8();
             const char *idPtr = idBytes.isEmpty() ? nullptr
                                                   : idBytes.constData();
@@ -172,7 +170,6 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
                 result = backend_session_run_hybrid(session,
                                                     (unsigned int)channelCount,
                                                     (unsigned int)bottomChannel,
-                                                    leGrid,
                                                     (uint8_t)bleChannel,
                                                     inputType, idPtr,
                                                     enforceCrc ? 1 : 0,

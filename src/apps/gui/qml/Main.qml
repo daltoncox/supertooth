@@ -83,7 +83,6 @@ onPlayPauseToggled: {
                             "enforceCrc =", captureView.enforceCrc,
                             "channels =", count,
                             "bottom =", bottom,
-                            "leGrid =", captureView.backendLeGrid,
                             "bleAdv =", captureView.backendBleAdvChannel)
                 if (receiverController.running) {
                     receiverController.stop()
@@ -96,7 +95,6 @@ onPlayPauseToggled: {
                                              captureView.enforceCrc,
                                              count,
                                              bottom,
-                                             captureView.backendLeGrid,
                                              captureView.backendBleAdvChannel,
                                              captureView.acErrors)
                 }

@@ -30,9 +30,12 @@ extern "C" {
 
 #define BREDR_SESSION_MAX_CHANNELS 79u
 
-/** Protocol whose channel window defines the radio tuning. */
+/** Protocol whose channel window defines the radio tuning.
+ *  SESSION_REF_BLE is for BLE-only sessions. Hybrid sessions always use
+ *  SESSION_REF_BREDR on a single shared 1 MHz channelizer (session_tune()
+ *  rejects BLE-ref tunes once both protocols are enabled). */
 typedef enum {
-    SESSION_REF_BLE   = 0,  /**< Window is an LE RF channel range; BR/EDR fans out inside it. */
+    SESSION_REF_BLE   = 0,  /**< Window is an LE RF channel range (BLE-only). */
     SESSION_REF_BREDR = 1,  /**< Window is a BR/EDR channel range; BLE fans out inside it. */
 } session_protocol_ref_t;
 
@@ -79,6 +82,8 @@ typedef struct {
     unsigned long rf_consumer_full;
     unsigned long bredr_out_pool_exhausted;
     unsigned long bredr_out_consumer_full;
+    /* Always zero in hybrid sessions (no BLE bank/dispatcher there; BLE
+     * workers share the BR/EDR output pool above). */
     unsigned long ble_out_pool_exhausted;
     unsigned long ble_out_consumer_full;
 } session_drop_breakdown_t;
@@ -111,13 +116,17 @@ typedef struct session {
 
     sample_dispatcher_t *dispatcher;
 
-    /** Frame-major channelizer output (BLE channel processors read here). */
+    /** Frame-major channelizer output (BLE channel processors read here).
+     *  NULL in hybrid sessions: BLE workers share the BR/EDR output
+     *  dispatcher below (single 1 MHz bank, frame_stride=1) instead of a
+     *  second 2 MHz bank. */
     sample_dispatcher_t *ble_chan_dispatcher;
     channelizer_t        ble_channelizer;
     pthread_t            ble_channelizer_thread;
     int                  ble_channelizer_running;
 
-    /** Frame-major channelizer output (BR/EDR channel processors read here). */
+    /** Frame-major channelizer output (BR/EDR channel processors read here).
+     *  In hybrid sessions BLE workers are readers here as well. */
     sample_dispatcher_t *bredr_chan_dispatcher;
     channelizer_t        bredr_channelizer;
     pthread_t            bredr_channelizer_thread;

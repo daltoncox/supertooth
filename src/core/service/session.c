@@ -125,6 +125,15 @@ int session_tune(session_t *session,
 {
     if (!session || channel_count == 0u) return -1;
 
+    /* Hybrid sessions (BLE + BR/EDR) run a single shared 1 MHz channelizer
+     * anchored to the BR/EDR grid: BLE workers are fed center-bin slices of
+     * the same bank, so a BLE-grid tune has no meaning anymore. BLE-only
+     * sessions keep SESSION_REF_BLE. Fail loudly so stale callers (e.g. an
+     * old --tune-ref ble invocation) cannot silently mis-tune. */
+    if (session->ble_enabled && session->bredr_enabled &&
+        ref != SESSION_REF_BREDR)
+        return -1;
+
     double lo_mhz, bredr_span_mhz, ble_span_mhz;
     unsigned int bredr_rate_mhz;
 
@@ -175,8 +184,16 @@ static int session_create_channels(session_t *session)
 {
     int debug = session->config.debug;
     size_t total = 0u;
+    /* Hybrid sessions share one 1 MHz channelizer (built in the BR/EDR
+     * block below): BLE workers attach to its output dispatcher with
+     * frame_stride=1 instead of running a second 2 MHz bank over the same
+     * RF. Two full FIR passes over 20 Msps starve both RF readers live
+     * (measured ~48% RF block loss per channelizer), which punches holes
+     * into every channel bitstream and collapses BR/EDR clock tracking.
+     * BLE-only sessions keep their dedicated 2 MHz bank. */
+    int shared = session->ble_enabled && session->bredr_enabled;
 
-    if (session->ble_enabled)
+    if (session->ble_enabled && !shared)
     {
         session->ble_channel_count = 0u;
         session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT, sizeof(ble_channel_processor_t));
@@ -303,6 +320,52 @@ static int session_create_channels(session_t *session)
         session->bredr_channelizer.active = 1;
     }
 
+    if (shared)
+    {
+        /* BLE fan-out over the shared 1 MHz bank: every BLE center lies on
+         * the 1 MHz raster, so each BLE channel is the center-bin slice of
+         * the shared bank (stride 1 already yields 2 Msps). A 1 MHz slice
+         * carries everything the 1 Msym/s BLE decoder can use; only 2M PHY
+         * would want the wider 2 MHz bin, which this chain cannot decode
+         * anyway. BLE-only sessions still use the dedicated 2 MHz bank. */
+        session->ble_channel_count = 0u;
+        session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT, sizeof(ble_channel_processor_t));
+        if (!session->ble_channels) return -1;
+
+        unsigned int M = session->bredr_channelizer.bank.M;
+        uint32_t lo_eff = session->bredr_channelizer.bank.lo_eff_hz;
+
+        for (unsigned int rf = 0u; rf < BLE_RF_CHANNEL_COUNT; rf++)
+        {
+            uint32_t center = ble_rf_channel_freq_hz(rf);
+            int32_t offset  = (int32_t)center - (int32_t)session->lo_frequency_hz;
+            if (labs((long)offset) >= (int32_t)(session->sample_rate_hz / 2u))
+                continue;
+
+            ble_channel_processor_t *proc = &session->ble_channels[session->ble_channel_count];
+            int bin = channelizer_bank_bin_for_center(
+                M, lo_eff, center, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
+            if (bin < 0)
+                continue;
+
+            int ok = ble_channel_processor_init(
+                proc, session->bredr_chan_dispatcher, rf, center,
+                session->sample_rate_hz, (unsigned int)bin,
+                M,
+                session->bredr_channelizer.bank.M2,
+                1u,
+                CHANNELIZER_BANK_RSSI_CAL_DB);
+
+            if (ok != 0)
+                continue;
+            proc->session = session;
+            session->ble_channel_count++;
+        }
+
+        if (session->ble_channel_count == 0u)
+            return -1;
+    }
+
     total = session->ble_channel_count + session->bredr_channel_count +
             (session->bredr_channelizer.active ? 1u : 0u);
     if (debug)
@@ -376,7 +439,8 @@ static void session_drain_exhaustive(session_t *session)
             return;
 
         if (sample_dispatcher_all_free(session->dispatcher) &&
-            sample_dispatcher_all_free(session->ble_chan_dispatcher) &&
+            (session->ble_chan_dispatcher == NULL ||
+             sample_dispatcher_all_free(session->ble_chan_dispatcher)) &&
             sample_dispatcher_all_free(session->bredr_chan_dispatcher) &&
             collector_count(&session->ble_collector) == 0u &&
             collector_count(&session->bredr_collector) == 0u)
