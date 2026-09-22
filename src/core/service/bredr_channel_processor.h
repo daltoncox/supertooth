@@ -53,6 +53,31 @@ typedef struct {
     float pending_rssi_dbr;
     _Bool pending_rssi_valid;
 
+    /* Absolute radio-sample index of the current packet's header start,
+     * latched when its access code is detected and consumed when the packet
+     * completes (same lifetime as pending_rssi_*).
+     *
+     * The bitstream decoder only completes after a fixed maximum-length body
+     * (the header is whitened until CLK1-6 is recovered, so the true length
+     * is unknowable up front).  Timestamping at completion would place the
+     * stamp a fixed ~3 ms after the header -- plus any wall-clock holes from
+     * RF blocks dropped under load that the collection spanned.  Clock
+     * recovery compares the header against the central clock derived from
+     * this stamp, so a hole-shifted stamp validates at the wrong CLK1-6 and
+     * actively decays the lock (see recover_clock_drift): drops would not
+     * just remove packets, they would poison the survivors.  Latching the
+     * stamp at the access code keeps the header-to-stamp distance fixed
+     * (68 us) regardless of downstream drops, so drops only ever remove
+     * packets and tracking rides through bottlenecks. */
+    uint64_t pending_header_abs_radio;
+    _Bool pending_header_valid;
+
+    /* Trailing edge of the previously processed channel block, so an access
+     * code straddling a block boundary can still be located.  Zero until the
+     * first block has been seen. */
+    uint64_t prev_block_end_radio;
+    _Bool has_prev_block;
+
     /* Per-channel noise/interference floor estimate (linear mean power),
      * tracked for diagnostics only -- NOT subtracted from reported RSSI (see
      * receiver_rssi_signal_dbr).  Seeded from the idle prefix that precedes a

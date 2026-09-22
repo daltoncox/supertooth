@@ -110,13 +110,23 @@ static int emit_frame(bredr_channel_processor_t *proc,
     proc->pending_rssi_valid = 0;
     rssi_dbr += proc->rssi_cal_db;
 
-    /* Radio sample index = block base (input samples) + decimated offset
-     * scaled back up to the input rate by input_decimation. */
-    unsigned int end_sample = end_decim_sample + proc->samps_per_symbol;
-    if (end_sample > decim_out)
-        end_sample = decim_out;
-    uint64_t abs_radio = abs_block_base_radio +
-        (uint64_t)end_sample * (uint64_t)proc->input_decimation;
+    /* Radio sample index = the latched header-start stamp when available (see
+     * the field docs in the header): it sits a fixed 68 us after the access
+     * code regardless of RF holes spanned during collection.  Without it
+     * (unlocatable access code, e.g. straddling a dropped block), fall back
+     * to the collection-end stamp. */
+    uint64_t abs_radio;
+    if (proc->pending_header_valid)
+        abs_radio = proc->pending_header_abs_radio;
+    else
+    {
+        unsigned int end_sample = end_decim_sample + proc->samps_per_symbol;
+        if (end_sample > decim_out)
+            end_sample = decim_out;
+        abs_radio = abs_block_base_radio +
+            (uint64_t)end_sample * (uint64_t)proc->input_decimation;
+    }
+    proc->pending_header_valid = 0;
 
     rx_metadata_t meta = bredr_make_metadata(
         abs_radio,
@@ -198,12 +208,42 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
                 &proc->noise_floor_linear, &proc->noise_floor_initialized,
                 RECEIVER_RSSI_INVALID);
             proc->pending_rssi_valid = !isnan(proc->pending_rssi_dbr);
+
+            /* Latch the header-start timestamp now, for the same reason:
+             * the 64-bit sync word ends at ac_end, so it starts at
+             * ac_end - 64 (decimated samples) and the header follows the
+             * 4-bit trailer 68 samples later.  emit_frame stamps the packet
+             * with this instead of the collection-end position, keeping the
+             * header-to-stamp distance hole-independent (see field docs). */
+            int sync_start = (int)ac_end - 64;
+            if (sync_start >= 0)
+            {
+                uint64_t abs_sync = blk->block_base_sample +
+                    (uint64_t)sync_start * (uint64_t)proc->input_decimation;
+                proc->pending_header_abs_radio =
+                    abs_sync + 68u * (uint64_t)proc->input_decimation;
+                proc->pending_header_valid = 1;
+            }
+            else if (proc->has_prev_block &&
+                     proc->prev_block_end_radio == blk->block_base_sample)
+            {
+                proc->pending_header_abs_radio =
+                    proc->prev_block_end_radio -
+                    (uint64_t)(-sync_start) * (uint64_t)proc->input_decimation +
+                    68u * (uint64_t)proc->input_decimation;
+                proc->pending_header_valid = 1;
+            }
+            else
+            {
+                proc->pending_header_valid = 0;
+            }
         }
 
         if (status == BREDR_ERROR)
         {
             proc->pending_rssi_dbr   = RECEIVER_RSSI_INVALID;
             proc->pending_rssi_valid = 0;
+            proc->pending_header_valid = 0;
         }
 
         proc->prev_state = status;
@@ -214,6 +254,11 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
             emit_frame(proc, sample_index, decim_out, blk->block_base_sample);
         }
     }
+    /* Remember this block's trailing edge so an access code detected at the
+     * top of the next block can still be located (see the latch above). */
+    proc->prev_block_end_radio = blk->block_base_sample +
+        (uint64_t)decim_out * (uint64_t)proc->input_decimation;
+    proc->has_prev_block = 1;
     return 0;
 }
 
