@@ -103,6 +103,103 @@ static void test_uuid128_custom(void)
     TEST_ASSERT(strstr(services, "128-bit") != NULL);
 }
 
+static void test_uuid32_lists(void)
+{
+    /* Complete 32-bit list {0x12345678}, solicitation {0x11223344},
+     * service-data for 0x55667788. */
+    const uint8_t adv[] = {
+        0x05, 0x05, 0x78, 0x56, 0x34, 0x12,
+        0x05, 0x1F, 0x44, 0x33, 0x22, 0x11,
+        0x06, 0x20, 0x88, 0x77, 0x66, 0x55, 0x01,
+    };
+    ble_adv_info_t info;
+    ble_adv_parse_info(adv, sizeof(adv), &info);
+    TEST_ASSERT(info.service32_count == 3);
+    TEST_ASSERT(info.service_uuids32[0] == 0x12345678u);
+    TEST_ASSERT(info.has_complete_list && info.has_solicitation);
+    TEST_ASSERT(info.has_service_data);
+
+    /* Merge dedups 32-bit UUIDs. */
+    ble_adv_info_t dst;
+    memset(&dst, 0, sizeof(dst));
+    ble_adv_info_merge(&dst, &info);
+    ble_adv_info_merge(&dst, &info);
+    TEST_ASSERT(dst.service32_count == 3);
+}
+
+static void test_intervals_and_role(void)
+{
+    /* Conn interval 24..40 (0x12), adv interval 160 (0x1A), role 2 (0x1C). */
+    const uint8_t adv[] = {
+        0x05, 0x12, 0x18, 0x00, 0x28, 0x00,
+        0x03, 0x1A, 0xA0, 0x00,
+        0x02, 0x1C, 0x02,
+    };
+    ble_adv_info_t info;
+    ble_adv_parse_info(adv, sizeof(adv), &info);
+    TEST_ASSERT(info.has_conn_interval);
+    TEST_ASSERT(info.conn_interval_min == 24u && info.conn_interval_max == 40u);
+    TEST_ASSERT(info.has_adv_interval && info.adv_interval == 160u);
+    TEST_ASSERT(info.has_le_role && info.le_role == 2u);
+}
+
+static void test_malformed_ad(void)
+{
+    ble_adv_info_t info;
+
+    /* Zero-length terminator stops parsing; trailing bytes ignored. */
+    const uint8_t term[] = {0x02, 0x01, 0x06, 0x00, 0xFF, 0xFF};
+    ble_adv_parse_info(term, sizeof(term), &info);
+    TEST_ASSERT(info.has_flags && info.flags == 0x06);
+
+    /* Truncated field (ad_len overruns the buffer) stops parsing safely. */
+    const uint8_t trunc[] = {0x02, 0x01, 0x06, 0x10, 0x01};
+    ble_adv_parse_info(trunc, sizeof(trunc), &info);
+    TEST_ASSERT(info.has_flags && info.flags == 0x06);
+
+    /* Unknown AD type is skipped; known fields around it still parse. */
+    const uint8_t unk[] = {
+        0x02, 0x01, 0x06,
+        0x03, 0x77, 0xAA, 0xBB,
+        0x02, 0x0A, 0xF4,
+    };
+    ble_adv_parse_info(unk, sizeof(unk), &info);
+    TEST_ASSERT(info.has_flags && info.has_tx_power);
+
+    /* Empty / NULL input zeroes the output without crashing. */
+    ble_adv_parse_info(NULL, 0u, &info);
+    TEST_ASSERT(info.service_count == 0 && !info.has_flags);
+    ble_adv_parse_info(term, 0u, &info);
+    TEST_ASSERT(info.service_count == 0 && !info.has_flags);
+    ble_adv_parse_info(term, sizeof(term), NULL); /* must not crash */
+
+    /* Merge/format guards. */
+    ble_adv_info_merge(NULL, &info);
+    ble_adv_info_merge(&info, NULL);
+    char buf[16];
+    ble_adv_info_format_services(NULL, buf, sizeof(buf));
+    TEST_ASSERT(buf[0] == '\0');
+    ble_adv_info_format_services(&info, NULL, 0u);
+    ble_adv_flags_format(0x06, NULL, 0u);
+}
+
+static void test_service_cap_overflow(void)
+{
+    /* 17 distinct 16-bit UUIDs 0x1800..0x1810: only BLE_ADV_MAX_SERVICES
+     * (16) are kept. Each AD field is {len=0x03, type=0x02, lo, hi}. */
+    uint8_t adv[17 * 4];
+    for (unsigned int i = 0u; i < 17u; i++)
+    {
+        adv[4u * i + 0u] = 0x03;
+        adv[4u * i + 1u] = 0x02;
+        adv[4u * i + 2u] = (uint8_t)i;
+        adv[4u * i + 3u] = 0x18u;
+    }
+    ble_adv_info_t info;
+    ble_adv_parse_info(adv, sizeof(adv), &info);
+    TEST_ASSERT(info.service_count == BLE_ADV_MAX_SERVICES);
+}
+
 static void test_cod(void)
 {
     /* CoD 0x200404: service Audio(21), major Audio/Video(4), minor Headset(6). */
@@ -136,6 +233,10 @@ int main(void)
     test_service_lists_and_merge();
     test_uuid128_base_alias();
     test_uuid128_custom();
+    test_uuid32_lists();
+    test_intervals_and_role();
+    test_malformed_ad();
+    test_service_cap_overflow();
     test_cod();
     test_assigned_numbers();
     if (g_failures == 0)

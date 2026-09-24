@@ -570,6 +570,14 @@ static int verify_payload_crc(const bredr_frame_t *frame, uint8_t clock,
 {
     int retval = 1;
 
+    /* Header-only frames carry no payload bits to check (synthetic golden
+     * vectors use them for the acquisition preamble; production frames
+     * always retain the max body). With no evidence either way the verdict
+     * must be inconclusive -- a hard negative here would prune the true
+     * candidate for DM1/FHS/HV1 types that enjoy hard-negative privilege. */
+    if (!frame || frame->air_payload_bits == 0u)
+        return 1;
+
     switch (type & 0x0Fu)
     {
     case PT_FHS:

@@ -117,3 +117,23 @@ target_link_libraries(test_drift_confirm
 )
 
 add_test(NAME test_drift_confirm COMMAND test_drift_confirm)
+
+add_executable(test_bredr_bitstream_decoder
+    test_bredr_bitstream_decoder.c
+)
+
+target_link_libraries(test_bredr_bitstream_decoder
+    supertooth_core
+)
+
+add_test(NAME test_bredr_bitstream_decoder COMMAND test_bredr_bitstream_decoder)
+
+add_executable(test_bredr_registry
+    test_bredr_registry.c
+)
+
+target_link_libraries(test_bredr_registry
+    supertooth_core
+)
+
+add_test(NAME test_bredr_registry COMMAND test_bredr_registry)

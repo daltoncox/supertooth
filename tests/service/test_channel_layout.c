@@ -169,6 +169,43 @@ static void test_processor_counts(void)
                   make_session(&s, 39, 2, SESSION_REF_BLE, 1, 0), -1);
         session_destroy(&s);
     }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("ble count>40 rejected",
+                  make_session(&s, 0, 41, SESSION_REF_BLE, 1, 0), -1);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("ble 80Msps over ceiling rejected",
+                  make_session(&s, 0, 40, SESSION_REF_BLE, 1, 0), -1);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("bredr window overflow rejected",
+                  make_session(&s, 78, 2, SESSION_REF_BREDR, 0, 1), -1);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("bredr count>79 rejected",
+                  make_session(&s, 0, 80, SESSION_REF_BREDR, 0, 1), -1);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("bredr 79Msps over ceiling rejected",
+                  make_session(&s, 0, 79, SESSION_REF_BREDR, 0, 1), -1);
+        session_destroy(&s);
+    }
+    CHECK_U64("tune NULL session rejected",
+              session_tune(NULL, SESSION_REF_BLE, 0u, 2u), -1);
 }
 
 static void test_rf_mapping(void)

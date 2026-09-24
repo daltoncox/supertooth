@@ -32,13 +32,88 @@ static int g_failures = 0;
 
 #define FIXTURE_RATE_HZ 4000000u
 #define FIXTURE_FRAMES 2000000u /* 0.5 s at 4 Msps */
+#define FIXTURE_LO_HZ 2403500000ull
+
+static void check_zero_drops(session_t *session, const char *tag)
+{
+    session_drop_breakdown_t drops;
+    unsigned long ble_dropped = 999ul, bredr_dropped = 999ul;
+
+    if (session_dropped_blocks(session) != 0ul)
+    {
+        fprintf(stderr, "ASSERT FAILED %s: session_dropped_blocks != 0\n",
+                tag);
+        g_failures++;
+    }
+    memset(&drops, 0xA5, sizeof(drops));
+    session_dropped_blocks_breakdown(session, &drops);
+    if (drops.rf_pool_exhausted != 0ul ||
+        drops.rf_consumer_full != 0ul ||
+        drops.bredr_out_pool_exhausted != 0ul ||
+        drops.bredr_out_consumer_full != 0ul ||
+        drops.ble_out_pool_exhausted != 0ul ||
+        drops.ble_out_consumer_full != 0ul)
+    {
+        fprintf(stderr, "ASSERT FAILED %s: drop breakdown nonzero\n", tag);
+        g_failures++;
+    }
+    session_collector_dropped(session, &ble_dropped, &bredr_dropped);
+    if (ble_dropped != 0ul || bredr_dropped != 0ul)
+    {
+        fprintf(stderr, "ASSERT FAILED %s: collector drops nonzero\n", tag);
+        g_failures++;
+    }
+}
+
+/* Replay the fixture in exhaustive mode under one protocol configuration.
+ * The fixture rate/center match the BREDR N=4 tune; the BLE-only tune uses
+ * RF channels 0-1 at 4 Msps so the same file stays rate-compatible. */
+static void run_once(const char *path, int enable_ble, int enable_bredr,
+                     session_protocol_ref_t ref, unsigned int bottom,
+                     unsigned int count, const char *tag)
+{
+    session_t session;
+    memset(&session, 0, sizeof(session));
+    {
+        session_config_t cfg = {
+            .device_type = RADIO_DEVICE_FILE,
+            .device_id = path,
+            .debug = 0,
+            .file_exhaustive = 1,
+        };
+        session_ble_config_t lcfg = {.enforce_crc = 1u};
+        session_bredr_config_t bcfg = {0};
+        if (session_init(&session, &cfg) != 0)
+        {
+            fprintf(stderr, "ASSERT FAILED %s: session_init\n", tag);
+            g_failures++;
+            return;
+        }
+        if (enable_ble)
+            session_enable_ble(&session, &lcfg, NULL, NULL);
+        if (enable_bredr)
+            session_enable_bredr(&session, &bcfg, NULL, NULL);
+        if (session_tune(&session, ref, bottom, count) != 0)
+        {
+            fprintf(stderr, "ASSERT FAILED %s: session_tune\n", tag);
+            g_failures++;
+            session_destroy(&session);
+            return;
+        }
+        if (session_run(&session) != 0)
+        {
+            fprintf(stderr, "ASSERT FAILED %s: session_run\n", tag);
+            g_failures++;
+        }
+    }
+
+    check_zero_drops(&session, tag);
+    session_destroy(&session);
+}
 
 int main(void)
 {
     char path[256];
-    session_t session;
-    session_drop_breakdown_t drops;
-    unsigned long ble_dropped = 999ul, bredr_dropped = 999ul;
 
     snprintf(path, sizeof(path), "/tmp/test_exhaustive_replay_%d.wav",
              (int)getpid());
@@ -52,7 +127,7 @@ int main(void)
         uint32_t left = FIXTURE_FRAMES;
         uint32_t lcg = 0x12345678u;
         TEST_ASSERT(wav_write_open(path, FIXTURE_RATE_HZ, WAV_SAMP_S16,
-                                   2403500000ull, &w) == 0);
+                                   FIXTURE_LO_HZ, &w) == 0);
         while (left > 0u)
         {
             size_t n = left > 8192u ? 8192u : left;
@@ -68,35 +143,12 @@ int main(void)
         TEST_ASSERT(wav_write_close(&w) == 0);
     }
 
-    memset(&session, 0, sizeof(session));
-    {
-        session_config_t cfg = {
-            .device_type = RADIO_DEVICE_FILE,
-            .device_id = path,
-            .debug = 0,
-            .file_exhaustive = 1,
-        };
-        session_bredr_config_t bcfg = {0};
-        TEST_ASSERT(session_init(&session, &cfg) == 0);
-        session_enable_bredr(&session, &bcfg, NULL, NULL);
-        TEST_ASSERT(session_tune(&session, SESSION_REF_BREDR, 0u, 4u) == 0);
-        TEST_ASSERT(session_run(&session) == 0);
-    }
+    /* BREDR-only, BLE-only (RF channels 0-1, 4 Msps) and hybrid (shared
+     * BREDR-ref window) must all replay drop-free. */
+    run_once(path, 0, 1, SESSION_REF_BREDR, 0u, 4u, "bredr-only");
+    run_once(path, 1, 0, SESSION_REF_BLE, 0u, 2u, "ble-only");
+    run_once(path, 1, 1, SESSION_REF_BREDR, 0u, 4u, "hybrid");
 
-    TEST_ASSERT(session_dropped_blocks(&session) == 0ul);
-    memset(&drops, 0xA5, sizeof(drops));
-    session_dropped_blocks_breakdown(&session, &drops);
-    TEST_ASSERT(drops.rf_pool_exhausted == 0ul);
-    TEST_ASSERT(drops.rf_consumer_full == 0ul);
-    TEST_ASSERT(drops.bredr_out_pool_exhausted == 0ul);
-    TEST_ASSERT(drops.bredr_out_consumer_full == 0ul);
-    TEST_ASSERT(drops.ble_out_pool_exhausted == 0ul);
-    TEST_ASSERT(drops.ble_out_consumer_full == 0ul);
-    session_collector_dropped(&session, &ble_dropped, &bredr_dropped);
-    TEST_ASSERT(ble_dropped == 0ul);
-    TEST_ASSERT(bredr_dropped == 0ul);
-
-    session_destroy(&session);
     unlink(path);
 
     if (g_failures)

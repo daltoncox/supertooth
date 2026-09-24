@@ -824,6 +824,174 @@ static void test_adv_crc_fail_still_emitted(void)
     }
 }
 
+/* ---------------------------------------------------------------------------
+ * 13. NULL guards and empty-queue behaviour.
+ * ---------------------------------------------------------------------------*/
+static void test_decoder_null_guards(void)
+{
+    ble_bitstream_decoder_t dec;
+    ble_frame_t f;
+
+    ble_bitstream_decoder_init(NULL, 0u); /* must not crash */
+    TEST_ASSERT(ble_bitstream_decoder_push_bit(NULL, 1u) == BLE_ERROR);
+    TEST_ASSERT(ble_bitstream_decoder_get_frame(NULL, &f) == -1);
+
+    ble_bitstream_decoder_init(&dec, CH_DATA);
+    TEST_ASSERT(ble_bitstream_decoder_get_frame(&dec, NULL) == -1);
+    TEST_ASSERT(ble_bitstream_decoder_get_frame(&dec, &f) == -1);
+}
+
+/* ---------------------------------------------------------------------------
+ * 14. Implausible access addresses are rejected silently (decoder-only).
+ * ---------------------------------------------------------------------------*/
+static void test_implausible_aa_rejected(void)
+{
+    const uint32_t bad_aas[2] = {0x00000000u, 0xFFFFFFFFu};
+    for (unsigned int k = 0u; k < 2u; k++)
+    {
+        ble_bitstream_decoder_t dec;
+        ble_bitstream_decoder_init(&dec, CH_DATA);
+
+        const uint8_t payload[4] = {1, 2, 3, 4};
+        ble_test_stream_t s;
+        bts_reset(&s);
+        stream_data_packet(&s, bad_aas[k], 0x02u, payload, sizeof(payload),
+                           CH_DATA, INIT_DATA);
+        stream_zeros(&s, FLUSH_ZEROS);
+
+        ble_test_out_t out;
+        bts_feed(&dec, &s, &out);
+        TEST_ASSERT(find_frame_by_aa(&out, bad_aas[k]) == NULL);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * 15. Implausible data headers are rejected: LLID==00 and RFU!=0.
+ * ---------------------------------------------------------------------------*/
+static void test_implausible_header_rejected(void)
+{
+    /* LLID==00 with a clean length, and LLID==2 with RFU bits set. */
+    const uint8_t bad_hdr0[2] = {0x00u, 0xE2u};
+    for (unsigned int k = 0u; k < 2u; k++)
+    {
+        ble_bitstream_decoder_t dec;
+        ble_bitstream_decoder_init(&dec, CH_DATA);
+
+        const uint8_t payload[4] = {5, 6, 7, 8};
+        ble_test_stream_t s;
+        bts_reset(&s);
+        stream_data_packet(&s, AA_DATA, bad_hdr0[k], payload, sizeof(payload),
+                           CH_DATA, INIT_DATA);
+        stream_zeros(&s, FLUSH_ZEROS);
+
+        ble_test_out_t out;
+        bts_feed(&dec, &s, &out);
+        TEST_ASSERT(find_frame_by_aa(&out, AA_DATA) == NULL);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * 16. Preamble/AA mismatch is rejected (decoder-only).
+ * ---------------------------------------------------------------------------*/
+static void test_preamble_mismatch_rejected(void)
+{
+    ble_bitstream_decoder_t dec;
+    ble_bitstream_decoder_init(&dec, CH_DATA);
+
+    /* AA_DATA bit0 is 1, so the legal preamble is 0x55; feed 0xAA. */
+    TEST_ASSERT((AA_DATA & 1u) == 1u);
+    const uint8_t payload[4] = {9, 9, 9, 9};
+    uint8_t pdu[2u + sizeof(payload)];
+    pdu[0] = 0x02u;
+    pdu[1] = (uint8_t)sizeof(payload);
+    memcpy(&pdu[2], payload, sizeof(payload));
+
+    ble_test_stream_t s;
+    bts_reset(&s);
+    bts_push_preamble(&s, 0xAAu); /* wrong: must be 0x55 for this AA */
+    bts_push_aa(&s, AA_DATA);
+    bts_push_pdu(&s, pdu, sizeof(pdu), CH_DATA, INIT_DATA);
+    stream_zeros(&s, FLUSH_ZEROS);
+
+    ble_test_out_t out;
+    bts_feed(&dec, &s, &out);
+    TEST_ASSERT(find_frame_by_aa(&out, AA_DATA) == NULL);
+}
+
+/* ---------------------------------------------------------------------------
+ * 17. The pending queue is bounded: 12 back-to-back packets surface at most
+ *     BLE_DEC_FRAME_QUEUE frames; every push still reports VALID_PACKET.
+ * ---------------------------------------------------------------------------*/
+static void test_pending_queue_bounded(void)
+{
+    ble_bitstream_decoder_t dec;
+    ble_bitstream_decoder_init(&dec, CH_DATA);
+
+    const uint8_t payload[2] = {0x11u, 0x22u};
+    ble_test_stream_t pkt;
+    bts_reset(&pkt);
+    stream_data_packet(&pkt, AA_DATA, 0x02u, payload, sizeof(payload),
+                       CH_DATA, INIT_DATA);
+
+    unsigned int valids = 0u;
+    for (unsigned int n = 0u; n < 12u; n++)
+    {
+        for (unsigned int i = 0u; i < pkt.count; i++)
+        {
+            uint8_t b = (uint8_t)((pkt.bytes[i / 8u] >> (i % 8u)) & 1u);
+            if (ble_bitstream_decoder_push_bit(&dec, b) == BLE_VALID_PACKET)
+                valids++;
+        }
+        /* Small gap: no phantom preambles in zeros, keeps packets clean. */
+        for (unsigned int i = 0u; i < 64u; i++)
+            if (ble_bitstream_decoder_push_bit(&dec, 0u) == BLE_VALID_PACKET)
+                valids++;
+    }
+
+    unsigned int retrieved = 0u;
+    ble_frame_t f;
+    while (ble_bitstream_decoder_get_frame(&dec, &f) == 0)
+    {
+        TEST_ASSERT(f.access_address == AA_DATA);
+        retrieved++;
+        if (retrieved > BLE_DEC_FRAME_QUEUE + 4u)
+            break; /* safety: never loop forever */
+    }
+    TEST_ASSERT(valids >= 12u);
+    TEST_ASSERT(retrieved == BLE_DEC_FRAME_QUEUE);
+    TEST_ASSERT(ble_bitstream_decoder_get_frame(&dec, &f) == -1);
+}
+
+/* ---------------------------------------------------------------------------
+ * 18. Re-init mid-packet discards partial state.
+ * ---------------------------------------------------------------------------*/
+static void test_reinit_discards_partial(void)
+{
+    ble_bitstream_decoder_t dec;
+    ble_bitstream_decoder_init(&dec, CH_DATA);
+
+    const uint8_t payload[4] = {1, 2, 3, 4};
+    ble_test_stream_t s;
+    bts_reset(&s);
+    stream_data_packet(&s, AA_DATA, 0x02u, payload, sizeof(payload),
+                       CH_DATA, INIT_DATA);
+
+    /* Feed only the preamble + AA, then reset. */
+    for (unsigned int i = 0u; i < 40u; i++)
+    {
+        uint8_t b = (uint8_t)((s.bytes[i / 8u] >> (i % 8u)) & 1u);
+        ble_bitstream_decoder_push_bit(&dec, b);
+    }
+    ble_bitstream_decoder_init(&dec, CH_DATA);
+    ble_frame_t f;
+    TEST_ASSERT(ble_bitstream_decoder_get_frame(&dec, &f) == -1);
+
+    /* A full packet still decodes after the reset. */
+    ble_test_out_t out;
+    bts_feed(&dec, &s, &out);
+    TEST_ASSERT(find_frame_by_aa(&out, AA_DATA) != NULL);
+}
+
 int main(void)
 {
     test_adv_regression();
@@ -841,6 +1009,12 @@ int main(void)
     test_adv_aa_on_data_channel_adv_path();
     test_rescan_adv_aa_visible();
     test_adv_crc_fail_still_emitted();
+    test_decoder_null_guards();
+    test_implausible_aa_rejected();
+    test_implausible_header_rejected();
+    test_preamble_mismatch_rejected();
+    test_pending_queue_bounded();
+    test_reinit_discards_partial();
 
     if (g_failures)
     {

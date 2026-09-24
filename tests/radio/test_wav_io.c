@@ -120,6 +120,122 @@ static void no_auxi_file(const char *path)
     unlink(path);
 }
 
+/* Write a minimal hand-crafted WAV: fmt(codec, ch, rate, bits) + optional
+ * extra chunks + 8-byte stereo s16 data payload. */
+static void write_mini_wav(const char *path, uint16_t codec, uint16_t ch,
+                           uint32_t rate, uint16_t bits,
+                           const uint8_t *pre_chunks, size_t pre_len,
+                           uint64_t auxi_freq, int with_auxi)
+{
+    FILE *fp = fopen(path, "wb");
+    TEST_ASSERT(fp != NULL);
+    if (!fp)
+        return;
+    /* RIFF header (size patched loosely; the reader scans chunks). */
+    uint8_t riff[12] = {'R','I','F','F', 0xFF,0xFF,0xFF,0x7F, 'W','A','V','E'};
+    TEST_ASSERT(fwrite(riff, 1, sizeof(riff), fp) == sizeof(riff));
+    if (pre_len)
+        TEST_ASSERT(fwrite(pre_chunks, 1, pre_len, fp) == pre_len);
+    {
+        uint8_t fh[8] = {'f','m','t',' ', 16,0,0,0};
+        uint8_t fmt[16];
+        memset(fmt, 0, sizeof(fmt));
+        fmt[0] = (uint8_t)(codec & 0xFFu);
+        fmt[1] = (uint8_t)((codec >> 8) & 0xFFu);
+        fmt[2] = (uint8_t)(ch & 0xFFu);
+        fmt[3] = (uint8_t)((ch >> 8) & 0xFFu);
+        fmt[4] = (uint8_t)(rate & 0xFFu);
+        fmt[5] = (uint8_t)((rate >> 8) & 0xFFu);
+        fmt[6] = (uint8_t)((rate >> 16) & 0xFFu);
+        fmt[7] = (uint8_t)((rate >> 24) & 0xFFu);
+        {
+            uint32_t br = rate * ch * (bits / 8u);
+            fmt[8] = (uint8_t)(br & 0xFFu);
+            fmt[9] = (uint8_t)((br >> 8) & 0xFFu);
+            fmt[10] = (uint8_t)((br >> 16) & 0xFFu);
+            fmt[11] = (uint8_t)((br >> 24) & 0xFFu);
+        }
+        fmt[12] = (uint8_t)((ch * (bits / 8u)) & 0xFFu);
+        fmt[13] = (uint8_t)(((ch * (bits / 8u)) >> 8) & 0xFFu);
+        fmt[14] = (uint8_t)(bits & 0xFFu);
+        fmt[15] = (uint8_t)((bits >> 8) & 0xFFu);
+        TEST_ASSERT(fwrite(fh, 1, sizeof(fh), fp) == sizeof(fh));
+        TEST_ASSERT(fwrite(fmt, 1, sizeof(fmt), fp) == sizeof(fmt));
+    }
+    if (with_auxi)
+    {
+        uint8_t ah[8] = {'a','u','x','i', 8,0,0,0};
+        uint8_t ab[8];
+        for (unsigned int i = 0u; i < 8u; i++)
+            ab[i] = (uint8_t)((auxi_freq >> (8u * i)) & 0xFFu);
+        TEST_ASSERT(fwrite(ah, 1, sizeof(ah), fp) == sizeof(ah));
+        TEST_ASSERT(fwrite(ab, 1, sizeof(ab), fp) == sizeof(ab));
+    }
+    {
+        uint8_t dh[8] = {'d','a','t','a', 8,0,0,0};
+        uint8_t d[8] = {0xFF,0x7F, 0,0, 0,0, 0,0x80};
+        TEST_ASSERT(fwrite(dh, 1, sizeof(dh), fp) == sizeof(dh));
+        TEST_ASSERT(fwrite(d, 1, sizeof(d), fp) == sizeof(d));
+    }
+    fclose(fp);
+}
+
+static void test_reject_paths(const char *path)
+{
+    wav_info_t info;
+    FILE *fp = NULL;
+
+    /* Mono files are rejected (stereo required). */
+    write_mini_wav(path, 1u, 1u, 2000000u, 16u, NULL, 0u, 0u, 0);
+    TEST_ASSERT(wav_read_open(path, &info, &fp) != 0);
+
+    /* Unknown codec (0x11) is rejected. */
+    write_mini_wav(path, 0x11u, 2u, 2000000u, 16u, NULL, 0u, 0u, 0);
+    TEST_ASSERT(wav_read_open(path, &info, &fp) != 0);
+
+    /* Truncated garbage with no fmt/data is rejected. */
+    {
+        FILE *g = fopen(path, "wb");
+        TEST_ASSERT(g != NULL);
+        if (g)
+        {
+            TEST_ASSERT(fwrite("RIFFxxxx", 1, 8, g) == 8u);
+            fclose(g);
+        }
+    }
+    TEST_ASSERT(wav_read_open(path, &info, &fp) != 0);
+    unlink(path);
+}
+
+static void test_chunk_skipping(const char *path)
+{
+    /* Unknown JUNK chunk (odd size 5 + pad) before fmt must be skipped. */
+    uint8_t junk[8 + 5 + 1];
+    memcpy(junk, "JUNK", 4);
+    junk[4] = 5; junk[5] = 0; junk[6] = 0; junk[7] = 0;
+    memset(junk + 8, 0xA5, 6u);
+    write_mini_wav(path, 1u, 2u, 2000000u, 16u, junk, sizeof(junk),
+                   2406500000ull, 1);
+
+    wav_info_t info;
+    FILE *fp = NULL;
+    float complex out[4];
+    size_t got = 4u;
+    TEST_ASSERT(wav_read_open(path, &info, &fp) == 0);
+    TEST_ASSERT(info.center_freq_hz == 2406500000ull);
+    TEST_ASSERT(info.total_frames == 2u);
+    TEST_ASSERT(wav_read_frames(fp, &info, out, &got) == 0);
+    TEST_ASSERT(got == 2u);
+    wav_read_close(fp);
+
+    /* Implausible auxi content (100 Hz) is ignored, center reports 0. */
+    write_mini_wav(path, 1u, 2u, 2000000u, 16u, NULL, 0u, 100u, 1);
+    TEST_ASSERT(wav_read_open(path, &info, &fp) == 0);
+    TEST_ASSERT(info.center_freq_hz == 0u);
+    wav_read_close(fp);
+    unlink(path);
+}
+
 int main(void)
 {
     char tmp[256];
@@ -166,6 +282,20 @@ int main(void)
         TEST_ASSERT(wav_read_open("/nonexistent/path.wav", &info, &fp) != 0);
         TEST_ASSERT(wav_read_open(NULL, &info, &fp) != 0);
     }
+
+    /* Tiny filename buffer is rejected. */
+    {
+        char tiny[8];
+        TEST_ASSERT(wav_build_recording_filename(2406500000ull, 20000000u,
+                                                 tiny, sizeof(tiny)) != 0);
+        TEST_ASSERT(wav_build_recording_filename(2406500000ull, 20000000u,
+                                                 NULL, 0u) != 0);
+    }
+
+    snprintf(tmp, sizeof(tmp), "/tmp/test_wav_reject_%d.wav", (int)getpid());
+    test_reject_paths(tmp);
+    snprintf(tmp, sizeof(tmp), "/tmp/test_wav_chunks_%d.wav", (int)getpid());
+    test_chunk_skipping(tmp);
 
     if (g_failures)
     {

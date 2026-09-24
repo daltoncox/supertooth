@@ -67,6 +67,151 @@ static void sleep_ms(long ms)
     nanosleep(&ts, NULL);
 }
 
+/* Multi-reader fan-out on a fresh dispatcher: one push reaches every
+ * reader; can_push is false while ANY reader is full; per-reader drops
+ * are accounted without affecting the other reader. */
+static void test_multi_reader_fanout(void)
+{
+    sample_dispatcher_t *d =
+        (sample_dispatcher_t *)calloc(1, sizeof(*d));
+    sample_reader_t a, b;
+    _Atomic unsigned int stop = 0u;
+    TEST_ASSERT(d != NULL);
+    TEST_ASSERT(sample_dispatcher_init(d) == 0);
+    TEST_ASSERT(sample_reader_init(&a, d) == 0);
+    TEST_ASSERT(sample_reader_init(&b, d) == 0);
+
+    /* One push reaches both readers. */
+    {
+        sample_block_t *blk = sample_dispatcher_acquire_block(d);
+        TEST_ASSERT(blk != NULL);
+        blk->num_samples = 1u;
+        blk->block_base_sample = 42u;
+        TEST_ASSERT(sample_dispatcher_push_block(d, blk) == 2u);
+        sample_block_release(blk);
+        sample_block_t *pa = NULL, *pb = NULL;
+        TEST_ASSERT(sample_reader_wait_pop(&a, &stop, &pa) == 0);
+        TEST_ASSERT(sample_reader_wait_pop(&b, &stop, &pb) == 0);
+        TEST_ASSERT(pa != NULL && pb != NULL);
+        TEST_ASSERT(pa->block_base_sample == 42u);
+        TEST_ASSERT(pb->block_base_sample == 42u);
+        sample_block_release(pa);
+        sample_block_release(pb);
+    }
+
+    /* Fill A only (drain B after each push): A full gates can_push. */
+    for (unsigned int i = 0u; i < SAMPLE_READER_QUEUE_CAPACITY; i++)
+    {
+        sample_block_t *blk = sample_dispatcher_acquire_block(d);
+        TEST_ASSERT(blk != NULL);
+        blk->num_samples = 1u;
+        TEST_ASSERT(sample_dispatcher_push_block(d, blk) == 2u);
+        sample_block_release(blk);
+        {
+            sample_block_t *q = NULL;
+            TEST_ASSERT(sample_reader_wait_pop(&b, &stop, &q) == 0);
+            sample_block_release(q);
+        }
+    }
+    TEST_ASSERT(sample_dispatcher_can_push(d) == 0);
+    {
+        sample_block_t *q = NULL;
+        TEST_ASSERT(sample_reader_wait_pop(&a, &stop, &q) == 0);
+        sample_block_release(q);
+    }
+    TEST_ASSERT(sample_dispatcher_can_push(d) != 0);
+
+    /* A full again while B drains: push delivers to B only, A drops. */
+    {
+        sample_block_t *blk = sample_dispatcher_acquire_block(d);
+        TEST_ASSERT(blk != NULL);
+        blk->num_samples = 1u;
+        TEST_ASSERT(sample_dispatcher_push_block(d, blk) == 2u);
+        sample_block_release(blk);
+        {
+            sample_block_t *q = NULL;
+            TEST_ASSERT(sample_reader_wait_pop(&b, &stop, &q) == 0);
+            sample_block_release(q);
+        }
+    }
+    TEST_ASSERT(sample_dispatcher_can_push(d) == 0);
+    {
+        unsigned long before = sample_dispatcher_total_dropped(d);
+        sample_block_t *blk = sample_dispatcher_acquire_block(d);
+        TEST_ASSERT(blk != NULL);
+        blk->num_samples = 1u;
+        TEST_ASSERT(sample_dispatcher_push_block(d, blk) == 1u);
+        sample_block_release(blk);
+        TEST_ASSERT(sample_dispatcher_total_dropped(d) == before + 1u);
+        {
+            sample_block_t *q = NULL;
+            TEST_ASSERT(sample_reader_wait_pop(&b, &stop, &q) == 0);
+            sample_block_release(q);
+        }
+    }
+
+    /* Drop-counter helpers are NULL-safe; note_drop bumps the total. */
+    {
+        unsigned long before = sample_dispatcher_total_dropped(d);
+        sample_dispatcher_note_drop(NULL, 0);
+        sample_dispatcher_note_drop(d, 0);
+        TEST_ASSERT(sample_dispatcher_total_dropped(d) == before + 1u);
+        TEST_ASSERT(sample_dispatcher_total_dropped(NULL) == 0ul);
+    }
+
+    sample_reader_destroy(&a);
+    sample_reader_destroy(&b);
+    sample_dispatcher_destroy(d);
+    free(d);
+}
+
+/* Exhausted pool: non-blocking acquire returns NULL; guards hold. */
+static void test_pool_exhausted_null(void)
+{
+    sample_dispatcher_t *d =
+        (sample_dispatcher_t *)calloc(1, sizeof(*d));
+    _Atomic unsigned int stop = 0u;
+    TEST_ASSERT(d != NULL);
+    TEST_ASSERT(sample_dispatcher_init(d) == 0);
+
+    static sample_block_t *held[SAMPLE_DISPATCHER_BLOCK_CAPACITY];
+    unsigned int nheld = 0u;
+    for (unsigned int i = 0u; i < SAMPLE_DISPATCHER_BLOCK_CAPACITY; i++)
+    {
+        held[i] = sample_dispatcher_acquire_block(d);
+        if (!held[i])
+            break;
+        nheld++;
+    }
+    TEST_ASSERT(nheld == SAMPLE_DISPATCHER_BLOCK_CAPACITY);
+    TEST_ASSERT(sample_dispatcher_acquire_block(d) == NULL);
+    TEST_ASSERT(sample_dispatcher_acquire_block(NULL) == NULL);
+    TEST_ASSERT(sample_dispatcher_acquire_blocking(NULL, &stop) == NULL);
+    TEST_ASSERT(sample_dispatcher_push_block(NULL, held[0]) == 0u);
+    TEST_ASSERT(sample_dispatcher_push_block(d, NULL) == 0u);
+    TEST_ASSERT(sample_dispatcher_push_blocking(NULL, held[0], &stop) == 0u);
+    TEST_ASSERT(sample_dispatcher_push_blocking(d, NULL, &stop) == 0u);
+    TEST_ASSERT(sample_reader_init(NULL, d) == -1);
+    for (unsigned int i = 0u; i < nheld; i++)
+        sample_block_release(held[i]);
+    TEST_ASSERT(sample_dispatcher_all_free(d) != 0);
+    TEST_ASSERT(sample_dispatcher_all_free(NULL) == 0);
+
+    /* Shutdown-set pop on an empty reader escapes without a block. */
+    {
+        sample_reader_t r;
+        sample_block_t *blk = (sample_block_t *)0x1;
+        TEST_ASSERT(sample_reader_init(&r, d) == 0);
+        atomic_store_explicit(&stop, 1u, memory_order_release);
+        TEST_ASSERT(sample_reader_wait_pop(&r, &stop, &blk) != 0);
+        atomic_store_explicit(&stop, 0u, memory_order_release);
+        sample_reader_destroy(&r);
+    }
+
+    sample_dispatcher_destroy(d);
+    free(d);
+}
+
 int main(void)
 {
     /* NB: the dispatcher owns ~128 MB of blocks; heap-allocate it. */
@@ -211,6 +356,9 @@ int main(void)
     sample_reader_destroy(&reader);
     sample_dispatcher_destroy(dispatcher);
     free(dispatcher);
+
+    test_multi_reader_fanout();
+    test_pool_exhausted_null();
 
     if (g_failures)
     {

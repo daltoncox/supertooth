@@ -645,7 +645,9 @@ static void test_channelizer_rssi_stability(void)
 
 int main(void)
 {
-    srand((unsigned int)time(NULL));
+    /* Fixed seed: the Monte Carlo variance test must be reproducible in CI.
+     * srand(time(NULL)) made failures non-reproducible and hid regressions. */
+    srand(0xC0FFEEu);
     test_access_code_window();
     test_rssi_independent_of_block_position();
     test_bank_gain_uniformity();

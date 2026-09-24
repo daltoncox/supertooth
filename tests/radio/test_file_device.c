@@ -9,6 +9,7 @@
  */
 
 #include <complex.h>
+#include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -111,6 +112,12 @@ int main(void)
                 break;
             TEST_ASSERT(block->block_base_sample == expect_base);
             TEST_ASSERT(block->num_samples > 0u);
+            /* Sample-value fidelity: the fixture tone is 0.5+0.25j. */
+            if (pops == 0)
+            {
+                TEST_ASSERT(fabsf(crealf(block->samples[0]) - 0.5f) < 0.01f);
+                TEST_ASSERT(fabsf(cimagf(block->samples[0]) - 0.25f) < 0.01f);
+            }
             total += block->num_samples;
             expect_base += block->num_samples;
             sample_block_release(block);
@@ -178,6 +185,35 @@ int main(void)
         TEST_ASSERT(file_radio_stop_rx(dev) == 0);
         file_radio_close(dev);
         sample_reader_destroy(&reader);
+        sample_dispatcher_destroy(dispatcher);
+        free(dispatcher);
+    }
+
+    /* Lifecycle edges: rate mismatch, double start, idle stop. */
+    {
+        sample_dispatcher_t *dispatcher =
+            (sample_dispatcher_t *)calloc(1, sizeof(*dispatcher));
+        void *dev = NULL;
+        radio_stream_config_t cfg = {
+            .lo_freq_hz = (uint64_t)TEST_LO, .sample_rate = TEST_RATE,
+        };
+        radio_stream_config_t bad = {
+            .lo_freq_hz = (uint64_t)TEST_LO, .sample_rate = TEST_RATE * 2u,
+        };
+        TEST_ASSERT(sample_dispatcher_init(dispatcher) == 0);
+        TEST_ASSERT(file_radio_open(&dev, path, dispatcher, 0) == 0);
+        /* Rate mismatch is rejected at configure time. */
+        TEST_ASSERT(file_radio_configure(dev, &bad) != 0);
+        TEST_ASSERT(file_radio_configure(dev, &cfg) == 0);
+        /* Not finished before the first start. */
+        TEST_ASSERT(file_radio_is_finished(dev) == 0);
+        TEST_ASSERT(file_radio_start_rx(dev) == 0);
+        /* Second start while running is rejected. */
+        TEST_ASSERT(file_radio_start_rx(dev) != 0);
+        TEST_ASSERT(file_radio_stop_rx(dev) == 0);
+        /* Stopping an idle device succeeds. */
+        TEST_ASSERT(file_radio_stop_rx(dev) == 0);
+        file_radio_close(dev);
         sample_dispatcher_destroy(dispatcher);
         free(dispatcher);
     }
