@@ -83,8 +83,17 @@ jobs:
       - name: Install build dependencies
         run: |
           brew update
-          brew install cmake pkg-config hackrf liquid-dsp qt@6
+          brew install cmake pkg-config hackrf qt@6 autoconf automake libtool
           echo "$(brew --prefix qt@6)/bin" >> "$GITHUB_PATH"
+
+      - name: Build liquid-dsp from source
+        # Stock liquid-dsp (e.g. the Homebrew bottle, built with the default
+        # LIQUID_LOG_LEVEL_COMPILE=0) compiles a liquid_log_trace() call into
+        # every SIMD dotprod execute dispatcher; on Apple Silicon that costs
+        # ~2000% CPU and drops RF blocks in supertooth-hybrid. Build from
+        # source with TRACE logging compiled out instead.
+        run: |
+          bash packaging/build-liquid-macos.sh
 
       - name: Configure
         run: |

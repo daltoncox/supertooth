@@ -74,8 +74,18 @@ sudo apt install -y \
 macOS (Homebrew):
 
 ```bash
-brew install cmake pkg-config hackrf liquid-dsp
+brew install cmake pkg-config hackrf autoconf automake libtool
 ```
+
+> **Do NOT `brew install liquid-dsp`.** Its bottle is built with liquid-dsp's
+> default `LIQUID_LOG_LEVEL_COMPILE=0`, which compiles a `liquid_log_trace()`
+> call into every SIMD dot-product dispatcher. On Apple Silicon that costs
+> ~2000% CPU and drops RF blocks in `supertooth-hybrid`. Build it from
+> source with TRACE logging compiled out instead:
+>
+> ```bash
+> bash packaging/build-liquid-macos.sh
+> ```
 
 ### GUI build (adds Qt 6.8)
 
