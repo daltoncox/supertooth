@@ -5,9 +5,8 @@
  * This is the DSP half of channelization: a pure `firpfbch2_crcf` analysis
  * filterbank with no threads, no dispatchers, and no service state, so DSP
  * tests drive it directly. The threading half lives in
- * service/channelizer_thread.h, whose worker feeds RF blocks through this
- * bank and publishes frame-major output; sessions own one bank per
- * channelizer thread.
+ * service/channelizer_service.h, whose workers feed blocks through one
+ * bank per lane and publish frame-major output; sessions own one service.
  *
  * Replaces the per-channel `nco_crcf` + `firdecim_crcf` chain with a single
  * `firpfbch2_crcf` analysis filterbank shared by every channel in the capture

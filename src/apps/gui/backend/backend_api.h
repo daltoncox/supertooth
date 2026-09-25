@@ -154,10 +154,11 @@ void backend_session_set_stopped_callback(backend_session_t *session,
 
 /**
  * Start a blocking BLE receive session on the given LE channel window:
- * le_channel_count consecutive LE RF channels (1..10) starting at
+ * le_channel_count consecutive LE RF channels (1..40) starting at
  * bottom_le_rf (0..39). The radio tunes a whole-MHz LO at the window
  * center; only advertising RF channels (0/12/39 -> LE 37/38/39) are
- * decoded, data channels stay idle. Values are clamped defensively.
+ * decoded, data channels stay idle. Values are clamped defensively
+ * (backend devices are HackRF-class: <= 10 LE channels / 20 Msps).
  * Blocks until backend_session_request_stop() is called (call from a
  * worker thread). For each decoded frame, @p on_row is invoked on the
  * session worker thread with a populated row.
@@ -177,7 +178,8 @@ int backend_session_run_ble(backend_session_t *session,
 
 /**
  * Start a blocking BR/EDR (Classic Bluetooth) receive session on the given
- * channel window: channel_count consecutive BR/EDR channels (even, 2..20)
+ * channel window: channel_count consecutive BR/EDR channels (even, snapped
+ * to the staged lane split: 2..20 plus 24,28,32,36,40,42,48,54,60,64,72)
  * starting at bottom_channel (0..78, bottom+count-1 <= 78). Values are
  * clamped defensively. Blocks until backend_session_request_stop() is
  * called (call from a worker thread). For each decoded frame, @p on_row is

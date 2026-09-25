@@ -15,6 +15,7 @@
 #include "version.h"
 #include "ble_display.h"
 #include "ble_bitstream_decoder.h"
+#include "channelizer_service.h"
 
 static unsigned long g_packet_count = 0;
 static int g_debug = 0;
@@ -279,6 +280,31 @@ int main(int argc, char *argv[])
     unsigned int span_mhz = 2u * g_num_le_channels;
     unsigned int rate_mhz = (span_mhz == 2u) ? 4u : span_mhz;
     double lo_mhz = 2401.0 + 2.0 * (double)bottom_rf + (double)g_num_le_channels;
+
+    /* Device ceiling + lane-split validation (BLE spans are 2 MHz/RF). */
+    {
+        radio_device_type_t dtype =
+            g_device_selected ? g_device_spec_parsed.type : RADIO_DEVICE_HACKRF;
+        uint32_t max_rate = 0u;
+        if (radio_get_max_sample_rate_for_type(dtype, &max_rate) == 0 &&
+            rate_mhz * 1000000u > max_rate)
+        {
+            fprintf(stderr,
+                    "Invalid --channels %u for %s (max %u LE channels): "
+                    "choose <= %u.\n",
+                    g_num_le_channels, radio_device_type_name(dtype),
+                    max_rate / 2000000u, max_rate / 2000000u);
+            return EXIT_FAILURE;
+        }
+        if (!channelizer_service_valid_sample_rate(
+                rate_mhz * 1000000u, CHANNELIZER_BANK_GRID_BLE_HZ))
+        {
+            fprintf(stderr,
+                    "Invalid --channels %u: no even <=20 MHz lane split.\n",
+                    g_num_le_channels);
+            return EXIT_FAILURE;
+        }
+    }
 
     uint32_t tune_rate_hz = rate_mhz * 1000000u;
     uint64_t tune_lo_hz = (uint64_t)(lo_mhz * 1e6);

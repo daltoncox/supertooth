@@ -23,3 +23,13 @@ target_link_libraries(test_rssi_tracker
 )
 
 add_test(NAME test_rssi_tracker COMMAND test_rssi_tracker)
+
+add_executable(test_ddc_stage
+    test_ddc_stage.c
+)
+
+target_link_libraries(test_ddc_stage
+    supertooth_core
+)
+
+add_test(NAME test_ddc_stage COMMAND test_ddc_stage)

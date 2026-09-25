@@ -46,6 +46,27 @@ static int make_session(session_t *s, unsigned int bottom, unsigned int count,
     return session_tune(s, ref, bottom, count);
 }
 
+/* File-replay sessions see the generic 80 Msps ceiling (wideband tunes). */
+static int make_file_session(session_t *s, unsigned int bottom,
+                              unsigned int count, session_protocol_ref_t ref,
+                              int enable_ble, int enable_bredr)
+{
+    session_config_t cfg = { .device_type = RADIO_DEVICE_FILE, .device_id = NULL, .debug = 0 };
+    if (session_init(s, &cfg) != 0)
+        return -1;
+    if (enable_ble)
+    {
+        session_ble_config_t bc = { .enforce_crc = 1u };
+        session_enable_ble(s, &bc, NULL, NULL);
+    }
+    if (enable_bredr)
+    {
+        session_bredr_config_t bc = { 0 };
+        session_enable_bredr(s, &bc, NULL, NULL);
+    }
+    return session_tune(s, ref, bottom, count);
+}
+
 static void test_tune_layout(void)
 {
     /* BR/EDR grid: even N, LO at a half-MHz, rate = N MHz. */
@@ -120,8 +141,8 @@ static void test_processor_counts(void)
         session_destroy(&s);
     }
 
-    /* Hybrid BR/EDR-ref: BLE fans out over the BR/EDR capture window from
-     * the shared 1 MHz bank (no second channelizer). */
+    /* Hybrid BR/EDR-ref: BLE fans out over the shared 1 MHz service (no
+     * second bank). */
     {
         session_t s;
         memset(&s, 0, sizeof(s));
@@ -131,12 +152,11 @@ static void test_processor_counts(void)
                   session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
         CHECK_U64("hybrid bredr-ref bredr count", bredr_n, 20u);
         CHECK_U64("hybrid bredr-ref ble count", ble_n, 10u);
-        /* Shared topology: no BLE dispatcher/bank, one RF reader total,
-         * BLE workers stride the 1 MHz bank directly. */
-        CHECK_U64("hybrid shared no ble dispatcher",
-                  s.ble_chan_dispatcher == NULL, 1);
-        CHECK_U64("hybrid shared ble bank inactive",
-                  s.ble_channelizer.active, 0);
+        /* Shared topology: single-lane 1 MHz service, one RF reader total,
+         * BLE workers stride the 1 MHz lanes directly. */
+        CHECK_U64("hybrid shared K==1", s.chan_svc.K, 1u);
+        CHECK_U64("hybrid shared grid 1MHz",
+                  s.chan_svc.grid_actual_hz, 1000000u);
         CHECK_U64("hybrid shared single rf reader",
                   s.dispatcher->reader_count, 1u);
         for (size_t i = 0u; i < ble_n; i++)
@@ -208,6 +228,135 @@ static void test_processor_counts(void)
               session_tune(NULL, SESSION_REF_BLE, 0u, 2u), -1);
 }
 
+static void test_wideband_lanes(void)
+{
+    /* Lane-split allowlist: even C<=20, else K=ceil(C/20) lanes with
+     * C%K==0 and even C/K<=20. (80 Msps is DSP-valid but BR/EDR
+     * band-unreachable: bottom+80 > 79 always.) */
+    static const unsigned int valid[] = {
+        2u, 4u, 6u, 8u, 10u, 12u, 14u, 16u, 18u, 20u,
+        24u, 28u, 32u, 36u, 40u, 42u, 48u, 54u, 60u, 64u, 72u,
+    };
+    for (unsigned int c = 2u; c <= 80u; c += 2u)
+    {
+        int expect = 0;
+        for (size_t i = 0u; i < sizeof(valid) / sizeof(valid[0]); i++)
+            if (valid[i] == c)
+                expect = 1;
+        char name[64];
+        snprintf(name, sizeof(name), "bredr C=%u plan", c);
+        CHECK_U64(name, channelizer_service_valid_bredr_count(c), expect);
+    }
+
+    /* 40ch hybrid on file replay: K=2, M_lane=20, 40 BR/EDR + 20 BLE. */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("wideband 40ch tune",
+                  make_file_session(&s, 0, 40, SESSION_REF_BREDR, 1, 1), 0);
+        size_t ble_n = 0, bredr_n = 0;
+        CHECK_U64("wideband 40ch setup",
+                  session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
+        CHECK_U64("wideband 40ch K", s.chan_svc.K, 2u);
+        CHECK_U64("wideband 40ch M_lane", s.chan_svc.M_lane, 20u);
+        CHECK_U64("wideband 40ch bredr count", bredr_n, 40u);
+        CHECK_U64("wideband 40ch ble count", ble_n, 20u);
+        CHECK_U64("wideband 40ch rf readers", s.dispatcher->reader_count, 2u);
+        for (size_t i = 0u; i < bredr_n; i++)
+        {
+            if (s.bredr_channels[i].bank_M != 20u ||
+                s.bredr_channels[i].input_decimation != 20u)
+            {
+                printf("FAIL wideband 40ch bredr[%zu] M/decim\n", i);
+                g_failures++;
+                break;
+            }
+            if (s.bredr_channels[i].bin >= 20u)
+            {
+                printf("FAIL wideband 40ch bredr[%zu] bin range\n", i);
+                g_failures++;
+                break;
+            }
+        }
+        session_destroy(&s);
+    }
+
+    /* 72ch hybrid on file replay: K=4, M_lane=18. */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("wideband 72ch tune",
+                  make_file_session(&s, 0, 72, SESSION_REF_BREDR, 1, 1), 0);
+        size_t ble_n = 0, bredr_n = 0;
+        CHECK_U64("wideband 72ch setup",
+                  session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
+        CHECK_U64("wideband 72ch K", s.chan_svc.K, 4u);
+        CHECK_U64("wideband 72ch M_lane", s.chan_svc.M_lane, 18u);
+        CHECK_U64("wideband 72ch bredr count", bredr_n, 72u);
+        session_destroy(&s);
+    }
+
+    /* Unsupported wideband counts are rejected even on file replay. */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("wideband C=22 rejected",
+                  make_file_session(&s, 0, 22, SESSION_REF_BREDR, 0, 1), -1);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("wideband C=78 rejected",
+                  make_file_session(&s, 0, 78, SESSION_REF_BREDR, 0, 1), -1);
+        session_destroy(&s);
+    }
+
+    /* Wideband is gated by the device ceiling: HackRF rejects 40ch. */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("hackrf 40ch over ceiling rejected",
+                  make_session(&s, 0, 40, SESSION_REF_BREDR, 0, 1), -1);
+        session_destroy(&s);
+    }
+
+    /* BLE-only wideband: 40 LE RF channels at 80 Msps, K=4, 2 MHz bins. */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("ble wideband 40ch tune",
+                  make_file_session(&s, 0, 40, SESSION_REF_BLE, 1, 0), 0);
+        size_t ble_n = 0, bredr_n = 0;
+        CHECK_U64("ble wideband 40ch setup",
+                  session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
+        CHECK_U64("ble wideband 40ch K", s.chan_svc.K, 4u);
+        CHECK_U64("ble wideband 40ch grid 2MHz",
+                  s.chan_svc.grid_actual_hz, 2000000u);
+        CHECK_U64("ble wideband 40ch count", ble_n, 40u);
+        for (size_t i = 0u; i < ble_n; i++)
+            CHECK_U64("ble wideband stride 2",
+                      s.ble_channels[i].frame_stride, 2u);
+        session_destroy(&s);
+    }
+
+    /* BLE-only narrowband keeps the 2 MHz power-saver grid. */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        make_session(&s, 0, 10, SESSION_REF_BLE, 1, 0);
+        size_t ble_n = 0, bredr_n = 0;
+        CHECK_U64("ble narrow stride setup",
+                  session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
+        CHECK_U64("ble narrow grid 2MHz",
+                  s.chan_svc.grid_actual_hz, 2000000u);
+        for (size_t i = 0u; i < ble_n; i++)
+            CHECK_U64("ble narrow stride 2",
+                      s.ble_channels[i].frame_stride, 2u);
+        session_destroy(&s);
+    }
+}
+
 static void test_rf_mapping(void)
 {
     CHECK_U64("rf0 -> LE37", ble_channel_number_for_rf(0), 37u);
@@ -225,6 +374,7 @@ int main(void)
 {
     test_tune_layout();
     test_processor_counts();
+    test_wideband_lanes();
     test_rf_mapping();
 
     if (g_failures)

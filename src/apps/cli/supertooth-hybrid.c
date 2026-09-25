@@ -15,6 +15,7 @@
 #include "ble_display.h"
 #include "bredr_display.h"
 #include "ble_bitstream_decoder.h"
+#include "channelizer_service.h"
 #include "session.h"
 #include "bredr_bitstream_decoder.h"
 
@@ -234,16 +235,16 @@ int main(int argc, char *argv[])
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
 
-    /* Default the BR/EDR channel count to what the radio can sustain:
-     * max sample rate / 1 MHz per channel. For a HackRF (~20 MHz ceiling)
-     * this is 20 channels. */
+    /* Default the BR/EDR channel count to what the radio can sustain and
+     * the service can stage (HackRF -> 20; 80 Msps file replay -> 72). */
     {
         uint32_t max_rate = 0u;
         if (radio_get_max_sample_rate_for_type(g_device_spec_parsed.type,
                                                &max_rate) == 0 &&
             max_rate >= 1000000u)
         {
-            g_num_bredr_channels = max_rate / 1000000u;
+            g_num_bredr_channels =
+                channelizer_service_snap_bredr_count(max_rate / 1000000u);
         }
     }
 
@@ -368,6 +369,33 @@ int main(int argc, char *argv[])
                     "For %u channels, the highest bottom channel would be %u.\n",
                     g_bottom_bredr_channel, g_num_bredr_channels, BREDR_MAX_CHANNEL,
                     g_num_bredr_channels, max_bottom_channel);
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* Device ceiling + lane-split validation (mirrors supertooth-bredr). */
+    {
+        radio_device_type_t dtype =
+            g_device_selected ? g_device_spec_parsed.type : RADIO_DEVICE_HACKRF;
+        uint32_t max_rate = 0u;
+        if (radio_get_max_sample_rate_for_type(dtype, &max_rate) == 0 &&
+            g_num_bredr_channels * 1000000u > max_rate)
+        {
+            fprintf(stderr,
+                    "Invalid --channels %u for %s (max %u MHz): choose <= %u channels.\n",
+                    g_num_bredr_channels,
+                    radio_device_type_name(dtype),
+                    max_rate / 1000000u, max_rate / 1000000u);
+            return EXIT_FAILURE;
+        }
+        if (!channelizer_service_valid_bredr_count(g_num_bredr_channels))
+        {
+            fprintf(stderr,
+                    "Invalid --channels %u: no even <=20-channel lane split "
+                    "(nearest supported: %u).\n",
+                    g_num_bredr_channels,
+                    channelizer_service_snap_bredr_count(
+                        g_num_bredr_channels));
             return EXIT_FAILURE;
         }
     }

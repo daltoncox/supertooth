@@ -10,7 +10,7 @@
 
 #include "ble_channel_processor.h"
 #include "bredr_channel_processor.h"
-#include "channelizer_thread.h"
+#include "channelizer_service.h"
 #include "ble_registry.h"
 #include "bredr_registry.h"
 #include "bredr_display.h"
@@ -72,18 +72,22 @@ typedef struct {
  *  live counters on teardown, and the snapshot is taken just before that.
  *  For each pool, two sub-reasons are tracked:
  *    - *_pool_exhausted : a producer could not allocate a block from the pool
- *      (e.g. the radio could not allocate an RF block, or a channelizer could
- *      not allocate its output frame block).
+ *      (e.g. the radio could not allocate an RF block, or a DDC/PFB lane
+ *      could not allocate its output block).
  *    - *_consumer_full   : a reader's queue was full, i.e. a consumer reading
- *      from this pool was not keeping up (a channelizer for the RF pool, or a
- *      channel worker for an output pool). */
+ *      from this pool was not keeping up (a DDC/PFB lane for the RF pool, or
+ *      a channel worker for an output pool).
+ *  Bucketing: the RF pool covers the radio dispatcher; bredr_out_* covers
+ *  the service dispatchers whenever BR/EDR is enabled (hybrid included) and
+ *  ble_out_* covers them for BLE-only sessions (mirroring the old two-bank
+ *  layout, where hybrid sessions never filled the BLE bucket). */
 typedef struct {
     unsigned long rf_pool_exhausted;
     unsigned long rf_consumer_full;
     unsigned long bredr_out_pool_exhausted;
     unsigned long bredr_out_consumer_full;
-    /* Always zero in hybrid sessions (no BLE bank/dispatcher there; BLE
-     * workers share the BR/EDR output pool above). */
+    /* Always zero in hybrid sessions (BLE workers share the BR/EDR output
+     * pools above; the BLE bucket only fills in BLE-only sessions). */
     unsigned long ble_out_pool_exhausted;
     unsigned long ble_out_consumer_full;
 } session_drop_breakdown_t;
@@ -111,20 +115,14 @@ typedef struct session {
 
     sample_dispatcher_t *dispatcher;
 
-    /** Frame-major channelizer output (BLE channel processors read here).
-     *  NULL unless this is a BLE-only session: hybrid sessions share the
-     *  BR/EDR output dispatcher below (single 1 MHz bank, frame_stride=1)
-     *  instead of a second 2 MHz bank. Allocated lazily in
-     *  session_create_channels. */
-    sample_dispatcher_t *ble_chan_dispatcher;
-    channelizer_t        ble_channelizer;
-    int                  ble_channelizer_running;
-
-    /** Frame-major channelizer output (BR/EDR channel processors read here).
-     *  In hybrid sessions BLE workers are readers here as well. */
-    sample_dispatcher_t *bredr_chan_dispatcher;
-    channelizer_t        bredr_channelizer;
-    int                  bredr_channelizer_running;
+    /**
+     * Channelization service (DDC + PFB lanes, owned dispatchers, worker
+     * threads). Single instance for every mode: 1 MHz grid for BR/EDR and
+     * hybrid sessions (BLE fans out over the same lanes), 2 MHz grid for
+     * BLE-only sessions (power saver, transparent 1 MHz fallback).
+     */
+    channelizer_service_t chan_svc;
+    int                   chan_svc_running;
 
     ble_registry_t      ble_registry;  /**< owns BLE devices + connections. */
     bredr_registry_t    bredr_registry;

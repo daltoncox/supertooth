@@ -9,10 +9,11 @@
 #define RADIO_SUCCESS 0
 #define RADIO_DEVICE_NOT_FOUND (-2)
 
-/* Maximum sample rate any supported radio can sustain (HackRF ceiling).
- * Capture windows wider than this (e.g. >20 BR/EDR channels at 1 MHz each)
- * are rejected at tune time rather than driven at an unsupported rate. */
-#define RADIO_MAX_SAMPLE_RATE_HZ 20000000u
+/* Maximum sample rate the channelization service can stage (80 Msps in four
+ * lanes). Individual device types report their own ceiling via
+ * radio_get_max_sample_rate_for_type() (HackRF stays at 20 Msps); callers
+ * clamp the requested channel count to the selected device before tuning. */
+#define RADIO_MAX_SAMPLE_RATE_HZ 80000000u
 
 typedef struct
 {

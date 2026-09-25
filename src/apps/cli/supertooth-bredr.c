@@ -13,6 +13,7 @@
 #include "file.h"
 #include "version.h"
 #include "bredr_display.h"
+#include "channelizer_service.h"
 #include "radio_common.h"
 #include "session.h"
 #include "bredr_bitstream_decoder.h"
@@ -266,16 +267,16 @@ int main(int argc, char *argv[])
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
 
-    /* Default the channel count to what the radio can actually sustain:
-     * max sample rate / 1 MHz per BR/EDR channel. For a HackRF (~20 MHz
-     * ceiling) this is 20 channels instead of the full 79-channel band, so
-     * the capture window fits within the radio's sample-rate limit. */
+    /* Default the channel count to what the radio can actually sustain and
+     * the service can stage: per-device max snapped down to the nearest
+     * supported lane split (HackRF -> 20; 80 Msps file replay -> 72). */
     {
         uint32_t max_rate = 0u;
         if (radio_get_max_sample_rate_for_type(g_device_spec_parsed.type,
                                                &max_rate) == 0 &&
             max_rate >= 1000000u)
-            g_num_bredr_channels = max_rate / 1000000u;
+            g_num_bredr_channels = channelizer_service_snap_bredr_count(
+                max_rate / 1000000u);
     }
 
     int opt;
@@ -401,6 +402,35 @@ int main(int argc, char *argv[])
                     "For %u channels, the highest bottom channel would be %u.\n",
                     g_bottom_bredr_channel, g_num_bredr_channels, BREDR_MAX_CHANNEL,
                     g_num_bredr_channels, max_bottom_channel);
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* The selected device gates the capture bandwidth (HackRF: 20 channels);
+     * the lane planner gates the split (wideband counts must divide into
+     * even <=20-channel lanes: ..., 36, 40, 42, 48, ..., 64, 72). */
+    {
+        radio_device_type_t dtype =
+            g_device_selected ? g_device_spec_parsed.type : RADIO_DEVICE_HACKRF;
+        uint32_t max_rate = 0u;
+        if (radio_get_max_sample_rate_for_type(dtype, &max_rate) == 0 &&
+            g_num_bredr_channels * 1000000u > max_rate)
+        {
+            fprintf(stderr,
+                    "Invalid --channels %u for %s (max %u MHz): choose <= %u channels.\n",
+                    g_num_bredr_channels,
+                    radio_device_type_name(dtype),
+                    max_rate / 1000000u, max_rate / 1000000u);
+            return EXIT_FAILURE;
+        }
+        if (!channelizer_service_valid_bredr_count(g_num_bredr_channels))
+        {
+            fprintf(stderr,
+                    "Invalid --channels %u: no even <=20-channel lane split "
+                    "(nearest supported: %u).\n",
+                    g_num_bredr_channels,
+                    channelizer_service_snap_bredr_count(
+                        g_num_bredr_channels));
             return EXIT_FAILURE;
         }
     }

@@ -35,7 +35,7 @@ static int g_failures = 0;
         }                                                                     \
     } while (0)
 
-/* Production block geometry: channelizer_thread emits CAP/M - 2 frames. */
+/* Production block geometry: the channelizer service emits CAP/M - 2 frames. */
 #define BLOCK_SAMPLES 13105u
 #define SPS           2u
 #define PKT_BITS      68u   /* preamble + 64-bit sync word */

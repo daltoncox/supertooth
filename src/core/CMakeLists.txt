@@ -93,6 +93,8 @@ add_library(supertooth_core STATIC
     dsp/rssi_measurements.h
     dsp/channelizer_bank.c
     dsp/channelizer_bank.h
+    dsp/ddc_stage.c
+    dsp/ddc_stage.h
     models/receive_event_models.h
     models/phy.h
     models/rssi_tracker.c
@@ -115,7 +117,7 @@ add_library(supertooth_core STATIC
     radio/file.c radio/file.h
     service/ble_channel_processor.c service/ble_channel_processor.h
     service/bredr_channel_processor.c service/bredr_channel_processor.h
-    service/channelizer_thread.c service/channelizer_thread.h
+    service/channelizer_service.c service/channelizer_service.h
     service/collector.c service/collector.h
     service/session.c service/session.h
     ${CMAKE_CURRENT_BINARY_DIR}/version.c

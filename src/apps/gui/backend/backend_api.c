@@ -913,12 +913,16 @@ int backend_session_run_bredr(backend_session_t *session,
     (void)input_type; /* Only HackRF is supported by the backend today. */
 
     /* Defensive clamping, mirroring supertooth-bredr validation. The on-air
-     * band is channels 0..78. */
+     * band is channels 0..78. Counts snap down to the nearest supported
+     * lane split (backend devices are HackRF-class: <= 20 channels). */
     channel_count &= ~1u;
     if (channel_count < 2u)
         channel_count = 2u;
     if (channel_count > BREDR_SESSION_MAX_CHANNELS)
         channel_count = BREDR_SESSION_MAX_CHANNELS;
+    channel_count = channelizer_service_snap_bredr_count(channel_count);
+    if (channel_count < 2u)
+        channel_count = 2u;
     unsigned int max_bottom = 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;
@@ -936,8 +940,8 @@ int backend_session_run_bredr(backend_session_t *session,
     session_set_stopped_callback(session->session, backend_session_stopped_trampoline, session);
 
     return session_tune(session->session, SESSION_REF_BREDR, bottom_channel, channel_count) == 0
-                ? session_run(session->session)
-                : -1;
+                 ? session_run(session->session)
+                 : -1;
 }
 
 int backend_session_run_hybrid(backend_session_t *session,
@@ -963,13 +967,17 @@ int backend_session_run_hybrid(backend_session_t *session,
 
     /* Hybrid always captures the BR/EDR grid: channel_count MHz (even
      * count) from bottom_channel. BLE fans out inside the window from the
-     * shared channelizer, so no LE-grid tune exists anymore. */
+     * shared channelizer, so no LE-grid tune exists anymore. Counts snap
+     * to the lane-split table like the BR/EDR path. */
     session_protocol_ref_t ref = SESSION_REF_BREDR;
     channel_count &= ~1u;
     if (channel_count < 2u)
         channel_count = 2u;
     if (channel_count > BREDR_SESSION_MAX_CHANNELS)
         channel_count = BREDR_SESSION_MAX_CHANNELS;
+    channel_count = channelizer_service_snap_bredr_count(channel_count);
+    if (channel_count < 2u)
+        channel_count = 2u;
     unsigned int max_bottom = 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;

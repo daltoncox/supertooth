@@ -7,6 +7,7 @@
 #include <liquid/liquid.h>
 
 #include "ble_bitstream_decoder.h"
+#include "channelizer_service.h"
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
 
@@ -15,7 +16,9 @@ extern "C" {
 #endif
 
 #define BLE_SESSION_SAMPLES_PER_SYMBOL 2u
-#define BLE_SESSION_MAX_CHANNELS 10u
+/* Max LE RF channels per session: the full 40-channel band (80 Msps staged
+ * over 4 lanes on wideband-capable devices; HackRF stays at 10). */
+#define BLE_SESSION_MAX_CHANNELS 40u
 #define BLE_SESSION_LNA_GAIN 24u
 #define BLE_SESSION_VGA_GAIN 18u
 
@@ -64,15 +67,8 @@ typedef struct {
 } ble_channel_processor_t;
 
 int ble_channel_processor_init(ble_channel_processor_t *proc,
-                               sample_dispatcher_t *dispatcher,
-                               uint16_t rf_index,
-                               uint32_t center_frequency_hz,
-                               unsigned int sample_rate_hz,
-                               unsigned int chan_bin,
-                               unsigned int bank_M,
-                               unsigned int bank_M2,
-                                unsigned int frame_stride,
-                                float rssi_cal_db);
+                               const channelizer_channel_t *ch,
+                               uint16_t rf_index);
 
 void ble_channel_processor_destroy(ble_channel_processor_t *proc);
 

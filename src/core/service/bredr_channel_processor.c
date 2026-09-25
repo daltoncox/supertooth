@@ -31,29 +31,26 @@ static rx_metadata_t bredr_make_metadata(uint64_t radio_start_sample_index,
 }
 
 int bredr_channel_processor_init(bredr_channel_processor_t *proc,
-                                 sample_dispatcher_t *dispatcher,
-                                 uint16_t rf_channel_index,
-                                 uint32_t center_frequency_hz,
-                                 unsigned int sample_rate_hz,
-                                 unsigned int chan_bin,
-                                 unsigned int bank_M,
-                                 unsigned int bank_M2,
-                                 float rssi_cal_db)
+                                 const channelizer_channel_t *ch,
+                                 uint16_t rf_channel_index)
 {
-    if (!proc || !dispatcher) return -1;
+    if (!proc || !ch || !ch->dispatcher)
+        return -1;
+    if (ch->M == 0u)
+        return -1;
     memset(proc, 0, sizeof(*proc));
 
     proc->rf_channel_index    = rf_channel_index;
     proc->frequency_offset_hz = 0;
-    proc->center_frequency_hz  = center_frequency_hz;
+    proc->center_frequency_hz  = ch->center_hz;
     proc->samps_per_symbol     = BREDR_SESSION_SAMPLES_PER_SYMBOL;
 
-    proc->bin              = chan_bin;
-    proc->bank_M           = bank_M;
-    proc->input_decimation = bank_M2;
-    proc->rssi_cal_db      = rssi_cal_db;
+    proc->bin              = ch->bin;
+    proc->bank_M           = ch->M;
+    proc->input_decimation = ch->input_decimation;
+    proc->rssi_cal_db      = ch->rssi_cal_db;
 
-    if (sample_reader_init(&proc->reader, dispatcher) != 0)
+    if (sample_reader_init(&proc->reader, ch->dispatcher) != 0)
     {
         bredr_channel_processor_destroy(proc);
         return -1;
@@ -64,7 +61,7 @@ int bredr_channel_processor_init(bredr_channel_processor_t *proc,
     if (!proc->demodulator) { bredr_channel_processor_destroy(proc); return -1; }
 
     /* Frame-major block holds at most SAMPLE_BLOCK_SAMPLE_CAPACITY / M frames. */
-    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / (size_t)bank_M + 16u;
+    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / (size_t)ch->M + 16u;
     proc->decimated = malloc(sizeof(float complex) * proc->buf_cap_samples);
     if (!proc->decimated) { bredr_channel_processor_destroy(proc); return -1; }
 

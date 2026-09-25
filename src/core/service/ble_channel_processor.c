@@ -9,33 +9,35 @@
 #include "rssi_measurements.h"
 
 int ble_channel_processor_init(ble_channel_processor_t *proc,
-                               sample_dispatcher_t *dispatcher,
-                               uint16_t rf_channel_index,
-                               uint32_t center_frequency_hz,
-                               unsigned int sample_rate_hz,
-                               unsigned int chan_bin,
-                               unsigned int bank_M,
-                               unsigned int bank_M2,
-                                unsigned int frame_stride,
-                                float rssi_cal_db)
+                               const channelizer_channel_t *ch,
+                               uint16_t rf_channel_index)
 {
-    if (!proc || !dispatcher || rf_channel_index >= BLE_RF_CHANNEL_COUNT) return -1;
+    if (!proc || !ch || !ch->dispatcher ||
+        rf_channel_index >= BLE_RF_CHANNEL_COUNT)
+        return -1;
+    if (ch->M == 0u || ch->stride == 0u)
+        return -1;
     memset(proc, 0, sizeof(*proc));
 
     proc->rf_channel_index    = rf_channel_index;
     proc->frequency_offset_hz = 0;
-    proc->center_frequency_hz = center_frequency_hz;
+    proc->center_frequency_hz = ch->center_hz;
     proc->samples_per_symbol  = BLE_SESSION_SAMPLES_PER_SYMBOL;
 
-    proc->bin           = chan_bin;
-    proc->bank_M        = bank_M;
-    proc->frame_stride  = frame_stride;
+    proc->bin           = ch->bin;
+    proc->bank_M        = ch->M;
+    proc->frame_stride  = ch->stride;
     /* Bank output is 2*grid Msps per bin; the reader strides by grid/1MHz to
-     * reach 2 Msps, so overall RF->demod decimation is M2 * frame_stride. */
-    proc->input_decimation = bank_M2 * frame_stride;
-    proc->rssi_cal_db      = rssi_cal_db;
+     * reach 2 Msps, so the end-to-end RF->demod decimation comes straight
+     * from the service descriptor (D*M2*stride, D=1 narrowband). */
+    proc->input_decimation = ch->input_decimation;
+    proc->rssi_cal_db      = ch->rssi_cal_db;
 
-    if (sample_reader_init(&proc->reader, dispatcher) != 0) { ble_channel_processor_destroy(proc); return -1; }
+    if (sample_reader_init(&proc->reader, ch->dispatcher) != 0)
+    {
+        ble_channel_processor_destroy(proc);
+        return -1;
+    }
 
     unsigned int m_taps   = 3u;
     proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samples_per_symbol,
@@ -44,12 +46,14 @@ int ble_channel_processor_init(ble_channel_processor_t *proc,
 
     /* Decimated (post stride) buffer is at 2 Msps: block holds at most
      * (SAMPLE_BLOCK_SAMPLE_CAPACITY / bank_M / frame_stride) samples. */
-    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / ((size_t)bank_M * frame_stride) + 16u;
+    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / ((size_t)ch->M * ch->stride) + 16u;
     proc->decimated       = malloc(sizeof(float complex) * proc->buf_cap_samples);
     if (!proc->decimated) { ble_channel_processor_destroy(proc); return -1; }
 
-    proc->abs_sample_scale = (sample_rate_hz > 0u)
-                             ? (uint64_t)(1000000000ull / sample_rate_hz)
+    proc->abs_sample_scale = (proc->input_decimation > 0u)
+                             ? (uint64_t)(1000000000ull /
+                                          ((uint64_t)proc->input_decimation *
+                                           2000000ull))
                              : 1u;
 
     uint8_t le_ch = ble_rf_to_le_channel(rf_channel_index);

@@ -33,3 +33,13 @@ target_link_libraries(test_exhaustive_replay
 )
 
 add_test(NAME test_exhaustive_replay COMMAND test_exhaustive_replay)
+
+add_executable(test_channelizer_service_lanes
+    test_channelizer_service_lanes.c
+)
+
+target_link_libraries(test_channelizer_service_lanes
+    supertooth_core
+)
+
+add_test(NAME test_channelizer_service_lanes COMMAND test_channelizer_service_lanes)

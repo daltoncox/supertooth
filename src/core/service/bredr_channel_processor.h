@@ -7,6 +7,7 @@
 #include <liquid/liquid.h>
 
 #include "bredr_bitstream_decoder.h"
+#include "channelizer_service.h"
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
 
@@ -94,14 +95,8 @@ typedef struct {
 } bredr_channel_processor_t;
 
 int  bredr_channel_processor_init(bredr_channel_processor_t *proc,
-                                  sample_dispatcher_t *dispatcher,
-                                  uint16_t rf_channel_index,
-                                  uint32_t center_frequency_hz,
-                                  unsigned int sample_rate_hz,
-                                  unsigned int chan_bin,
-                                  unsigned int bank_M,
-                                  unsigned int bank_M2,
-                                  float rssi_cal_db);
+                                  const channelizer_channel_t *ch,
+                                  uint16_t rf_channel_index);
 
 void bredr_channel_processor_destroy(bredr_channel_processor_t *proc);
 
