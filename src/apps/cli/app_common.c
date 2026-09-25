@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static session_t *g_session_slot = NULL;
@@ -162,6 +163,18 @@ int app_validate_device_spec(const char *argv0, const app_device_spec_t *spec)
             "Device check failed for %s:%s (error %d). Run the following "
             "to list detected devices:\n\n%s -d\n",
             radio_device_type_name(spec->type), spec->id, result, argv0);
+    return -1;
+}
+
+int app_require_default_device(const char *argv0)
+{
+    if (session_get_default_device(NULL, NULL, 0u) == RADIO_SUCCESS)
+        return 0;
+
+    fprintf(stderr,
+            "No devices found. Run the following to list detected devices:\n\n"
+            "%s -d\n",
+            argv0 ? argv0 : "supertooth");
     return -1;
 }
 

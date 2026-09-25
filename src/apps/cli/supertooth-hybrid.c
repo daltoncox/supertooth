@@ -350,6 +350,12 @@ int main(int argc, char *argv[])
         }
     }
 
+    if (!g_device_selected)
+    {
+        if (app_require_default_device(argv[0]) != 0)
+            return EXIT_FAILURE;
+    }
+
     if (g_bottom_channel_explicit)
     {
         unsigned int max_bottom_channel = BREDR_MAX_CHANNEL - (g_num_bredr_channels - 1u);

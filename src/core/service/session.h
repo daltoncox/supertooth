@@ -237,6 +237,19 @@ unsigned int session_default_bredr_count(radio_device_type_t device_type);
 uint32_t session_device_max_rate_hz(radio_device_type_t device_type);
 /* Printable device-type name for diagnostics (e.g. "hackrf"). */
 const char *session_device_type_name(radio_device_type_t device_type);
+/**
+ * Find the default live radio device (first identifier of the first live
+ * device type; file replay is not enumerable hardware and is skipped).
+ * Covers any live type so future radios are picked up automatically.
+ * @param out_type    Optional output for the device type.
+ * @param out_id      Optional buffer receiving the NUL-terminated id.
+ * @param out_id_len  Size of @p out_id in bytes (ignored when @p out_id NULL).
+ * @return RADIO_SUCCESS on success, RADIO_DEVICE_NOT_FOUND when no live
+ *         device is present, -1 on bad arguments.
+ * Both outputs are optional: passing NULL/NULL/0 probes for existence.
+ */
+int session_get_default_device(radio_device_type_t *out_type,
+                               char *out_id, size_t out_id_len);
 int  session_run(session_t *session);
 void session_request_stop(session_t *session);
 int  session_destroy(session_t *session);

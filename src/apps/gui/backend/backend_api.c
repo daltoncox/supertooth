@@ -1015,6 +1015,28 @@ void backend_session_request_stop(backend_session_t *session)
     session_request_stop(session->session);
 }
 
+int backend_get_default_device(char *out_type_name, size_t type_len,
+                               char *out_id, size_t id_len)
+{
+    radio_device_type_t type = RADIO_DEVICE_HACKRF;
+    char id[256] = {0};
+
+    if ((out_type_name && type_len == 0u) || (out_id && id_len == 0u))
+        return -1;
+
+    if (session_get_default_device(&type, id, sizeof(id)) != RADIO_SUCCESS)
+        return -1;
+
+    if (out_type_name)
+    {
+        const char *name = session_device_type_name(type);
+        snprintf(out_type_name, type_len, "%s", name ? name : "");
+    }
+    if (out_id)
+        snprintf(out_id, id_len, "%s", id);
+    return 0;
+}
+
 size_t backend_session_poll_entities(backend_session_t *session,
                                      backend_entity_t *out, size_t max)
 {

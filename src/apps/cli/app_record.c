@@ -1,5 +1,7 @@
 #include "app_record.h"
 
+#include "session.h"
+
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -50,6 +52,12 @@ int app_record_run(const app_record_config_t *cfg)
     if (cfg->sample_rate_hz == 0u || cfg->lo_freq_hz == 0u)
     {
         fprintf(stderr, "--record: invalid tune (rate/LO)\n");
+        return 1;
+    }
+    if (!cfg->device_id &&
+        session_get_default_device(NULL, NULL, 0u) != RADIO_SUCCESS)
+    {
+        fprintf(stderr, "--record: no devices found\n");
         return 1;
     }
 

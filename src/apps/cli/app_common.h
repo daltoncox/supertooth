@@ -78,6 +78,16 @@ int app_print_available_devices(const char *argv0);
 int app_validate_device_spec(const char *argv0, const app_device_spec_t *spec);
 
 /**
+ * Verify a default live device exists (for runs without an explicit
+ * `-d <type>:<id>`). Uses session_get_default_device() so any live type
+ * is accepted; file replay is not probed here (explicit specs are already
+ * validated by app_validate_device_spec()).
+ * On success returns 0. On no-device prints the friendly "No devices
+ * found" message (which references @p argv0) and returns non-zero.
+ */
+int app_require_default_device(const char *argv0);
+
+/**
  * Print the `--device` usage line for `print_usage` blocks.
  */
 void app_print_device_usage_line(void);

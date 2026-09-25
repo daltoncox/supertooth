@@ -226,6 +226,21 @@ int backend_session_run_hybrid(backend_session_t *session,
 void backend_session_request_stop(backend_session_t *session);
 
 /**
+ * Find the default live radio device (first identifier of the first live
+ * device type; file replay is skipped). Thin wrapper over
+ * session_get_default_device() for the GUI/QML side, which cannot include
+ * the core headers.
+ * @param out_type_name  Optional buffer for the type name (e.g. "hackrf").
+ * @param type_len       Size of @p out_type_name (ignored when NULL).
+ * @param out_id         Optional buffer for the NUL-terminated id.
+ * @param id_len         Size of @p out_id (ignored when NULL).
+ * @return 0 on success, non-zero when no live device is present.
+ * All outputs are optional: NULL/0 probes for existence.
+ */
+int backend_get_default_device(char *out_type_name, size_t type_len,
+                               char *out_id, size_t id_len);
+
+/**
  * Snapshot the current device/connection entities from the core registries
  * into @p out (capacity @p max). Returns the number of entities written.
  * Caller provides the buffer; safe to call from the GUI thread while a

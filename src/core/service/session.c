@@ -1,6 +1,7 @@
 #include "session.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -285,6 +286,40 @@ uint32_t session_device_max_rate_hz(radio_device_type_t device_type)
 const char *session_device_type_name(radio_device_type_t device_type)
 {
     return radio_device_type_name(device_type);
+}
+
+int session_get_default_device(radio_device_type_t *out_type,
+                               char *out_id, size_t out_id_len)
+{
+    if (out_id && out_id_len == 0u)
+        return -1;
+
+    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT; t++)
+    {
+        radio_device_type_t type = (radio_device_type_t)t;
+        if (type == RADIO_DEVICE_FILE)
+            continue;
+
+        char **identifiers = NULL;
+        size_t count = 0u;
+        if (radio_list_devices(type, &identifiers, &count) != RADIO_SUCCESS)
+            continue;
+        if (count == 0u || !identifiers || !identifiers[0] ||
+            identifiers[0][0] == '\0')
+        {
+            radio_free_device_list(&identifiers, count);
+            continue;
+        }
+
+        if (out_type)
+            *out_type = type;
+        if (out_id)
+            snprintf(out_id, out_id_len, "%s", identifiers[0]);
+        radio_free_device_list(&identifiers, count);
+        return RADIO_SUCCESS;
+    }
+
+    return RADIO_DEVICE_NOT_FOUND;
 }
 
 static int session_create_channels(session_t *session)

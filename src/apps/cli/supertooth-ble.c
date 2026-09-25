@@ -265,6 +265,12 @@ int main(int argc, char *argv[])
         }
     }
 
+    if (!g_device_selected)
+    {
+        if (app_require_default_device(argv[0]) != 0)
+            return EXIT_FAILURE;
+    }
+
     unsigned int bottom_rf = ble_rf_for_channel_number(g_bottom_le_channel);
     if (bottom_rf >= BLE_RF_CHANNEL_COUNT ||
         bottom_rf + g_num_le_channels > BLE_RF_CHANNEL_COUNT)

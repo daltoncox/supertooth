@@ -100,6 +100,13 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         return false;
     }
 
+    if (deviceId.isEmpty() && backend_get_default_device(nullptr, 0u, nullptr, 0u) != 0)
+    {
+        qCWarning(lcSession) << "start() aborted: no devices found";
+        emit errorOccurred(tr("No devices found."));
+        return false;
+    }
+
     /* Apply the global access-code error tolerance before streaming begins.
      * The BR/EDR bitstream decoder is the sole access-code acceptance gate. */
     bredr_bitstream_decoder_set_global_max_ac_errors((uint8_t)acErrors);
