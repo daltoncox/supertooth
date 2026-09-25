@@ -30,6 +30,7 @@ enum
     APP_OPT_AC_ERRORS,
     APP_OPT_RECORD,
     APP_OPT_EXHAUSTIVE,
+    APP_OPT_GAIN,
 };
 
 /* Parsed "<type>:<id>" device spec, e.g. "hackrf:b25062dc22113a0b".
@@ -96,6 +97,34 @@ void app_print_device_usage_line(void);
  * Print the `--record` usage line for `print_usage` blocks.
  */
 void app_print_record_usage_line(void);
+
+/**
+ * Print the `-g/--gain` usage line for `print_usage` blocks.
+ */
+void app_print_gain_usage_line(void);
+
+/**
+ * Default live device type when the user passes no `-d` flag: HackRF when
+ * compiled in, otherwise bladeRF, otherwise file (validation-only).
+ */
+radio_device_type_t app_default_device_type(void);
+
+/**
+ * Print the resolved gain selection as a banner line ("Gain : ..."),
+ * formatted per device type (raw -g value when explicit, device default
+ * otherwise). FILE prints "(n/a - replay)".
+ */
+void app_print_gain_summary(radio_device_type_t type,
+                            const radio_gain_spec_t *spec);
+
+/**
+ * Resolve the raw `-g/--gain` argument (NULL = flag omitted → device
+ * defaults) into @p out for @p type. On malformed/out-of-range input
+ * prints "Invalid --gain ...", the device-specific help, and returns
+ * non-zero. @p argv0 is used only for diagnostics.
+ */
+int app_resolve_gain_spec(const char *argv0, radio_device_type_t type,
+                          const char *raw, radio_gain_spec_t *out);
 
 /**
  * Print the `--exhaustive` usage line for `print_usage` blocks.

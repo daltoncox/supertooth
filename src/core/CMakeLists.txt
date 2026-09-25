@@ -6,16 +6,30 @@ if(APPLE)
 endif()
 
 if(PkgConfig_FOUND)
-    pkg_check_modules(HACKRF libhackrf)
+    if(ENABLE_HACKRF)
+        pkg_check_modules(HACKRF libhackrf)
+    endif()
+    if(ENABLE_BLADERF)
+        pkg_check_modules(BLADERF libbladerf)
+    endif()
     pkg_check_modules(LIQUID liquid-dsp)
 endif()
 
-if(HACKRF_FOUND)
+if(ENABLE_HACKRF AND HACKRF_FOUND)
     find_library(HACKRF_LIBRARY_PATH NAMES hackrf libhackrf
         PATHS ${HACKRF_LIBRARY_DIRS}
         NO_DEFAULT_PATH)
     if(HACKRF_LIBRARY_PATH)
         set(HACKRF_LIBRARIES ${HACKRF_LIBRARY_PATH})
+    endif()
+endif()
+
+if(ENABLE_BLADERF AND BLADERF_FOUND)
+    find_library(BLADERF_LIBRARY_PATH NAMES bladerf libbladerf
+        PATHS ${BLADERF_LIBRARY_DIRS}
+        NO_DEFAULT_PATH)
+    if(BLADERF_LIBRARY_PATH)
+        set(BLADERF_LIBRARIES ${BLADERF_LIBRARY_PATH})
     endif()
 endif()
 
@@ -31,7 +45,7 @@ if(NOT LIQUID_FOUND)
     endif()
 endif()
 
-if(NOT HACKRF_FOUND)
+if(ENABLE_HACKRF AND NOT HACKRF_FOUND)
     find_library(HACKRF_LIBRARIES NAMES hackrf libhackrf
         PATHS /opt/homebrew/lib /usr/local/lib)
     find_path(HACKRF_INCLUDE_DIRS libhackrf/hackrf.h
@@ -43,8 +57,28 @@ if(NOT HACKRF_FOUND)
     endif()
 endif()
 
-if(NOT HACKRF_FOUND)
-    message(FATAL_ERROR "HackRF library not found. Please install with: brew install hackrf")
+if(ENABLE_BLADERF AND NOT BLADERF_FOUND)
+    find_library(BLADERF_LIBRARIES NAMES bladerf libbladerf
+        PATHS /opt/homebrew/lib /usr/local/lib)
+    find_path(BLADERF_INCLUDE_DIRS libbladeRF.h
+        PATHS /opt/homebrew/include /usr/local/include)
+
+    if(BLADERF_LIBRARIES AND BLADERF_INCLUDE_DIRS)
+        set(BLADERF_FOUND TRUE)
+        message(STATUS "Found bladeRF manually: ${BLADERF_LIBRARIES}")
+    endif()
+endif()
+
+if(ENABLE_HACKRF AND NOT HACKRF_FOUND)
+    message(FATAL_ERROR "HackRF library not found. Please install with: brew install hackrf (or configure with -DENABLE_HACKRF=OFF)")
+endif()
+
+if(ENABLE_BLADERF AND NOT BLADERF_FOUND)
+    message(FATAL_ERROR "bladeRF library not found. Please install with: brew install bladerf (or configure with -DENABLE_BLADERF=OFF)")
+endif()
+
+if(NOT ENABLE_HACKRF AND NOT ENABLE_BLADERF)
+    message(STATUS "No live radio backends enabled; only file replay will be available")
 endif()
 
 if(NOT LIQUID_FOUND)
@@ -112,7 +146,6 @@ add_library(supertooth_core STATIC
     protocol/bredr/bredr_clock_recovery.c protocol/bredr/bredr_clock_recovery.h
     radio/radio_common.c radio/radio_common.h
     radio/sample_dispatcher.c radio/sample_dispatcher.h
-    radio/hackrf.c radio/hackrf.h
     radio/wav.c radio/wav.h
     radio/file.c radio/file.h
     service/ble_channel_processor.c service/ble_channel_processor.h
@@ -124,20 +157,45 @@ add_library(supertooth_core STATIC
 )
 
 target_link_libraries(supertooth_core
-    ${HACKRF_LIBRARIES}
-    ${LIQUID_LIBRARIES}
     Threads::Threads
 )
 
+if(ENABLE_HACKRF)
+    target_sources(supertooth_core PRIVATE
+        radio/hackrf.c radio/hackrf.h
+    )
+    target_compile_definitions(supertooth_core PUBLIC HAVE_HACKRF=1)
+    target_link_libraries(supertooth_core ${HACKRF_LIBRARIES})
+    target_include_directories(supertooth_core PUBLIC ${HACKRF_INCLUDE_DIRS})
+    if(HACKRF_CFLAGS_OTHER)
+        target_compile_options(supertooth_core PRIVATE ${HACKRF_CFLAGS_OTHER})
+    endif()
+else()
+    target_compile_definitions(supertooth_core PUBLIC HAVE_HACKRF=0)
+endif()
+
+if(ENABLE_BLADERF)
+    target_sources(supertooth_core PRIVATE
+        radio/bladerf.c radio/bladerf.h
+    )
+    target_compile_definitions(supertooth_core PUBLIC HAVE_BLADERF=1)
+    target_link_libraries(supertooth_core ${BLADERF_LIBRARIES})
+    target_include_directories(supertooth_core PUBLIC ${BLADERF_INCLUDE_DIRS})
+    if(BLADERF_CFLAGS_OTHER)
+        target_compile_options(supertooth_core PRIVATE ${BLADERF_CFLAGS_OTHER})
+    endif()
+else()
+    target_compile_definitions(supertooth_core PUBLIC HAVE_BLADERF=0)
+endif()
+
+target_link_libraries(supertooth_core
+    ${LIQUID_LIBRARIES}
+)
+
 target_include_directories(supertooth_core PUBLIC
-    ${HACKRF_INCLUDE_DIRS}
     ${LIQUID_INCLUDE_DIRS}
     ${CORE_INCLUDE_DIRS}
 )
-
-if(HACKRF_CFLAGS_OTHER)
-    target_compile_options(supertooth_core PRIVATE ${HACKRF_CFLAGS_OTHER})
-endif()
 
 if(LIQUID_CFLAGS_OTHER)
     target_compile_options(supertooth_core PRIVATE ${LIQUID_CFLAGS_OTHER})

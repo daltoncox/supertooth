@@ -51,7 +51,8 @@ The three CLI tools ship inside the bundle alongside the GUI:
 
 | Dependency | Purpose |
 |---|---|
-| `libhackrf` | HackRF device API |
+| `libhackrf` | HackRF device API (default backend, always in releases) |
+| `libbladeRF` (`libbladerf`) | bladeRF device API (opt-in via `-DENABLE_BLADERF=ON`, not in releases) |
 | `liquid-dsp` | Channelization, filtering, NCO mixing, GFSK/CPFSK demodulation |
 
 BR/EDR UAP and CLK1-6 recovery is implemented in-tree (no external
@@ -71,10 +72,22 @@ sudo apt install -y \
   hackrf libhackrf-dev libliquid-dev
 ```
 
+Optional bladeRF support (off by default, not shipped in releases):
+
+```bash
+sudo apt install -y libbladerf-dev
+```
+
 macOS (Homebrew):
 
 ```bash
 brew install cmake pkg-config hackrf autoconf automake libtool
+```
+
+Optional bladeRF support:
+
+```bash
+brew install bladerf
 ```
 
 > **Do NOT `brew install liquid-dsp`.** Its bottle is built with liquid-dsp's
@@ -130,11 +143,36 @@ then `ctest --output-on-failure`). Version strings come from
 differential `libbtbb` oracle tests additionally need a `libbtbb/` checkout at
 the repo root (it is gitignored); without it those oracle tests are skipped.
 
+### CMake options
+
+| Option | Build Default | In Release |
+|---|---|---|
+| `ENABLE_HACKRF` | `ON` | yes |
+| `ENABLE_BLADERF` | `OFF` | no |
+| `BUILD_GUI` | `OFF` | yes |
+| `BUILD_TESTS` | `OFF` | no |
+
+Enable bladeRF (requires `libbladeRF` installed, see Prerequisites):
+
+```bash
+cmake .. -DENABLE_BLADERF=ON
+```
+
+Probe for it: `supertooth-ble -d` lists one `bladerf:<serial>` line per
+connected device (serials are also shown by `bladeRF-cli -p`); select one
+with `-d bladerf:<serial>`. The bladeRF 2.0 Micro sustains 61.44 Msps, so
+BR/EDR defaults to 60 channels on bladeRF (20 on HackRF). A single
+`-g/--gain` flag sets RX gain per radio: HackRF takes `LNA,VGA[,AMP]`
+(e.g. `-g 24,18,0`; AMP defaults to off) while bladeRF takes an overall
+gain in dB (e.g. `-g 30`, default 30 dB, manual gain control). A malformed
+or out-of-range value prints that radio's gain help.
+
 Output binaries are in `build/src/apps/cli/` (CLI) and `build/src/apps/gui/` (GUI).
 
 ## Run
 
-All binaries require a HackRF:
+All binaries require a HackRF by default (or a bladeRF with
+`-DENABLE_BLADERF=ON` builds):
 
 ```bash
 ./build/src/apps/cli/supertooth-ble
@@ -166,7 +204,7 @@ src/
   core/
     dsp/           Shared DSP utilities (channelizer_bank, rssi_measurements)
     models/        Shared packet and receive metadata types (device_models, receive_event_models, phy, rssi_tracker)
-    radio/         HackRF integration (hackrf, radio_common) and sample dispatcher
+    radio/         Radio integration (hackrf, bladerf, radio_common) and sample dispatcher
     service/       Session API, channel processors, channelizer_service, event collector
     protocol/
       ble/         BLE bitstream decoder, codec, registry (devices + connections), display utilities, BT assigned numbers

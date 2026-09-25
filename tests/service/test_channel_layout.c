@@ -46,6 +46,29 @@ static int make_session(session_t *s, unsigned int bottom, unsigned int count,
     return session_tune(s, ref, bottom, count);
 }
 
+/* bladeRF-backed sessions for ceiling tests (61.44 Msps). Compiles in
+ * every flag combination; the ceiling checks using it are HAVE-gated. */
+static int make_bladerf_session(session_t *s, unsigned int bottom,
+                                unsigned int count,
+                                session_protocol_ref_t ref, int enable_ble,
+                                int enable_bredr)
+{
+    session_config_t cfg = { .device_type = RADIO_DEVICE_BLADERF, .device_id = NULL, .debug = 0 };
+    if (session_init(s, &cfg) != 0)
+        return -1;
+    if (enable_ble)
+    {
+        session_ble_config_t bc = { .enforce_crc = 1u };
+        session_enable_ble(s, &bc, NULL, NULL);
+    }
+    if (enable_bredr)
+    {
+        session_bredr_config_t bc = { 0 };
+        session_enable_bredr(s, &bc, NULL, NULL);
+    }
+    return session_tune(s, ref, bottom, count);
+}
+
 /* File-replay sessions see the generic 80 Msps ceiling (wideband tunes). */
 static int make_file_session(session_t *s, unsigned int bottom,
                               unsigned int count, session_protocol_ref_t ref,
@@ -212,7 +235,16 @@ static void test_processor_counts(void)
         session_t s;
         memset(&s, 0, sizeof(s));
         CHECK_U64("ble 80Msps over ceiling rejected",
-                  make_session(&s, 0, 40, SESSION_REF_BLE, 1, 0), -1);
+                  make_session(&s, 0, 40, SESSION_REF_BLE, 1, 0),
+#if HAVE_HACKRF
+                  -1);
+#else
+                  /* HackRF compiled out: the HACKRF type falls back to the
+                   * generic 80 Msps ceiling, so the tune succeeds. The
+                   * live-ceiling behavior is covered by the bladeRF block
+                   * below when HAVE_BLADERF. */
+                  0);
+#endif
         session_destroy(&s);
     }
     {
@@ -233,7 +265,14 @@ static void test_processor_counts(void)
         session_t s;
         memset(&s, 0, sizeof(s));
         CHECK_U64("all on hackrf over ceiling rejected",
-                  make_session(&s, 0, 79, SESSION_REF_BREDR, 0, 1), -1);
+                  make_session(&s, 0, 79, SESSION_REF_BREDR, 0, 1),
+#if HAVE_HACKRF
+                  -1);
+#else
+                  /* See "ble 80Msps over ceiling" above: without the
+                   * HackRF ceiling the fallback admits the tune. */
+                  0);
+#endif
         session_destroy(&s);
     }
     {
@@ -378,6 +417,7 @@ static void test_wideband_lanes(void)
     }
 
     /* Wideband is gated by the device ceiling: HackRF rejects 40ch. */
+#if HAVE_HACKRF
     {
         session_t s;
         memset(&s, 0, sizeof(s));
@@ -385,6 +425,54 @@ static void test_wideband_lanes(void)
                   make_session(&s, 0, 40, SESSION_REF_BREDR, 0, 1), -1);
         session_destroy(&s);
     }
+#endif
+
+#if HAVE_BLADERF
+    /* bladeRF ceiling (61.44 Msps): 60ch tunes at 60 Msps (K=3), 64ch and
+     * "all" exceed the ceiling. */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("bladerf 60ch tune",
+                  make_bladerf_session(&s, 0, 60, SESSION_REF_BREDR, 0, 1),
+                  0);
+        CHECK_U64("bladerf 60ch rate", s.sample_rate_hz, 60000000u);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("bladerf 64ch over ceiling rejected",
+                  make_bladerf_session(&s, 0, 64, SESSION_REF_BREDR, 0, 1),
+                  -1);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("bladerf all over ceiling rejected",
+                  make_bladerf_session(&s, 0, 79, SESSION_REF_BREDR, 0, 1),
+                  -1);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("bladerf ble 30ch tune",
+                  make_bladerf_session(&s, 0, 30, SESSION_REF_BLE, 1, 0),
+                  0);
+        CHECK_U64("bladerf ble 30ch rate", s.sample_rate_hz, 60000000u);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("bladerf ble 32ch over ceiling rejected",
+                  make_bladerf_session(&s, 0, 32, SESSION_REF_BLE, 1, 0),
+                  -1);
+        session_destroy(&s);
+    }
+#endif
 
     /* BLE-only wideband: 40 LE RF channels at 80 Msps, K=4, 2 MHz bins. */
     {
@@ -425,10 +513,12 @@ static void test_wideband_lanes(void)
 static void test_validate_layout(void)
 {
     /* Valid combos across devices and modes. */
+#if HAVE_HACKRF
     CHECK_U64("valid hackrf bredr 20",
               session_validate_layout(RADIO_DEVICE_HACKRF, 0, 1,
                                       SESSION_REF_BREDR, 0u, 20u),
               SESSION_LAYOUT_OK);
+#endif
     CHECK_U64("valid file bredr 40",
               session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
                                       SESSION_REF_BREDR, 0u, 40u),
@@ -457,6 +547,20 @@ static void test_validate_layout(void)
               session_validate_layout(RADIO_DEVICE_FILE, 1, 0,
                                       SESSION_REF_BLE, 0u, 40u),
               SESSION_LAYOUT_OK);
+#if HAVE_BLADERF
+    CHECK_U64("valid bladerf bredr 60",
+              session_validate_layout(RADIO_DEVICE_BLADERF, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 60u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid bladerf hybrid 60",
+              session_validate_layout(RADIO_DEVICE_BLADERF, 1, 1,
+                                      SESSION_REF_BREDR, 0u, 60u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid bladerf ble 30",
+              session_validate_layout(RADIO_DEVICE_BLADERF, 1, 0,
+                                      SESSION_REF_BLE, 0u, 30u),
+              SESSION_LAYOUT_OK);
+#endif
 
     /* Range failures: empty, band overflow, hybrid BLE-ref. */
     CHECK_U64("count 0 rejected",
@@ -481,6 +585,7 @@ static void test_validate_layout(void)
               SESSION_LAYOUT_BAD_RANGE);
 
     /* Device ceiling gates wideband on narrowband radios. */
+#if HAVE_HACKRF
     CHECK_U64("hackrf 40ch over ceiling",
               session_validate_layout(RADIO_DEVICE_HACKRF, 0, 1,
                                       SESSION_REF_BREDR, 0u, 40u),
@@ -493,6 +598,21 @@ static void test_validate_layout(void)
               session_validate_layout(RADIO_DEVICE_HACKRF, 1, 0,
                                       SESSION_REF_BLE, 0u, 20u),
               SESSION_LAYOUT_RATE_EXCEEDED);
+#endif
+#if HAVE_BLADERF
+    CHECK_U64("bladerf 64ch over ceiling",
+              session_validate_layout(RADIO_DEVICE_BLADERF, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 64u),
+              SESSION_LAYOUT_RATE_EXCEEDED);
+    CHECK_U64("bladerf all (79) over ceiling",
+              session_validate_layout(RADIO_DEVICE_BLADERF, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 79u),
+              SESSION_LAYOUT_RATE_EXCEEDED);
+    CHECK_U64("bladerf ble 32ch over ceiling",
+              session_validate_layout(RADIO_DEVICE_BLADERF, 1, 0,
+                                      SESSION_REF_BLE, 0u, 32u),
+              SESSION_LAYOUT_RATE_EXCEEDED);
+#endif
 
     /* Lane-split gaps fail even where the ceiling allows. */
     CHECK_U64("file 22ch no split",
@@ -505,18 +625,38 @@ static void test_validate_layout(void)
               SESSION_LAYOUT_NO_LANE_SPLIT);
 
     /* Wrappers. */
+#if HAVE_HACKRF
     CHECK_U64("default hackrf", session_default_bredr_count(RADIO_DEVICE_HACKRF),
               20u);
+#endif
+#if HAVE_BLADERF
+    CHECK_U64("default bladerf", session_default_bredr_count(RADIO_DEVICE_BLADERF),
+              60u);
+#endif
     CHECK_U64("default file", session_default_bredr_count(RADIO_DEVICE_FILE),
               79u);
     CHECK_U64("snap 22", session_snap_bredr_count(22u), 20u);
     CHECK_U64("snap 78", session_snap_bredr_count(78u), 72u);
     CHECK_U64("snap 79", session_snap_bredr_count(79u), 79u);
     CHECK_U64("snap 80", session_snap_bredr_count(80u), 79u);
+#if HAVE_HACKRF
     CHECK_U64("hackrf max rate", session_device_max_rate_hz(RADIO_DEVICE_HACKRF),
               20000000u);
     CHECK_U64("hackrf type name non-null",
               session_device_type_name(RADIO_DEVICE_HACKRF) != NULL, 1u);
+#else
+    CHECK_U64("hackrf type name null when compiled out",
+              session_device_type_name(RADIO_DEVICE_HACKRF) != NULL, 0u);
+#endif
+#if HAVE_BLADERF
+    CHECK_U64("bladerf max rate", session_device_max_rate_hz(RADIO_DEVICE_BLADERF),
+              61440000u);
+    CHECK_U64("bladerf type name non-null",
+              session_device_type_name(RADIO_DEVICE_BLADERF) != NULL, 1u);
+#else
+    CHECK_U64("bladerf type name null when compiled out",
+              session_device_type_name(RADIO_DEVICE_BLADERF) != NULL, 0u);
+#endif
 
     /* No-drift property: tune agrees with the validator on every case. */
     {

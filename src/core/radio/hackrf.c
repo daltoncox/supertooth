@@ -184,11 +184,18 @@ int hackrf_radio_configure(void *device, const radio_stream_config_t *config)
     if (!radio || !radio->device || !config)
         return HACKRF_ERROR_INVALID_PARAM;
 
-    result = hackrf_set_lna_gain(radio->device, config->lna_gain);
+    result = hackrf_set_lna_gain(radio->device,
+                                 (uint32_t)config->gain.hackrf_lna);
     if (result != HACKRF_SUCCESS)
         return result;
 
-    result = hackrf_set_vga_gain(radio->device, config->vga_gain);
+    result = hackrf_set_vga_gain(radio->device,
+                                 (uint32_t)config->gain.hackrf_vga);
+    if (result != HACKRF_SUCCESS)
+        return result;
+
+    result = hackrf_set_amp_enable(radio->device,
+                                   (uint8_t)(config->gain.hackrf_amp ? 1 : 0));
     if (result != HACKRF_SUCCESS)
         return result;
 

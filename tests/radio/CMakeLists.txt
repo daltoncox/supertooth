@@ -35,6 +35,16 @@ target_link_libraries(test_file_device
 
 add_test(NAME test_file_device COMMAND test_file_device)
 
+add_executable(test_gain_spec
+    test_gain_spec.c
+)
+
+target_link_libraries(test_gain_spec
+    supertooth_core
+)
+
+add_test(NAME test_gain_spec COMMAND test_gain_spec)
+
 add_executable(test_dispatcher_backpressure
     test_dispatcher_backpressure.c
 )

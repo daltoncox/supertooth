@@ -27,6 +27,7 @@ extern "C" {
 #define SESSION_BREDR_VGA_GAIN 18u
 #define SESSION_BLE_LNA_GAIN   24u
 #define SESSION_BLE_VGA_GAIN   18u
+#define SESSION_BLADERF_GAIN_DB RADIO_BLADERF_GAIN_DEFAULT
 
 #define BREDR_SESSION_MAX_CHANNELS 79u
 
@@ -45,12 +46,14 @@ typedef void (*session_bredr_packet_fn)(const bredr_event_t *event,
                                          void *user);
 
 typedef struct {
-    uint32_t lna_gain;
-    uint32_t vga_gain;
-
     radio_device_type_t device_type;
     const char *device_id;
     int debug;
+
+    /* Unified gain selection (parsed from -g/--gain; see radio_common.h).
+     * Zero-initialized (present == 0) means "device defaults":
+     * HackRF 24,18,amp-off, bladeRF SESSION_BLADERF_GAIN_DB. */
+    radio_gain_spec_t gain;
 
     /* File replay only: 1 = exhaustive (backpressure, never drop for pacing
      * reasons), 0 = realtime wall-clock pacing (default). Ignored for live

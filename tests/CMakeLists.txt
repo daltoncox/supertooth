@@ -27,6 +27,7 @@ set(_supertooth_test_targets
     test_ble_registry
     test_ble_display
     test_radio_list_devices
+    test_gain_spec
     test_wav_io
     test_file_device
     test_dispatcher_backpressure

@@ -75,7 +75,7 @@ static void print_usage(const char *argv0)
 {
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
-             "[-d|--device [<type>:<id>]] [--debug] "
+             "[-d|--device [<type>:<id>]] [-g|--gain SPEC] [--debug] "
             "[--enforce-crc on|off] [--record]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of consecutive LE RF channels (1-%u, default: %u)\n",
@@ -84,6 +84,7 @@ static void print_usage(const char *argv0)
     fprintf(stderr, "  %-30s Bottom LE channel of the window (0-39, default: 37)\n",
             "-b, --bottom-channel CH");
     app_print_device_usage_line();
+    app_print_gain_usage_line();
     fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
     fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "--debug");
     fprintf(stderr, "  %-30s Drop frames whose BLE CRC fails (default: on)\n",
@@ -154,6 +155,7 @@ int main(int argc, char *argv[])
         {"channels", required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
+        {"gain", required_argument, NULL, 'g'},
         {"version", no_argument, NULL, 'V'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
         {"enforce-crc", required_argument, NULL, APP_OPT_ENFORCE_CRC},
@@ -169,8 +171,11 @@ int main(int argc, char *argv[])
     int g_exhaustive = 0;
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
+    const char *g_gain_raw = NULL;
+    radio_gain_spec_t g_gain_spec;
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:c:b:d::Vh", long_opts, NULL)) != -1)
+    g_device_spec_parsed.type = app_default_device_type();
+    while ((opt = getopt_long(argc, argv, "v:c:b:d::g:Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -210,6 +215,9 @@ int main(int argc, char *argv[])
             break;
         case APP_OPT_DEBUG:
             g_debug = 1;
+            break;
+        case 'g':
+            g_gain_raw = optarg;
             break;
         case APP_OPT_RECORD:
             g_record = 1;
@@ -290,7 +298,7 @@ int main(int argc, char *argv[])
      * lane-split table (BLE spans are 2 MHz/RF). */
     {
         radio_device_type_t dtype =
-            g_device_selected ? g_device_spec_parsed.type : RADIO_DEVICE_HACKRF;
+            g_device_selected ? g_device_spec_parsed.type : app_default_device_type();
         switch (session_validate_layout(dtype, 1, 0, SESSION_REF_BLE,
                                         bottom_rf, g_num_le_channels))
         {
@@ -338,11 +346,17 @@ int main(int argc, char *argv[])
     }
     if (g_record)
     {
+        radio_device_type_t rdtype =
+            g_device_selected ? g_device_spec_parsed.type : app_default_device_type();
+        if (app_resolve_gain_spec(argv[0], rdtype, g_gain_raw,
+                                  &g_gain_spec) != 0)
+            return EXIT_FAILURE;
         app_record_config_t rcfg = {
             .device_type = g_device_spec_parsed.type,
             .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
             .lo_freq_hz = (uint32_t)tune_lo_hz,
             .sample_rate_hz = tune_rate_hz,
+            .gain = g_gain_spec,
             .debug = g_debug,
         };
         return app_record_run(&rcfg) == 0 ? EXIT_SUCCESS
@@ -356,6 +370,14 @@ int main(int argc, char *argv[])
         if (file_radio_check_compatible(g_device_spec_parsed.id, tune_rate_hz,
                                         &file_rate_hz,
                                         &file_center_hz) != 0)
+            return EXIT_FAILURE;
+    }
+
+    {
+        radio_device_type_t gdtype =
+            g_device_selected ? g_device_spec_parsed.type : app_default_device_type();
+        if (app_resolve_gain_spec(argv[0], gdtype, g_gain_raw,
+                                  &g_gain_spec) != 0)
             return EXIT_FAILURE;
     }
 
@@ -387,6 +409,9 @@ int main(int argc, char *argv[])
                g_device_spec_parsed.id);
     else
         printf("Device      : (default)\n");
+    app_print_gain_summary(g_device_selected ? g_device_spec_parsed.type
+                                             : app_default_device_type(),
+                           &g_gain_spec);
     if (is_file_input)
     {
         printf("Replay      : %s, single pass, %u Hz",
@@ -408,6 +433,7 @@ int main(int argc, char *argv[])
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
+        .gain = g_gain_spec,
         .file_exhaustive = g_exhaustive,
     };
 

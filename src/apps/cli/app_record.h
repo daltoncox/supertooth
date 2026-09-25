@@ -18,6 +18,7 @@ typedef struct
     const char *device_id;           /* optional, NULL for default */
     uint32_t lo_freq_hz;
     uint32_t sample_rate_hz;
+    radio_gain_spec_t gain;
     int debug;
 } app_record_config_t;
 

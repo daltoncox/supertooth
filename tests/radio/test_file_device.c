@@ -87,8 +87,7 @@ int main(void)
         radio_stream_config_t cfg = {
             .lo_freq_hz = (uint64_t)TEST_LO,
             .sample_rate = TEST_RATE,
-            .lna_gain = 24u,
-            .vga_gain = 18u,
+            .gain = {0},
         };
         uint64_t total = 0u, expect_base = 0u;
         int pops = 0;
@@ -155,8 +154,7 @@ int main(void)
         radio_stream_config_t cfg = {
             .lo_freq_hz = (uint64_t)TEST_LO,
             .sample_rate = TEST_RATE,
-            .lna_gain = 24u,
-            .vga_gain = 18u,
+            .gain = {0},
         };
         uint64_t total = 0u, expect_base = 0u;
 

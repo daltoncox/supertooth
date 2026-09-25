@@ -12,6 +12,8 @@ endif()
 
 option(BUILD_TESTS "Build the unit and integration test suite" OFF)
 option(BUILD_GUI "Build the Qt graphical interface" OFF)
+option(ENABLE_HACKRF "Enable HackRF radio backend" ON)
+option(ENABLE_BLADERF "Enable bladeRF radio backend" OFF)
 
 enable_testing()
 

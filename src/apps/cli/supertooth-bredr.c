@@ -39,6 +39,7 @@ static uint32_t g_lap_filter = 0u;
 static unsigned int g_num_bredr_channels = BREDR_SESSION_MAX_CHANNELS;
 static unsigned int g_bottom_bredr_channel = 0u;
 static int g_bottom_channel_explicit = 0;
+static int g_channels_explicit = 0;
 /* Maximum access-code bit errors accepted by the BR/EDR bitstream decoder.
  * Defaults to 0 (strict, byte-perfect access-code match). */
 static unsigned int g_ac_errors = 0u;
@@ -214,7 +215,7 @@ static void print_usage(const char *argv0)
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|devices] [-l|--lap LAP] "
             "[-c|--channels N] [-b|--bottom-channel CH] "
-             "[-d|--device [<type>:<id>]] [--ac-errors N] [--debug] "
+             "[-d|--device [<type>:<id>]] [-g|--gain SPEC] [--ac-errors N] [--debug] "
             "[--record]\n", argv0);
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
@@ -226,6 +227,7 @@ static void print_usage(const char *argv0)
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
     app_print_device_usage_line();
+    app_print_gain_usage_line();
     fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
     fprintf(stderr, "  %-30s Print drop/debug diagnostics\n", "--debug");
     app_print_record_usage_line();
@@ -260,6 +262,7 @@ int main(int argc, char *argv[])
         {"channels",       required_argument, NULL, 'c'},
         {"bottom-channel", required_argument, NULL, 'b'},
         {"device",         optional_argument, NULL, 'd'},
+        {"gain",           required_argument, NULL, 'g'},
         {"ac-errors",      required_argument, NULL, APP_OPT_AC_ERRORS},
         {"record",         no_argument,       NULL, APP_OPT_RECORD},
         {"exhaustive",     no_argument,       NULL, APP_OPT_EXHAUSTIVE},
@@ -275,14 +278,19 @@ int main(int argc, char *argv[])
     int g_exhaustive = 0;
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
+    const char *g_gain_raw = NULL;
+    radio_gain_spec_t g_gain_spec;
+
+    g_device_spec_parsed.type = app_default_device_type();
 
     /* Default the channel count to what the radio can actually sustain and
-     * the service can stage (HackRF -> 20; 80 Msps file replay -> 72). */
+     * the service can stage (HackRF -> 20; bladeRF -> 60; 80 Msps file
+     * replay -> 72). */
     g_num_bredr_channels =
         session_default_bredr_count(g_device_spec_parsed.type);
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::Vh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::g:Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -313,6 +321,7 @@ int main(int argc, char *argv[])
             print_usage(argv[0]);
             return EXIT_FAILURE;
         }
+                g_channels_explicit = 1;
                 break;
             case 'b':
                 if (parse_bottom_channel(optarg, &g_bottom_bredr_channel) != 0)
@@ -335,6 +344,9 @@ int main(int argc, char *argv[])
                 break;
             case APP_OPT_DEBUG:
                 g_debug = 1;
+                break;
+            case 'g':
+                g_gain_raw = optarg;
                 break;
             case APP_OPT_RECORD:
                 g_record = 1;
@@ -400,6 +412,15 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
     }
 
+    /* When the user did not pass -c, default to what the *selected* radio
+     * can sustain (the pre-parse default assumed the build default). */
+    if (!g_channels_explicit)
+    {
+        radio_device_type_t dtype =
+            g_device_selected ? g_device_spec_parsed.type : app_default_device_type();
+        g_num_bredr_channels = session_default_bredr_count(dtype);
+    }
+
     if (g_bottom_channel_explicit)
     {
         /* "all" mode covers the whole band: bottom must be 0. */
@@ -428,7 +449,7 @@ int main(int argc, char *argv[])
      * lane-split table. */
     {
         radio_device_type_t dtype =
-            g_device_selected ? g_device_spec_parsed.type : RADIO_DEVICE_HACKRF;
+            g_device_selected ? g_device_spec_parsed.type : app_default_device_type();
         switch (session_validate_layout(dtype, 0, 1, SESSION_REF_BREDR,
                                         g_bottom_bredr_channel,
                                         g_num_bredr_channels))
@@ -488,11 +509,17 @@ int main(int argc, char *argv[])
     }
     if (g_record)
     {
+        radio_device_type_t rdtype =
+            g_device_selected ? g_device_spec_parsed.type : app_default_device_type();
+        if (app_resolve_gain_spec(argv[0], rdtype, g_gain_raw,
+                                  &g_gain_spec) != 0)
+            return EXIT_FAILURE;
         app_record_config_t rcfg = {
             .device_type = g_device_spec_parsed.type,
             .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
             .lo_freq_hz = (uint32_t)tune_lo_hz,
             .sample_rate_hz = sample_rate,
+            .gain = g_gain_spec,
             .debug = g_debug,
         };
         return app_record_run(&rcfg) == 0 ? EXIT_SUCCESS
@@ -506,6 +533,13 @@ int main(int argc, char *argv[])
         if (file_radio_check_compatible(g_device_spec_parsed.id, sample_rate,
                                         &file_rate_hz,
                                         &file_center_hz) != 0)
+            return EXIT_FAILURE;
+    }
+    {
+        radio_device_type_t gdtype =
+            g_device_selected ? g_device_spec_parsed.type : app_default_device_type();
+        if (app_resolve_gain_spec(argv[0], gdtype, g_gain_raw,
+                                  &g_gain_spec) != 0)
             return EXIT_FAILURE;
     }
     unsigned int decim_factor = sample_rate / 2000000u;
@@ -527,6 +561,9 @@ int main(int argc, char *argv[])
                g_device_spec_parsed.id);
     else
         printf("Device      : (default)\n");
+    app_print_gain_summary(g_device_selected ? g_device_spec_parsed.type
+                                             : app_default_device_type(),
+                           &g_gain_spec);
     if (is_file_input)
     {
         printf("Replay      : %s, single pass, %u Hz",
@@ -547,6 +584,7 @@ int main(int argc, char *argv[])
         .device_type = g_device_spec_parsed.type,
         .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
         .debug = g_debug,
+        .gain = g_gain_spec,
         .file_exhaustive = g_exhaustive,
     };
     g_session = (session_t *)calloc(1, sizeof(*g_session));

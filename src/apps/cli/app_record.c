@@ -113,9 +113,8 @@ int app_record_run(const app_record_config_t *cfg)
         radio_stream_config_t rcfg = {
             .lo_freq_hz = cfg->lo_freq_hz,
             .sample_rate = cfg->sample_rate_hz,
-            /* Record at the session's usual gains. */
-            .lna_gain = 24u,
-            .vga_gain = 18u,
+            /* Caller-resolved gains (-g or device defaults). */
+            .gain = cfg->gain,
         };
         if (radio_configure(device, &rcfg) != RADIO_SUCCESS)
         {

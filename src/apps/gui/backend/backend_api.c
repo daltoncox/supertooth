@@ -35,6 +35,29 @@ struct backend_session
  * --debug CLI argument) and applied to every session_config_t below. */
 static int g_gui_debug = 0;
 
+/* Map a BACKEND_INPUT_* index to a radio device type. FILE input is the
+ * caller's responsibility (device id = capture path); unknown indices fall
+ * back to the default live type. Disabled backends are never returned. */
+static radio_device_type_t backend_device_for_input(int input_type)
+{
+    if (input_type == BACKEND_INPUT_FILE)
+        return RADIO_DEVICE_FILE;
+#if HAVE_BLADERF
+    if (input_type == BACKEND_INPUT_BLADERF)
+        return RADIO_DEVICE_BLADERF;
+#endif
+#if HAVE_HACKRF
+    if (input_type == BACKEND_INPUT_HACKRF)
+        return RADIO_DEVICE_HACKRF;
+    /* Fall through to the default live type for unknown indices. */
+    return RADIO_DEVICE_HACKRF;
+#elif HAVE_BLADERF
+    return RADIO_DEVICE_BLADERF;
+#else
+    return RADIO_DEVICE_FILE;
+#endif
+}
+
 void backend_set_debug(int on)
 {
     g_gui_debug = on ? 1 : 0;
@@ -863,8 +886,7 @@ int backend_session_run_ble(backend_session_t *session,
     session->packet_count = 0ul;
     session->enforce_crc = enforce_crc ? 1 : 0;
 
-    radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
-    (void)input_type; /* Only HackRF is supported by the backend today. */
+    radio_device_type_t dev_type = backend_device_for_input(input_type);
 
     /* Defensive clamping of the LE window: 40 RF channels (0..39), up to
      * BLE_SESSION_MAX_CHANNELS processors. */
@@ -909,8 +931,7 @@ int backend_session_run_bredr(backend_session_t *session,
     session->user = user;
     session->packet_count = 0ul;
 
-    radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
-    (void)input_type; /* Only HackRF is supported by the backend today. */
+    radio_device_type_t dev_type = backend_device_for_input(input_type);
 
     /* Defensive clamping, mirroring supertooth-bredr validation. The on-air
      * band is channels 0..78. Counts snap down to the nearest supported
@@ -962,8 +983,7 @@ int backend_session_run_hybrid(backend_session_t *session,
     session->packet_count = 0ul;
     session->enforce_crc = enforce_crc ? 1 : 0;
 
-    radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
-    (void)input_type; /* Only HackRF is supported by the backend today. */
+    radio_device_type_t dev_type = backend_device_for_input(input_type);
 
     /* Hybrid always captures the BR/EDR grid: channel_count MHz (even
      * count) from bottom_channel. BLE fans out inside the window from the

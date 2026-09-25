@@ -634,12 +634,31 @@ int session_run(session_t *session)
 
     uint32_t lna  = session->bredr_enabled ? SESSION_BREDR_LNA_GAIN : SESSION_BLE_LNA_GAIN;
     uint32_t vga  = session->bredr_enabled ? SESSION_BREDR_VGA_GAIN : SESSION_BLE_VGA_GAIN;
+    (void)lna;
+    (void)vga;
+
+    /* Resolve the effective gain: explicit -g wins, otherwise per-device
+     * defaults (HackRF 24/18/amp-off, bladeRF 30 dB). */
+    radio_gain_spec_t gain = session->config.gain;
+    if (!gain.present)
+    {
+        radio_gain_default(session->config.device_type, &gain);
+        if (session->config.device_type == RADIO_DEVICE_HACKRF)
+        {
+            gain.hackrf_lna = (int)(session->bredr_enabled
+                                        ? SESSION_BREDR_LNA_GAIN
+                                        : SESSION_BLE_LNA_GAIN);
+            gain.hackrf_vga = (int)(session->bredr_enabled
+                                        ? SESSION_BREDR_VGA_GAIN
+                                        : SESSION_BLE_VGA_GAIN);
+            gain.hackrf_amp = 0;
+        }
+    }
 
     radio_stream_config_t radio_config = {
         .lo_freq_hz  = session->lo_frequency_hz,
         .sample_rate = session->sample_rate_hz,
-        .lna_gain    = lna,
-        .vga_gain    = vga,
+        .gain        = gain,
     };
 
     result = radio_configure(session->device, &radio_config);

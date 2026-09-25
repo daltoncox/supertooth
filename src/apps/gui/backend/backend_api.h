@@ -24,6 +24,7 @@ extern "C" {
 /* Input-type indices mirror Header.qml inputTypeSelector. */
 #define BACKEND_INPUT_HACKRF 0
 #define BACKEND_INPUT_FILE   1
+#define BACKEND_INPUT_BLADERF 2
 
 /* Session-type indices mirror CaptureView.qml sessionTypeSelector. */
 #define BACKEND_SESSION_HYBRID 0

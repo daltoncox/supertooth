@@ -6,7 +6,11 @@
  * pulls in C-only DSP headers (C99 `float complex`) that are not valid
  * C++, so we declare just the symbols we need here. */
 extern "C" {
-    enum radio_device_type_t_c { RADIO_DEVICE_HACKRF_C = 0 };
+    enum radio_device_type_t_c {
+        RADIO_DEVICE_HACKRF_C = 0,
+        RADIO_DEVICE_FILE_C = 1,
+        RADIO_DEVICE_BLADERF_C = 2,
+    };
     int  radio_list_devices(int device_type, char ***out_identifiers,
                             size_t *out_count);
     void radio_free_device_list(char ***identifiers, size_t count);
@@ -16,6 +20,7 @@ namespace {
     // Mirror of Header.qml inputTypeSelector indices.
     constexpr int kInputTypeHackRF = 0;
     constexpr int kInputTypeFile   = 1;
+    constexpr int kInputTypeBladeRF = 2;
 }
 
 RadioDeviceModel::RadioDeviceModel(QObject *parent)
@@ -32,11 +37,15 @@ void RadioDeviceModel::refresh(int inputTypeIndex, bool force)
 
     QStringList identifiers;
 
-    if (inputTypeIndex == kInputTypeHackRF)
+    if (inputTypeIndex == kInputTypeHackRF ||
+        inputTypeIndex == kInputTypeBladeRF)
     {
+        int dev_type = (inputTypeIndex == kInputTypeBladeRF)
+                           ? RADIO_DEVICE_BLADERF_C
+                           : RADIO_DEVICE_HACKRF_C;
         char **raw = nullptr;
         size_t count = 0u;
-        int result = radio_list_devices(RADIO_DEVICE_HACKRF_C, &raw, &count);
+        int result = radio_list_devices(dev_type, &raw, &count);
         if (result == 0)
         {
             for (size_t i = 0u; i < count; i++)
@@ -45,7 +54,7 @@ void RadioDeviceModel::refresh(int inputTypeIndex, bool force)
         }
         else
         {
-            qWarning() << "RadioDeviceModel: hackrf_list_devices failed:"
+            qWarning() << "RadioDeviceModel: radio_list_devices failed:"
                        << result;
         }
     }

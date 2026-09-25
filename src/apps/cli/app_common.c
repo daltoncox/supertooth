@@ -198,6 +198,71 @@ void app_print_exhaustive_usage_line(void)
             "--exhaustive");
 }
 
+void app_print_gain_usage_line(void)
+{
+    radio_print_gain_usage();
+}
+
+radio_device_type_t app_default_device_type(void)
+{
+#if HAVE_HACKRF
+    return RADIO_DEVICE_HACKRF;
+#elif HAVE_BLADERF
+    return RADIO_DEVICE_BLADERF;
+#else
+    return RADIO_DEVICE_FILE;
+#endif
+}
+
+void app_print_gain_summary(radio_device_type_t type,
+                            const radio_gain_spec_t *spec)
+{
+    int present = spec && spec->present;
+    switch (type)
+    {
+    case RADIO_DEVICE_HACKRF:
+        printf("Gain        : LNA %d dB, VGA %d dB, AMP %s%s\n",
+               spec ? spec->hackrf_lna : RADIO_HACKRF_LNA_DEFAULT,
+               spec ? spec->hackrf_vga : RADIO_HACKRF_VGA_DEFAULT,
+               (spec && spec->hackrf_amp) ? "on" : "off",
+               present ? "" : " (default)");
+        break;
+    case RADIO_DEVICE_BLADERF:
+        printf("Gain        : %d dB%s\n",
+               spec ? spec->bladerf_gain_db : RADIO_BLADERF_GAIN_DEFAULT,
+               present ? "" : " (default)");
+        break;
+    default:
+        printf("Gain        : (n/a - replay)\n");
+        break;
+    }
+}
+
+int app_resolve_gain_spec(const char *argv0, radio_device_type_t type,
+                          const char *raw, radio_gain_spec_t *out)
+{
+    char err[128];
+
+    if (!out)
+        return -1;
+    if (!raw)
+    {
+        radio_gain_default(type, out);
+        return 0;
+    }
+    if (radio_parse_gain_spec(type, raw, out, err, sizeof(err)) != 0)
+    {
+        const char *type_name = radio_device_type_name(type);
+        fprintf(stderr, "Invalid --gain '%s'%s%s%s%s.\n", raw,
+                err[0] ? ": " : "", err,
+                type_name ? " for " : "", type_name ? type_name : "");
+        radio_print_gain_help(type);
+        (void)argv0;
+        return -1;
+    }
+    return 0;
+}
+
 void app_print_drop_breakdown(const session_drop_breakdown_t *b)
 {
     if (!b)
