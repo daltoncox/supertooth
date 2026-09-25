@@ -187,6 +187,18 @@ size_t channelizer_service_dispatcher_count(const channelizer_service_t *s);
 sample_dispatcher_t *channelizer_service_dispatcher_at(
     const channelizer_service_t *s, size_t i);
 
+/** Lane count K (0 when uninitialised). */
+unsigned int channelizer_service_lane_count(const channelizer_service_t *s);
+
+/** Owned intermediate (DDC -> PFB) dispatcher for lane k, or NULL. */
+sample_dispatcher_t *channelizer_service_sub_at(
+    const channelizer_service_t *s, unsigned int k);
+
+/** Owned partitioned output (PFB -> channel workers) dispatcher for lane k,
+ *  or NULL. */
+sample_dispatcher_t *channelizer_service_out_at(
+    const channelizer_service_t *s, unsigned int k);
+
 /** Channel counts available for processor fan-out. */
 size_t channelizer_service_get_bredr_count(const channelizer_service_t *s);
 size_t channelizer_service_get_ble_count(const channelizer_service_t *s);

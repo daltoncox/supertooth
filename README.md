@@ -150,8 +150,8 @@ CLI output defaults to `--view summary`. All three CLIs also accept
   BR/EDR access-code bit errors (default: 0, strict).
 - `supertooth-ble` / `supertooth-hybrid`: `--enforce-crc on|off` drops BLE
   frames with bad CRC (default: on); `-c/-b` select the LE channel window.
-- All three: `--debug` prints a Debug Summary with per-pool drop breakdown
-  plus BLE/BR-EDR frame counters.
+- All three: `--debug` prints a Debug Summary with per-stage drop breakdown
+  (rf / sub / out with per-lane detail) plus BLE/BR-EDR frame counters.
 
 `supertooth-bredr`, `supertooth-ble`, and `supertooth-hybrid` accept `--help` for runtime flags.  The GUI needs a Wayland or X11 display.
 
@@ -167,7 +167,7 @@ src/
     dsp/           Shared DSP utilities (channelizer_bank, rssi_measurements)
     models/        Shared packet and receive metadata types (device_models, receive_event_models, phy, rssi_tracker)
     radio/         HackRF integration (hackrf, radio_common) and sample dispatcher
-    service/       Session API, channel processors, channelizer_thread, event collector
+    service/       Session API, channel processors, channelizer_service, event collector
     protocol/
       ble/         BLE bitstream decoder, codec, registry (devices + connections), display utilities, BT assigned numbers
       bredr/       BR/EDR bitstream decoder, codec, piconet link + registry, clock recovery, display utilities

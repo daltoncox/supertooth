@@ -659,31 +659,63 @@ static void dispatcher_accumulate(const sample_dispatcher_t *d,
         *consumer_full += d->readers[i]->dropped_blocks;
 }
 
-/* Accumulate one service dispatcher's drops into the session bucket that
- * owns it: BLE-only sessions report service output under ble_out_*, every
- * other mode under bredr_out_* (hybrid parity with the old shared bank). */
-static void service_accumulate(const channelizer_service_t *svc, int ble_only,
-                               session_drop_breakdown_t *out,
-                               unsigned long *total)
+/* Add one service dispatcher's drops to a running total. Covers every owned
+ * dispatcher: K intermediate (DDC -> PFB) + K partitioned output
+ * (PFB -> channel workers). */
+static void service_accumulate_total(const channelizer_service_t *svc,
+                                     unsigned long *total)
 {
-    if (!svc || svc->K == 0u)
+    unsigned int k, n;
+    if (!svc || !total)
         return;
-    size_t n = channelizer_service_dispatcher_count(svc);
-    for (size_t i = 0u; i < n; i++)
+    n = channelizer_service_lane_count(svc);
+    for (k = 0u; k < n; k++)
     {
-        sample_dispatcher_t *d = channelizer_service_dispatcher_at(svc, i);
-        if (!d)
-            continue;
-        if (total)
-            *total += sample_dispatcher_total_dropped(d);
-        if (!out)
-            continue;
-        if (ble_only)
-            dispatcher_accumulate(d, &out->ble_out_pool_exhausted,
-                                  &out->ble_out_consumer_full);
-        else
-            dispatcher_accumulate(d, &out->bredr_out_pool_exhausted,
-                                  &out->bredr_out_consumer_full);
+        sample_dispatcher_t *sub = channelizer_service_sub_at(svc, k);
+        sample_dispatcher_t *out = channelizer_service_out_at(svc, k);
+        if (sub)
+            *total += sample_dispatcher_total_dropped(sub);
+        if (out)
+            *total += sample_dispatcher_total_dropped(out);
+    }
+}
+
+/* Fill the sub/out stages of a drop breakdown, with per-lane detail.
+ * Aggregates are the sum over lanes; lane_count records K so the printout
+ * can label per-lane rows. Assumes @p out is zeroed. */
+static void service_accumulate_breakdown(const channelizer_service_t *svc,
+                                         session_drop_breakdown_t *out)
+{
+    unsigned int k, n;
+    if (!svc || !out)
+        return;
+    n = channelizer_service_lane_count(svc);
+    if (n > CHANNELIZER_SERVICE_MAX_LANES)
+        n = CHANNELIZER_SERVICE_MAX_LANES;
+    out->lane_count = n;
+    for (k = 0u; k < n; k++)
+    {
+        sample_dispatcher_t *sub = channelizer_service_sub_at(svc, k);
+        sample_dispatcher_t *lane_out = channelizer_service_out_at(svc, k);
+        unsigned long before_ex, before_full;
+        if (sub)
+        {
+            before_ex = out->sub_pool_exhausted;
+            before_full = out->sub_consumer_full;
+            dispatcher_accumulate(sub, &out->sub_pool_exhausted,
+                                  &out->sub_consumer_full);
+            out->sub_pool_exhausted_lane[k] = out->sub_pool_exhausted - before_ex;
+            out->sub_consumer_full_lane[k] = out->sub_consumer_full - before_full;
+        }
+        if (lane_out)
+        {
+            before_ex = out->out_pool_exhausted;
+            before_full = out->out_consumer_full;
+            dispatcher_accumulate(lane_out, &out->out_pool_exhausted,
+                                  &out->out_consumer_full);
+            out->out_pool_exhausted_lane[k] = out->out_pool_exhausted - before_ex;
+            out->out_consumer_full_lane[k] = out->out_consumer_full - before_full;
+        }
     }
 }
 
@@ -698,8 +730,6 @@ int session_destroy(session_t *session)
         return 0;
 
     session->torn_down = 1;
-    int ble_only =
-        session->ble_enabled && !session->bredr_enabled;
 
     /* Snapshot the drop counters now: the dispatcher resets below zero them,
      * and session_run() calls session_destroy() before returning, so any
@@ -707,17 +737,17 @@ int session_destroy(session_t *session)
      * counters. */
     session->dropped_blocks_total =
         sample_dispatcher_total_dropped(session->dispatcher);
-    service_accumulate(&session->chan_svc, ble_only, NULL,
-                       &session->dropped_blocks_total);
+    service_accumulate_total(&session->chan_svc,
+                             &session->dropped_blocks_total);
 
-    /* Snapshot the per-pool breakdown so the session summary can report WHERE
+    /* Snapshot the per-stage breakdown so the session summary can report WHERE
      * blocks were dropped (the live counters are zeroed by the reset below). */
     memset(&session->dropped_breakdown, 0, sizeof(session->dropped_breakdown));
     dispatcher_accumulate(session->dispatcher,
                            &session->dropped_breakdown.rf_pool_exhausted,
                            &session->dropped_breakdown.rf_consumer_full);
-    service_accumulate(&session->chan_svc, ble_only,
-                       &session->dropped_breakdown, NULL);
+    service_accumulate_breakdown(&session->chan_svc,
+                                 &session->dropped_breakdown);
 
     if (session->workers_running || session->chan_svc_running)
         session_request_stop(session);
@@ -859,9 +889,7 @@ unsigned long session_dropped_blocks(const session_t *session)
         return session->dropped_blocks_total;
     unsigned long total =
         sample_dispatcher_total_dropped(session->dispatcher);
-    service_accumulate(&session->chan_svc,
-                       session->ble_enabled && !session->bredr_enabled,
-                       NULL, &total);
+    service_accumulate_total(&session->chan_svc, &total);
     return total;
 }
 
@@ -919,9 +947,7 @@ void session_dropped_blocks_breakdown(const session_t *session,
         memset(out, 0, sizeof(*out));
         dispatcher_accumulate(session->dispatcher,
                                &out->rf_pool_exhausted, &out->rf_consumer_full);
-        service_accumulate(&session->chan_svc,
-                           session->ble_enabled && !session->bredr_enabled,
-                           out, NULL);
+        service_accumulate_breakdown(&session->chan_svc, out);
     }
 }
 

@@ -49,13 +49,26 @@ static void check_zero_drops(session_t *session, const char *tag)
     session_dropped_blocks_breakdown(session, &drops);
     if (drops.rf_pool_exhausted != 0ul ||
         drops.rf_consumer_full != 0ul ||
-        drops.bredr_out_pool_exhausted != 0ul ||
-        drops.bredr_out_consumer_full != 0ul ||
-        drops.ble_out_pool_exhausted != 0ul ||
-        drops.ble_out_consumer_full != 0ul)
+        drops.sub_pool_exhausted != 0ul ||
+        drops.sub_consumer_full != 0ul ||
+        drops.out_pool_exhausted != 0ul ||
+        drops.out_consumer_full != 0ul)
     {
         fprintf(stderr, "ASSERT FAILED %s: drop breakdown nonzero\n", tag);
         g_failures++;
+    }
+    for (unsigned int k = 0u; k < drops.lane_count; k++)
+    {
+        if (drops.sub_pool_exhausted_lane[k] != 0ul ||
+            drops.sub_consumer_full_lane[k] != 0ul ||
+            drops.out_pool_exhausted_lane[k] != 0ul ||
+            drops.out_consumer_full_lane[k] != 0ul)
+        {
+            fprintf(stderr, "ASSERT FAILED %s: per-lane drop nonzero (lane %u)\n",
+                    tag, k);
+            g_failures++;
+            break;
+        }
     }
     session_collector_dropped(session, &ble_dropped, &bredr_dropped);
     if (ble_dropped != 0ul || bredr_dropped != 0ul)

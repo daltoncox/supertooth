@@ -190,23 +190,40 @@ void app_print_drop_breakdown(const session_drop_breakdown_t *b)
     if (!b)
         return;
 
-    /* Each pool reports two sub-reasons:
+    /* Each stage reports two sub-reasons:
      *   pool_exhausted : a producer could not allocate a block.
      *   consumer_full  : a reader's queue was full (a consumer fell behind). */
-    printf("  Dropped blocks by pool:\n");
-    printf("    rf (radio input -> channelizer):\n");
+    unsigned long total = b->rf_pool_exhausted + b->rf_consumer_full +
+        b->sub_pool_exhausted + b->sub_consumer_full +
+        b->out_pool_exhausted + b->out_consumer_full;
+    printf("  Dropped blocks by stage (total %lu, %u lane%s):\n",
+           total, b->lane_count, b->lane_count == 1u ? "" : "s");
+    printf("    rf (radio -> DDC lanes):\n");
     printf("        pool exhausted : %lu   (radio could not allocate an RF block)\n",
            b->rf_pool_exhausted);
-    printf("        consumer full  : %lu   (a channelizer RF queue fell behind)\n",
+    printf("        consumer full  : %lu   (a DDC lane fell behind reading RF)\n",
            b->rf_consumer_full);
-    printf("    bredr_out (BR/EDR channelizer -> channel workers):\n");
-    printf("        pool exhausted : %lu   (BR/EDR channelizer could not allocate a frame block)\n",
-           b->bredr_out_pool_exhausted);
-    printf("        consumer full  : %lu   (a BR/EDR channel worker fell behind)\n",
-           b->bredr_out_consumer_full);
-    printf("    ble_out (BLE channelizer -> channel workers):\n");
-    printf("        pool exhausted : %lu   (BLE channelizer could not allocate a frame block)\n",
-           b->ble_out_pool_exhausted);
-    printf("        consumer full  : %lu   (a BLE channel worker fell behind)\n",
-           b->ble_out_consumer_full);
+    printf("    sub (DDC lane -> PFB lane, intermediate):\n");
+    printf("        pool exhausted : %lu   (a DDC lane could not allocate a sub block)\n",
+           b->sub_pool_exhausted);
+    printf("        consumer full  : %lu   (a PFB lane fell behind reading its sub lane)\n",
+           b->sub_consumer_full);
+    printf("    out (PFB lane -> channel workers):\n");
+    printf("        pool exhausted : %lu   (a PFB lane could not allocate a frame block)\n",
+           b->out_pool_exhausted);
+    printf("        consumer full  : %lu   (a channel worker fell behind)\n",
+           b->out_consumer_full);
+    if (b->lane_count > 1u)
+    {
+        unsigned int n = b->lane_count;
+        if (n > CHANNELIZER_SERVICE_MAX_LANES)
+            n = CHANNELIZER_SERVICE_MAX_LANES;
+        printf("    per-lane (sub pool / sub full / out pool / out full):\n");
+        for (unsigned int k = 0u; k < n; k++)
+            printf("        lane %u : %lu / %lu / %lu / %lu\n", k,
+                   b->sub_pool_exhausted_lane[k],
+                   b->sub_consumer_full_lane[k],
+                   b->out_pool_exhausted_lane[k],
+                   b->out_consumer_full_lane[k]);
+    }
 }

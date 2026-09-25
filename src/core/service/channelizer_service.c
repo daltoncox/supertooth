@@ -95,7 +95,7 @@ int channelizer_service_valid_sample_rate(unsigned int sample_rate_hz,
 }
 
 /* max RF samples fed per PFB call so one bank call never exceeds the output
- * block capacity (same bound as the legacy channelizer_thread). */
+ * block capacity. */
 static size_t svc_max_in(unsigned int M, unsigned int M2)
 {
     const size_t CAP = SAMPLE_BLOCK_SAMPLE_CAPACITY;
@@ -577,6 +577,27 @@ sample_dispatcher_t *channelizer_service_dispatcher_at(
         return s->sub[i];
     i -= (size_t)s->K;
     return i < (size_t)s->K ? s->out[i] : NULL;
+}
+
+unsigned int channelizer_service_lane_count(const channelizer_service_t *s)
+{
+    return s ? s->K : 0u;
+}
+
+sample_dispatcher_t *channelizer_service_sub_at(
+    const channelizer_service_t *s, unsigned int k)
+{
+    if (!s || k >= s->K || k >= CHANNELIZER_SERVICE_MAX_LANES)
+        return NULL;
+    return s->sub[k];
+}
+
+sample_dispatcher_t *channelizer_service_out_at(
+    const channelizer_service_t *s, unsigned int k)
+{
+    if (!s || k >= s->K || k >= CHANNELIZER_SERVICE_MAX_LANES)
+        return NULL;
+    return s->out[k];
 }
 
 size_t channelizer_service_get_bredr_count(const channelizer_service_t *s)

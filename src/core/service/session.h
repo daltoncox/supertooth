@@ -67,29 +67,34 @@ typedef struct {
     int lap_filter_enabled;
 } session_bredr_config_t;
 
-/** Per-pool breakdown of where blocks were dropped during a session. Read this
+/** Per-stage breakdown of where blocks were dropped during a session. Read this
  *  (not the live dispatcher counters) after a run: session_run() resets the
  *  live counters on teardown, and the snapshot is taken just before that.
- *  For each pool, two sub-reasons are tracked:
+ *  The single shared channelizer service has three stages:
+ *    - rf  : radio dispatcher (radio -> K DDC lanes).
+ *    - sub : K intermediate dispatchers (DDC lane -> PFB lane).
+ *    - out : K partitioned output dispatchers (PFB lane -> channel workers).
+ *  For each stage, two sub-reasons are tracked:
  *    - *_pool_exhausted : a producer could not allocate a block from the pool
  *      (e.g. the radio could not allocate an RF block, or a DDC/PFB lane
  *      could not allocate its output block).
  *    - *_consumer_full   : a reader's queue was full, i.e. a consumer reading
- *      from this pool was not keeping up (a DDC/PFB lane for the RF pool, or
- *      a channel worker for an output pool).
- *  Bucketing: the RF pool covers the radio dispatcher; bredr_out_* covers
- *  the service dispatchers whenever BR/EDR is enabled (hybrid included) and
- *  ble_out_* covers them for BLE-only sessions (mirroring the old two-bank
- *  layout, where hybrid sessions never filled the BLE bucket). */
+ *      from this stage was not keeping up (a DDC lane for the RF stage, the
+ *      PFB lane for the sub stage, or a channel worker for the out stage).
+ *  Per-lane arrays pinpoint which lane stalled; aggregates are the sum over
+ *  lanes. lane_count is K at snapshot time (0 when the service never ran). */
 typedef struct {
     unsigned long rf_pool_exhausted;
     unsigned long rf_consumer_full;
-    unsigned long bredr_out_pool_exhausted;
-    unsigned long bredr_out_consumer_full;
-    /* Always zero in hybrid sessions (BLE workers share the BR/EDR output
-     * pools above; the BLE bucket only fills in BLE-only sessions). */
-    unsigned long ble_out_pool_exhausted;
-    unsigned long ble_out_consumer_full;
+    unsigned long sub_pool_exhausted;
+    unsigned long sub_consumer_full;
+    unsigned long out_pool_exhausted;
+    unsigned long out_consumer_full;
+    unsigned int lane_count;
+    unsigned long sub_pool_exhausted_lane[CHANNELIZER_SERVICE_MAX_LANES];
+    unsigned long sub_consumer_full_lane[CHANNELIZER_SERVICE_MAX_LANES];
+    unsigned long out_pool_exhausted_lane[CHANNELIZER_SERVICE_MAX_LANES];
+    unsigned long out_consumer_full_lane[CHANNELIZER_SERVICE_MAX_LANES];
 } session_drop_breakdown_t;
 
 typedef struct session {
@@ -162,7 +167,7 @@ typedef struct session {
      * zeroed by the reset, so this is what callers must read after a run. */
     unsigned long dropped_blocks_total;
 
-    /* Per-pool breakdown of dropped blocks (see session_drop_breakdown_t).
+    /* Per-stage breakdown of dropped blocks (see session_drop_breakdown_t).
      * Snapshotted at the same point as dropped_blocks_total. */
     session_drop_breakdown_t dropped_breakdown;
 

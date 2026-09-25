@@ -93,10 +93,11 @@ void app_print_record_usage_line(void);
 void app_print_exhaustive_usage_line(void);
 
 /**
- * Print a per-pool breakdown of dropped blocks from a session summary
- * (see session_dropped_blocks_breakdown). Each pool reports producer-side
- * (pool exhausted) vs consumer-side (reader queue full) drops so the user
- * can see WHERE in the pipeline blocks were lost.
+ * Print a per-stage breakdown of dropped blocks from a session summary
+ * (see session_dropped_blocks_breakdown). Each stage (rf / sub / out)
+ * reports producer-side (pool exhausted) vs consumer-side (reader queue
+ * full) drops, plus per-lane detail when K > 1, so the user can see WHERE
+ * in the pipeline blocks were lost.
  */
 void app_print_drop_breakdown(const session_drop_breakdown_t *b);
 
