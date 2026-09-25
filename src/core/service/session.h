@@ -203,6 +203,35 @@ int  session_tune(session_t *session,
                   session_protocol_ref_t ref,
                   unsigned int bottom_channel,
                   unsigned int channel_count);
+
+/* Pre-init layout check: is (device, enables, ref, bottom, count) tuneable?
+ * Pure function of its arguments — needs no session object. Apps call this
+ * (instead of reaching into the channelizer/radio layers) to validate CLI /
+ * UI values early with specific diagnostics. session_tune() enforces the
+ * identical checks, so validation can never drift from tuning. */
+typedef enum {
+    SESSION_LAYOUT_OK = 0,
+    SESSION_LAYOUT_BAD_RANGE,     /* count 0, band overflow, bad ref */
+    SESSION_LAYOUT_RATE_EXCEEDED, /* device cannot sustain the sample rate */
+    SESSION_LAYOUT_NO_LANE_SPLIT, /* no even <=20 MHz lane split */
+} session_layout_status_t;
+
+session_layout_status_t session_validate_layout(
+    radio_device_type_t device_type,
+    int ble_enabled, int bredr_enabled,
+    session_protocol_ref_t ref,
+    unsigned int bottom_channel,
+    unsigned int channel_count);
+
+/* Thin wrappers so apps never touch the lane planner or radio ceilings
+ * directly: snap a BR/EDR count down to the nearest supported lane split,
+ * the default BR/EDR count for a device, and a device's max sample rate
+ * (for user-facing diagnostics). */
+unsigned int session_snap_bredr_count(unsigned int count);
+unsigned int session_default_bredr_count(radio_device_type_t device_type);
+uint32_t session_device_max_rate_hz(radio_device_type_t device_type);
+/* Printable device-type name for diagnostics (e.g. "hackrf"). */
+const char *session_device_type_name(radio_device_type_t device_type);
 int  session_run(session_t *session);
 void session_request_stop(session_t *session);
 int  session_destroy(session_t *session);

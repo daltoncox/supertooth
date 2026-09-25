@@ -357,6 +357,136 @@ static void test_wideband_lanes(void)
     }
 }
 
+static void test_validate_layout(void)
+{
+    /* Valid combos across devices and modes. */
+    CHECK_U64("valid hackrf bredr 20",
+              session_validate_layout(RADIO_DEVICE_HACKRF, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 20u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid file bredr 40",
+              session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 40u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid file bredr 72",
+              session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 72u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid file hybrid 40",
+              session_validate_layout(RADIO_DEVICE_FILE, 1, 1,
+                                      SESSION_REF_BREDR, 0u, 40u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid hackrf ble 10",
+              session_validate_layout(RADIO_DEVICE_HACKRF, 1, 0,
+                                      SESSION_REF_BLE, 0u, 10u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid file ble 40",
+              session_validate_layout(RADIO_DEVICE_FILE, 1, 0,
+                                      SESSION_REF_BLE, 0u, 40u),
+              SESSION_LAYOUT_OK);
+
+    /* Range failures: empty, band overflow, hybrid BLE-ref. */
+    CHECK_U64("count 0 rejected",
+              session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 0u),
+              SESSION_LAYOUT_BAD_RANGE);
+    CHECK_U64("bredr overflow rejected",
+              session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
+                                      SESSION_REF_BREDR, 78u, 2u),
+              SESSION_LAYOUT_BAD_RANGE);
+    CHECK_U64("ble overflow rejected",
+              session_validate_layout(RADIO_DEVICE_FILE, 1, 0,
+                                      SESSION_REF_BLE, 39u, 2u),
+              SESSION_LAYOUT_BAD_RANGE);
+    CHECK_U64("hybrid ble-ref rejected",
+              session_validate_layout(RADIO_DEVICE_FILE, 1, 1,
+                                      SESSION_REF_BLE, 0u, 10u),
+              SESSION_LAYOUT_BAD_RANGE);
+
+    /* Device ceiling gates wideband on narrowband radios. */
+    CHECK_U64("hackrf 40ch over ceiling",
+              session_validate_layout(RADIO_DEVICE_HACKRF, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 40u),
+              SESSION_LAYOUT_RATE_EXCEEDED);
+    CHECK_U64("hackrf ble 20ch over ceiling",
+              session_validate_layout(RADIO_DEVICE_HACKRF, 1, 0,
+                                      SESSION_REF_BLE, 0u, 20u),
+              SESSION_LAYOUT_RATE_EXCEEDED);
+
+    /* Lane-split gaps fail even where the ceiling allows. */
+    CHECK_U64("file 22ch no split",
+              session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 22u),
+              SESSION_LAYOUT_NO_LANE_SPLIT);
+    CHECK_U64("file 78ch no split",
+              session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 78u),
+              SESSION_LAYOUT_NO_LANE_SPLIT);
+
+    /* Wrappers. */
+    CHECK_U64("default hackrf", session_default_bredr_count(RADIO_DEVICE_HACKRF),
+              20u);
+    CHECK_U64("default file", session_default_bredr_count(RADIO_DEVICE_FILE),
+              72u);
+    CHECK_U64("snap 22", session_snap_bredr_count(22u), 20u);
+    CHECK_U64("snap 78", session_snap_bredr_count(78u), 72u);
+    CHECK_U64("hackrf max rate", session_device_max_rate_hz(RADIO_DEVICE_HACKRF),
+              20000000u);
+    CHECK_U64("hackrf type name non-null",
+              session_device_type_name(RADIO_DEVICE_HACKRF) != NULL, 1u);
+
+    /* No-drift property: tune agrees with the validator on every case. */
+    {
+        static const struct {
+            int file;
+            int ble_en, bredr_en;
+            session_protocol_ref_t ref;
+            unsigned int bottom, count;
+        } cases[] = {
+            { 0, 0, 1, SESSION_REF_BREDR, 0u, 20u },
+            { 0, 0, 1, SESSION_REF_BREDR, 0u, 40u },
+            { 1, 0, 1, SESSION_REF_BREDR, 0u, 40u },
+            { 1, 0, 1, SESSION_REF_BREDR, 0u, 72u },
+            { 1, 1, 1, SESSION_REF_BREDR, 0u, 40u },
+            { 0, 1, 0, SESSION_REF_BLE, 0u, 10u },
+            { 1, 1, 0, SESSION_REF_BLE, 0u, 40u },
+            { 1, 1, 0, SESSION_REF_BLE, 0u, 20u },
+            { 1, 0, 1, SESSION_REF_BREDR, 0u, 22u },
+            { 1, 0, 1, SESSION_REF_BREDR, 0u, 78u },
+            { 1, 0, 1, SESSION_REF_BREDR, 78u, 2u },
+            { 1, 1, 1, SESSION_REF_BLE, 0u, 10u },
+            { 1, 0, 1, SESSION_REF_BREDR, 0u, 0u },
+        };
+        for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); i++)
+        {
+            radio_device_type_t dev = cases[i].file ? RADIO_DEVICE_FILE
+                                                    : RADIO_DEVICE_HACKRF;
+            session_layout_status_t want = session_validate_layout(
+                dev, cases[i].ble_en, cases[i].bredr_en, cases[i].ref,
+                cases[i].bottom, cases[i].count);
+            session_t s;
+            int tune_rc;
+            memset(&s, 0, sizeof(s));
+            if (cases[i].file)
+                tune_rc = make_file_session(&s, cases[i].bottom,
+                                            cases[i].count, cases[i].ref,
+                                            cases[i].ble_en,
+                                            cases[i].bredr_en);
+            else
+                tune_rc = make_session(&s, cases[i].bottom, cases[i].count,
+                                       cases[i].ref, cases[i].ble_en,
+                                       cases[i].bredr_en);
+            {
+                char name[64];
+                snprintf(name, sizeof(name), "tune==validate case %zu", i);
+                CHECK_U64(name, tune_rc == 0,
+                          want == SESSION_LAYOUT_OK);
+            }
+            session_destroy(&s);
+        }
+    }
+}
+
 static void test_rf_mapping(void)
 {
     CHECK_U64("rf0 -> LE37", ble_channel_number_for_rf(0), 37u);
@@ -375,6 +505,7 @@ int main(void)
     test_tune_layout();
     test_processor_counts();
     test_wideband_lanes();
+    test_validate_layout();
     test_rf_mapping();
 
     if (g_failures)

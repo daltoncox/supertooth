@@ -139,75 +139,152 @@ void session_set_stopped_callback(session_t *session,
     session->stopped_user = user;
 }
 
-int session_tune(session_t *session,
-                 session_protocol_ref_t ref,
-                 unsigned int bottom_channel,
-                 unsigned int channel_count)
+/* Shared layout core behind session_tune() and session_validate_layout()
+ * so validation can never drift from tuning. Computes the LO/rate first
+ * (band, range and ref checks), then checks the rate against the lane
+ * planner and the device ceiling. */
+
+/* LO + rate math with band/range/ref checks. rate_mhz is unclamped;
+ * callers apply the 4 MHz floor identically (see below). */
+static session_layout_status_t session_layout_rate(
+    session_protocol_ref_t ref,
+    unsigned int bottom_channel,
+    unsigned int channel_count,
+    int ble_enabled, int bredr_enabled,
+    double *lo_mhz, unsigned int *rate_mhz)
 {
-    if (!session || channel_count == 0u) return -1;
+    if (channel_count == 0u)
+        return SESSION_LAYOUT_BAD_RANGE;
 
     /* Hybrid sessions (BLE + BR/EDR) run a single shared 1 MHz channelizer
      * anchored to the BR/EDR grid: BLE workers are fed center-bin slices of
      * the same bank, so a BLE-grid tune has no meaning anymore. BLE-only
      * sessions keep SESSION_REF_BLE. Fail loudly so stale callers (e.g. an
      * old --tune-ref ble invocation) cannot silently mis-tune. */
-    if (session->ble_enabled && session->bredr_enabled &&
-        ref != SESSION_REF_BREDR)
-        return -1;
-
-    double lo_mhz;
-    unsigned int rate_mhz;
+    if (ble_enabled && bredr_enabled && ref != SESSION_REF_BREDR)
+        return SESSION_LAYOUT_BAD_RANGE;
 
     if (ref == SESSION_REF_BLE)
     {
         if (channel_count > BLE_RF_CHANNEL_COUNT ||
             bottom_channel + channel_count > BLE_RF_CHANNEL_COUNT)
-            return -1;
-        lo_mhz = 2401.0 + 2.0 * (double)bottom_channel + (double)channel_count;
+            return SESSION_LAYOUT_BAD_RANGE;
+        *lo_mhz =
+            2401.0 + 2.0 * (double)bottom_channel + (double)channel_count;
         /* BLE channels are 2 MHz apart, so an N-channel BLE window needs a
          * 2*N MHz span; the LO is already a whole-MHz frequency. */
-        rate_mhz = 2u * channel_count;
+        *rate_mhz = 2u * channel_count;
     }
     else
     {
         if (channel_count > BREDR_SESSION_MAX_CHANNELS ||
             bottom_channel + channel_count > BREDR_SESSION_MAX_CHANNELS)
-            return -1;
-        lo_mhz   = 2402.0 + (double)bottom_channel + ((double)channel_count - 1.0) / 2.0;
-        rate_mhz = channel_count;
+            return SESSION_LAYOUT_BAD_RANGE;
+        *lo_mhz   = 2402.0 + (double)bottom_channel +
+                    ((double)channel_count - 1.0) / 2.0;
+        *rate_mhz = channel_count;
     }
-    if (rate_mhz < 4u) rate_mhz = 4u;
+    return SESSION_LAYOUT_OK;
+}
 
-    session->lo_frequency_hz = (uint32_t)((uint64_t)(lo_mhz * 1e6));
-    session->sample_rate_hz  = rate_mhz * 1000000u;
-
+/* Lane-split + device-ceiling checks for a (possibly clamped) rate. */
+static session_layout_status_t session_layout_check(
+    radio_device_type_t device_type,
+    session_protocol_ref_t ref,
+    unsigned int sample_rate_hz)
+{
     /* Reject capture windows no stage can channelize (e.g. counts with no
      * even <=20 MHz lane split: 22, 26, 30, ...). The lane planner encodes
      * the supported set; the grid here mirrors the service that
      * session_create_channels will build (2 MHz desired for BLE-only). */
-    {
-        uint32_t grid = (ref == SESSION_REF_BLE)
-            ? CHANNELIZER_BANK_GRID_BLE_HZ
-            : CHANNELIZER_BANK_GRID_BR_EDR_HZ;
-        if (!channelizer_service_valid_sample_rate(session->sample_rate_hz,
-                                                    grid))
-            return -1;
-    }
+    uint32_t grid = (ref == SESSION_REF_BLE)
+        ? CHANNELIZER_BANK_GRID_BLE_HZ
+        : CHANNELIZER_BANK_GRID_BR_EDR_HZ;
+    if (!channelizer_service_valid_sample_rate(sample_rate_hz, grid))
+        return SESSION_LAYOUT_NO_LANE_SPLIT;
 
     /* Reject capture windows the selected device cannot sustain. The generic
      * ceiling covers file replay up to 80 Msps; live radios report their own
      * (HackRF stays at 20 Msps). */
-    {
-        uint32_t max_rate_hz = RADIO_MAX_SAMPLE_RATE_HZ;
-        if (radio_get_max_sample_rate_for_type(session->config.device_type,
-                                               &max_rate_hz) == RADIO_SUCCESS &&
-            session->sample_rate_hz > max_rate_hz)
-            return -1;
-        else if (session->sample_rate_hz > RADIO_MAX_SAMPLE_RATE_HZ)
-            return -1;
-    }
+    if (sample_rate_hz > session_device_max_rate_hz(device_type))
+        return SESSION_LAYOUT_RATE_EXCEEDED;
+    return SESSION_LAYOUT_OK;
+}
+
+int session_tune(session_t *session,
+                 session_protocol_ref_t ref,
+                 unsigned int bottom_channel,
+                 unsigned int channel_count)
+{
+    double lo_mhz;
+    unsigned int rate_mhz;
+
+    if (!session)
+        return -1;
+    if (session_layout_rate(ref, bottom_channel, channel_count,
+                            session->ble_enabled, session->bredr_enabled,
+                            &lo_mhz, &rate_mhz) != SESSION_LAYOUT_OK)
+        return -1;
+    if (rate_mhz < 4u)
+        rate_mhz = 4u;
+
+    session->lo_frequency_hz = (uint32_t)((uint64_t)(lo_mhz * 1e6));
+    session->sample_rate_hz  = rate_mhz * 1000000u;
+
+    if (session_layout_check(session->config.device_type, ref,
+                             session->sample_rate_hz) != SESSION_LAYOUT_OK)
+        return -1;
 
     return 0;
+}
+
+session_layout_status_t session_validate_layout(
+    radio_device_type_t device_type,
+    int ble_enabled, int bredr_enabled,
+    session_protocol_ref_t ref,
+    unsigned int bottom_channel,
+    unsigned int channel_count)
+{
+    double lo_mhz;
+    unsigned int rate_mhz;
+    session_layout_status_t st;
+
+    st = session_layout_rate(ref, bottom_channel, channel_count,
+                             ble_enabled, bredr_enabled, &lo_mhz, &rate_mhz);
+    if (st != SESSION_LAYOUT_OK)
+        return st;
+    if (rate_mhz < 4u)
+        rate_mhz = 4u;
+    return session_layout_check(device_type, ref, rate_mhz * 1000000u);
+}
+
+unsigned int session_snap_bredr_count(unsigned int count)
+{
+    return channelizer_service_snap_bredr_count(count);
+}
+
+unsigned int session_default_bredr_count(radio_device_type_t device_type)
+{
+    uint32_t max_rate_hz = session_device_max_rate_hz(device_type);
+
+    if (max_rate_hz < 1000000u)
+        return 2u;
+    return channelizer_service_snap_bredr_count(max_rate_hz / 1000000u);
+}
+
+uint32_t session_device_max_rate_hz(radio_device_type_t device_type)
+{
+    uint32_t max_rate_hz = RADIO_MAX_SAMPLE_RATE_HZ;
+
+    if (radio_get_max_sample_rate_for_type(device_type,
+                                           &max_rate_hz) == RADIO_SUCCESS)
+        return max_rate_hz;
+    return RADIO_MAX_SAMPLE_RATE_HZ;
+}
+
+const char *session_device_type_name(radio_device_type_t device_type)
+{
+    return radio_device_type_name(device_type);
 }
 
 static int session_create_channels(session_t *session)

@@ -15,7 +15,6 @@
 #include "version.h"
 #include "ble_display.h"
 #include "ble_bitstream_decoder.h"
-#include "channelizer_service.h"
 
 static unsigned long g_packet_count = 0;
 static int g_debug = 0;
@@ -281,28 +280,38 @@ int main(int argc, char *argv[])
     unsigned int rate_mhz = (span_mhz == 2u) ? 4u : span_mhz;
     double lo_mhz = 2401.0 + 2.0 * (double)bottom_rf + (double)g_num_le_channels;
 
-    /* Device ceiling + lane-split validation (BLE spans are 2 MHz/RF). */
+    /* The session owns layout validity: device bandwidth ceiling plus the
+     * lane-split table (BLE spans are 2 MHz/RF). */
     {
         radio_device_type_t dtype =
             g_device_selected ? g_device_spec_parsed.type : RADIO_DEVICE_HACKRF;
-        uint32_t max_rate = 0u;
-        if (radio_get_max_sample_rate_for_type(dtype, &max_rate) == 0 &&
-            rate_mhz * 1000000u > max_rate)
+        switch (session_validate_layout(dtype, 1, 0, SESSION_REF_BLE,
+                                        bottom_rf, g_num_le_channels))
         {
-            fprintf(stderr,
-                    "Invalid --channels %u for %s (max %u LE channels): "
-                    "choose <= %u.\n",
-                    g_num_le_channels, radio_device_type_name(dtype),
-                    max_rate / 2000000u, max_rate / 2000000u);
-            return EXIT_FAILURE;
-        }
-        if (!channelizer_service_valid_sample_rate(
-                rate_mhz * 1000000u, CHANNELIZER_BANK_GRID_BLE_HZ))
-        {
-            fprintf(stderr,
-                    "Invalid --channels %u: no even <=20 MHz lane split.\n",
-                    g_num_le_channels);
-            return EXIT_FAILURE;
+            case SESSION_LAYOUT_OK:
+                break;
+            case SESSION_LAYOUT_RATE_EXCEEDED:
+            {
+                uint32_t max_rate =
+                    session_device_max_rate_hz(dtype);
+                fprintf(stderr,
+                        "Invalid --channels %u for %s (max %u LE channels): "
+                        "choose <= %u.\n",
+                        g_num_le_channels, session_device_type_name(dtype),
+                        max_rate / 2000000u, max_rate / 2000000u);
+                return EXIT_FAILURE;
+            }
+            case SESSION_LAYOUT_NO_LANE_SPLIT:
+                fprintf(stderr,
+                        "Invalid --channels %u: no even <=20 MHz lane split.\n",
+                        g_num_le_channels);
+                return EXIT_FAILURE;
+            case SESSION_LAYOUT_BAD_RANGE:
+            default:
+                fprintf(stderr,
+                        "Invalid --channels %u (bottom RF %u): outside the LE band.\n",
+                        g_num_le_channels, bottom_rf);
+                return EXIT_FAILURE;
         }
     }
 
@@ -368,7 +377,7 @@ int main(int argc, char *argv[])
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
     if (g_device_selected)
         printf("Device      : %s:%s\n",
-               radio_device_type_name(g_device_spec_parsed.type),
+               session_device_type_name(g_device_spec_parsed.type),
                g_device_spec_parsed.id);
     else
         printf("Device      : (default)\n");

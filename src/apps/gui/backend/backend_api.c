@@ -920,7 +920,7 @@ int backend_session_run_bredr(backend_session_t *session,
         channel_count = 2u;
     if (channel_count > BREDR_SESSION_MAX_CHANNELS)
         channel_count = BREDR_SESSION_MAX_CHANNELS;
-    channel_count = channelizer_service_snap_bredr_count(channel_count);
+    channel_count = session_snap_bredr_count(channel_count);
     if (channel_count < 2u)
         channel_count = 2u;
     unsigned int max_bottom = 78u - (channel_count - 1u);
@@ -975,7 +975,7 @@ int backend_session_run_hybrid(backend_session_t *session,
         channel_count = 2u;
     if (channel_count > BREDR_SESSION_MAX_CHANNELS)
         channel_count = BREDR_SESSION_MAX_CHANNELS;
-    channel_count = channelizer_service_snap_bredr_count(channel_count);
+    channel_count = session_snap_bredr_count(channel_count);
     if (channel_count < 2u)
         channel_count = 2u;
     unsigned int max_bottom = 78u - (channel_count - 1u);

@@ -15,7 +15,6 @@
 #include "ble_display.h"
 #include "bredr_display.h"
 #include "ble_bitstream_decoder.h"
-#include "channelizer_service.h"
 #include "session.h"
 #include "bredr_bitstream_decoder.h"
 
@@ -237,16 +236,8 @@ int main(int argc, char *argv[])
 
     /* Default the BR/EDR channel count to what the radio can sustain and
      * the service can stage (HackRF -> 20; 80 Msps file replay -> 72). */
-    {
-        uint32_t max_rate = 0u;
-        if (radio_get_max_sample_rate_for_type(g_device_spec_parsed.type,
-                                               &max_rate) == 0 &&
-            max_rate >= 1000000u)
-        {
-            g_num_bredr_channels =
-                channelizer_service_snap_bredr_count(max_rate / 1000000u);
-        }
-    }
+    g_num_bredr_channels =
+        session_default_bredr_count(g_device_spec_parsed.type);
 
     int opt;
     while ((opt = getopt_long(argc, argv, "v:c:b:d::Vh", long_opts, NULL)) != -1)
@@ -373,30 +364,41 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* Device ceiling + lane-split validation (mirrors supertooth-bredr). */
+    /* The session owns layout validity: device bandwidth ceiling plus the
+     * lane-split table (mirrors supertooth-bredr). */
     {
         radio_device_type_t dtype =
             g_device_selected ? g_device_spec_parsed.type : RADIO_DEVICE_HACKRF;
-        uint32_t max_rate = 0u;
-        if (radio_get_max_sample_rate_for_type(dtype, &max_rate) == 0 &&
-            g_num_bredr_channels * 1000000u > max_rate)
+        switch (session_validate_layout(dtype, 1, 1, SESSION_REF_BREDR,
+                                        g_bottom_bredr_channel,
+                                        g_num_bredr_channels))
         {
-            fprintf(stderr,
-                    "Invalid --channels %u for %s (max %u MHz): choose <= %u channels.\n",
-                    g_num_bredr_channels,
-                    radio_device_type_name(dtype),
-                    max_rate / 1000000u, max_rate / 1000000u);
-            return EXIT_FAILURE;
-        }
-        if (!channelizer_service_valid_bredr_count(g_num_bredr_channels))
-        {
-            fprintf(stderr,
-                    "Invalid --channels %u: no even <=20-channel lane split "
-                    "(nearest supported: %u).\n",
-                    g_num_bredr_channels,
-                    channelizer_service_snap_bredr_count(
-                        g_num_bredr_channels));
-            return EXIT_FAILURE;
+            case SESSION_LAYOUT_OK:
+                break;
+            case SESSION_LAYOUT_RATE_EXCEEDED:
+            {
+                uint32_t max_rate =
+                    session_device_max_rate_hz(dtype);
+                fprintf(stderr,
+                        "Invalid --channels %u for %s (max %u MHz): choose <= %u channels.\n",
+                        g_num_bredr_channels,
+                        session_device_type_name(dtype),
+                        max_rate / 1000000u, max_rate / 1000000u);
+                return EXIT_FAILURE;
+            }
+            case SESSION_LAYOUT_NO_LANE_SPLIT:
+                fprintf(stderr,
+                        "Invalid --channels %u: no even <=20-channel lane split "
+                        "(nearest supported: %u).\n",
+                        g_num_bredr_channels,
+                        session_snap_bredr_count(g_num_bredr_channels));
+                return EXIT_FAILURE;
+            case SESSION_LAYOUT_BAD_RANGE:
+            default:
+                fprintf(stderr,
+                        "Invalid --channels %u (bottom %u): outside the BR/EDR band.\n",
+                        g_num_bredr_channels, g_bottom_bredr_channel);
+                return EXIT_FAILURE;
         }
     }
 
@@ -457,7 +459,7 @@ int main(int argc, char *argv[])
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
     if (g_device_selected)
         printf("Device      : %s:%s\n",
-               radio_device_type_name(g_device_spec_parsed.type),
+               session_device_type_name(g_device_spec_parsed.type),
                g_device_spec_parsed.id);
     else
         printf("Device      : (default)\n");
