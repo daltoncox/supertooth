@@ -34,7 +34,8 @@ int channelizer_service_plan(unsigned int sample_rate_hz,
      * Lanes are equal (Fs % K == 0) with an even bin count each. Larger K
      * is never tried: staging uses the minimum thread count, so counts
      * like 30 (3x10) or 56 stay unsupported by design. Supported BR/EDR
-     * counts are exactly 2..20 (even) + 24,28,32,36,40,42,48,54,60,64,72. */
+     * counts are exactly 2..20 (even) + 24,28,32,36,40,42,48,54,60,64,72,
+     * plus 79 ("all": full 0..78 band at 80 Msps, LO 2441 MHz). */
     unsigned int K =
         (sample_rate_hz + CHANNELIZER_SERVICE_MAX_LANE_RATE_HZ - 1u) /
         CHANNELIZER_SERVICE_MAX_LANE_RATE_HZ;
@@ -57,6 +58,14 @@ int channelizer_service_plan(unsigned int sample_rate_hz,
 
 int channelizer_service_valid_bredr_count(unsigned int C)
 {
+    /* "all" mode: C == 79 covers the full 0..78 band but requires an 80 Msps
+     * input (LO 2441 MHz, span 2401..2481 MHz), so it plans at 80 MHz rather
+     * than 79 MHz. The LO lands on the 1 MHz raster, so there is no
+     * half-channel grid residual to premix. */
+    if (C == CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS)
+        return channelizer_service_plan(80000000u,
+                                         CHANNELIZER_BANK_GRID_BR_EDR_HZ,
+                                         NULL, NULL) == 0;
     if (C < 2u || C > CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS)
         return 0;
     if ((C & 1u) != 0u)
@@ -68,8 +77,15 @@ int channelizer_service_valid_bredr_count(unsigned int C)
 
 unsigned int channelizer_service_snap_bredr_count(unsigned int C)
 {
-    if (C > CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS)
-        C = CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS;
+    /* Snap preserves the "all" sentinel: any request >= 79 lands on 79
+     * (80 Msps input) rather than flooring to the even lane-split table. */
+    if (C >= CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS)
+    {
+        if (channelizer_service_valid_bredr_count(
+                CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS))
+            return CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS;
+        C = CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS - 1u;
+    }
     C &= ~1u;
     while (C >= 2u)
     {

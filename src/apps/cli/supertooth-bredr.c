@@ -6,6 +6,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <getopt.h>
+#include <strings.h>
 #include "app_common.h"
 #include "app_device_view.h"
 #include "app_record.h"
@@ -171,10 +172,20 @@ static int parse_channel_count(const char *arg, unsigned int *out_channels)
     if (!arg || !out_channels)
         return -1;
 
+    /* "all" is the full 0..78 band (c=79): 80 Msps, LO 2441 MHz. */
+    if (strcasecmp(arg, "all") == 0)
+    {
+        *out_channels = BREDR_SESSION_MAX_CHANNELS;
+        return 0;
+    }
+
     char *end = NULL;
     unsigned long value = strtoul(arg, &end, 0);
     if (end == arg || *end != '\0' ||
-        value < 2ul || value > (unsigned long)BREDR_SESSION_MAX_CHANNELS ||
+        value < 2ul || value > (unsigned long)BREDR_SESSION_MAX_CHANNELS)
+        return -1;
+    /* 79 ("all") is the odd exception; every other count must be even. */
+    if (value != (unsigned long)BREDR_SESSION_MAX_CHANNELS &&
         (value & 1ul) != 0ul)
         return -1;
 
@@ -208,9 +219,9 @@ static void print_usage(const char *argv0)
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
     fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n", "--ac-errors N");
-    fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-%u, default: %u)\n",
+    fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-78, 79/\"all\" = full band, default: %u)\n",
             "-c, --channels N",
-            BREDR_SESSION_MAX_CHANNELS, g_num_bredr_channels);
+            g_num_bredr_channels);
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
@@ -297,8 +308,8 @@ int main(int argc, char *argv[])
             case 'c':
         if (parse_channel_count(optarg, &g_num_bredr_channels) != 0)
         {
-            fprintf(stderr, "Invalid --channels value: %s (expected even 2-%u)\n",
-                    optarg, BREDR_SESSION_MAX_CHANNELS);
+            fprintf(stderr, "Invalid --channels value: %s (expected even 2-78, 79 or \"all\")\n",
+                    optarg);
             print_usage(argv[0]);
             return EXIT_FAILURE;
         }
@@ -391,6 +402,16 @@ int main(int argc, char *argv[])
 
     if (g_bottom_channel_explicit)
     {
+        /* "all" mode covers the whole band: bottom must be 0. */
+        if (g_num_bredr_channels == BREDR_SESSION_MAX_CHANNELS &&
+            g_bottom_bredr_channel != 0u)
+        {
+            fprintf(stderr,
+                    "Invalid --bottom-channel %u for --channels all: "
+                    "full-band capture always starts at 0.\n",
+                    g_bottom_bredr_channel);
+            return EXIT_FAILURE;
+        }
         unsigned int max_bottom_channel = BREDR_MAX_CHANNEL - (g_num_bredr_channels - 1u);
         if (g_bottom_bredr_channel > max_bottom_channel)
         {
@@ -444,7 +465,11 @@ int main(int argc, char *argv[])
     const char *mode_name =
         app_output_mode_name(g_output_mode, s_output_modes,
                              sizeof(s_output_modes) / sizeof(s_output_modes[0]));
-    unsigned int sample_rate = (g_num_bredr_channels == 2u) ? 4000000u : g_num_bredr_channels * 1000000u;
+    /* "all" (c=79) captures the full 0..78 band at 80 Msps with the LO on
+     * the exact band centre (2441 MHz, no half-channel premix). */
+    unsigned int sample_rate = (g_num_bredr_channels == BREDR_SESSION_MAX_CHANNELS)
+        ? 80000000u
+        : ((g_num_bredr_channels == 2u) ? 4000000u : g_num_bredr_channels * 1000000u);
     double tune_lo_mhz = 2402.0 + (double)g_bottom_bredr_channel +
                          ((double)g_num_bredr_channels - 1.0) / 2.0;
     uint64_t tune_lo_hz = (uint64_t)(tune_lo_mhz * 1e6);

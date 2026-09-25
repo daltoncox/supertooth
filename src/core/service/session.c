@@ -181,6 +181,18 @@ static session_layout_status_t session_layout_rate(
         if (channel_count > BREDR_SESSION_MAX_CHANNELS ||
             bottom_channel + channel_count > BREDR_SESSION_MAX_CHANNELS)
             return SESSION_LAYOUT_BAD_RANGE;
+        /* "all" mode: c == 79 always means the full 0..78 band. It needs an
+         * 80 Msps input with the LO on the exact band centre (2441 MHz, on
+         * the 1 MHz raster, so no half-channel grid premix), not a 79 MHz
+         * window. Any nonzero bottom with 79 channels is out of band. */
+        if (channel_count == BREDR_SESSION_MAX_CHANNELS)
+        {
+            if (bottom_channel != 0u)
+                return SESSION_LAYOUT_BAD_RANGE;
+            *lo_mhz   = 2441.0;
+            *rate_mhz = 80u;
+            return SESSION_LAYOUT_OK;
+        }
         *lo_mhz   = 2402.0 + (double)bottom_channel +
                     ((double)channel_count - 1.0) / 2.0;
         *rate_mhz = channel_count;

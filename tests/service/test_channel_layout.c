@@ -94,6 +94,18 @@ static void test_tune_layout(void)
         session_destroy(&s);
     }
 
+    /* "all" mode (c=79): full 0..78 band at 80 Msps, LO on the exact band
+     * centre (2441 MHz, whole MHz, so no half-channel premix). */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("all b=0 c=79 tune",
+                  make_file_session(&s, 0, 79, SESSION_REF_BREDR, 0, 1), 0);
+        CHECK_U64("all b=0 c=79 LO", s.lo_frequency_hz, 2441000000ULL);
+        CHECK_U64("all b=0 c=79 rate", s.sample_rate_hz, 80000000u);
+        session_destroy(&s);
+    }
+
     /* BLE grid: 2N MHz window, whole-MHz LO. */
     {
         session_t s;
@@ -220,8 +232,15 @@ static void test_processor_counts(void)
     {
         session_t s;
         memset(&s, 0, sizeof(s));
-        CHECK_U64("bredr 79Msps over ceiling rejected",
+        CHECK_U64("all on hackrf over ceiling rejected",
                   make_session(&s, 0, 79, SESSION_REF_BREDR, 0, 1), -1);
+        session_destroy(&s);
+    }
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("all with bottom!=0 rejected",
+                  make_file_session(&s, 1, 79, SESSION_REF_BREDR, 0, 1), -1);
         session_destroy(&s);
     }
     CHECK_U64("tune NULL session rejected",
@@ -231,11 +250,12 @@ static void test_processor_counts(void)
 static void test_wideband_lanes(void)
 {
     /* Lane-split allowlist: even C<=20, else K=ceil(C/20) lanes with
-     * C%K==0 and even C/K<=20. (80 Msps is DSP-valid but BR/EDR
-     * band-unreachable: bottom+80 > 79 always.) */
+     * C%K==0 and even C/K<=20, plus 79 ("all": full 0..78 band at 80 Msps,
+     * LO 2441 MHz). 80 as a count is still rejected (band holds 79). */
     static const unsigned int valid[] = {
         2u, 4u, 6u, 8u, 10u, 12u, 14u, 16u, 18u, 20u,
         24u, 28u, 32u, 36u, 40u, 42u, 48u, 54u, 60u, 64u, 72u,
+        79u,
     };
     for (unsigned int c = 2u; c <= 80u; c += 2u)
     {
@@ -247,6 +267,10 @@ static void test_wideband_lanes(void)
         snprintf(name, sizeof(name), "bredr C=%u plan", c);
         CHECK_U64(name, channelizer_service_valid_bredr_count(c), expect);
     }
+    CHECK_U64("bredr C=79 plan (all)",
+              channelizer_service_valid_bredr_count(79u), 1u);
+    CHECK_U64("bredr C=80 rejected",
+              channelizer_service_valid_bredr_count(80u), 0u);
 
     /* 40ch hybrid on file replay: K=2, M_lane=20, 40 BR/EDR + 20 BLE. */
     {
@@ -293,6 +317,47 @@ static void test_wideband_lanes(void)
         CHECK_U64("wideband 72ch K", s.chan_svc.K, 4u);
         CHECK_U64("wideband 72ch M_lane", s.chan_svc.M_lane, 18u);
         CHECK_U64("wideband 72ch bredr count", bredr_n, 72u);
+        session_destroy(&s);
+    }
+
+    /* "all" hybrid on file replay: 80 Msps, K=4, M_lane=20, LO 2441 MHz
+     * (whole MHz: no half-channel premix), 79 BR/EDR + 40 BLE. */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("all 79ch tune",
+                  make_file_session(&s, 0, 79, SESSION_REF_BREDR, 1, 1), 0);
+        CHECK_U64("all 79ch LO", s.lo_frequency_hz, 2441000000ULL);
+        CHECK_U64("all 79ch rate", s.sample_rate_hz, 80000000u);
+        size_t ble_n = 0, bredr_n = 0;
+        CHECK_U64("all 79ch setup",
+                  session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
+        CHECK_U64("all 79ch K", s.chan_svc.K, 4u);
+        CHECK_U64("all 79ch M_lane", s.chan_svc.M_lane, 20u);
+        CHECK_U64("all 79ch grid", s.chan_svc.grid_actual_hz, 1000000u);
+        CHECK_U64("all 79ch bredr count", bredr_n, 79u);
+        CHECK_U64("all 79ch ble count", ble_n, 40u);
+        CHECK_U64("all 79ch lo_eff == lo", s.chan_svc.lo_eff_hz,
+                  s.lo_frequency_hz);
+        for (unsigned int k = 0u; k < s.chan_svc.K; k++)
+            CHECK_U64("all 79ch ddc shift whole-MHz",
+                      (uint64_t)((s.chan_svc.ddc[k].shift_hz % 1000000) +
+                                 1000000),
+                      1000000u);
+        session_destroy(&s);
+    }
+
+    /* "all" bredr-only: 79 BR/EDR processors, no BLE fan-out. */
+    {
+        session_t s;
+        memset(&s, 0, sizeof(s));
+        CHECK_U64("all 79ch bredr-only tune",
+                  make_file_session(&s, 0, 79, SESSION_REF_BREDR, 0, 1), 0);
+        size_t ble_n = 0, bredr_n = 0;
+        CHECK_U64("all 79ch bredr-only setup",
+                  session_create_channels_for_test(&s, &ble_n, &bredr_n), 0);
+        CHECK_U64("all 79ch bredr-only bredr count", bredr_n, 79u);
+        CHECK_U64("all 79ch bredr-only ble count", ble_n, 0u);
         session_destroy(&s);
     }
 
@@ -372,9 +437,17 @@ static void test_validate_layout(void)
               session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
                                       SESSION_REF_BREDR, 0u, 72u),
               SESSION_LAYOUT_OK);
+    CHECK_U64("valid file bredr all (79)",
+              session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 79u),
+              SESSION_LAYOUT_OK);
     CHECK_U64("valid file hybrid 40",
               session_validate_layout(RADIO_DEVICE_FILE, 1, 1,
                                       SESSION_REF_BREDR, 0u, 40u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid file hybrid all (79)",
+              session_validate_layout(RADIO_DEVICE_FILE, 1, 1,
+                                      SESSION_REF_BREDR, 0u, 79u),
               SESSION_LAYOUT_OK);
     CHECK_U64("valid hackrf ble 10",
               session_validate_layout(RADIO_DEVICE_HACKRF, 1, 0,
@@ -394,6 +467,10 @@ static void test_validate_layout(void)
               session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
                                       SESSION_REF_BREDR, 78u, 2u),
               SESSION_LAYOUT_BAD_RANGE);
+    CHECK_U64("all with bottom!=0 rejected",
+              session_validate_layout(RADIO_DEVICE_FILE, 0, 1,
+                                      SESSION_REF_BREDR, 1u, 79u),
+              SESSION_LAYOUT_BAD_RANGE);
     CHECK_U64("ble overflow rejected",
               session_validate_layout(RADIO_DEVICE_FILE, 1, 0,
                                       SESSION_REF_BLE, 39u, 2u),
@@ -407,6 +484,10 @@ static void test_validate_layout(void)
     CHECK_U64("hackrf 40ch over ceiling",
               session_validate_layout(RADIO_DEVICE_HACKRF, 0, 1,
                                       SESSION_REF_BREDR, 0u, 40u),
+              SESSION_LAYOUT_RATE_EXCEEDED);
+    CHECK_U64("hackrf all (79) over ceiling",
+              session_validate_layout(RADIO_DEVICE_HACKRF, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 79u),
               SESSION_LAYOUT_RATE_EXCEEDED);
     CHECK_U64("hackrf ble 20ch over ceiling",
               session_validate_layout(RADIO_DEVICE_HACKRF, 1, 0,
@@ -427,9 +508,11 @@ static void test_validate_layout(void)
     CHECK_U64("default hackrf", session_default_bredr_count(RADIO_DEVICE_HACKRF),
               20u);
     CHECK_U64("default file", session_default_bredr_count(RADIO_DEVICE_FILE),
-              72u);
+              79u);
     CHECK_U64("snap 22", session_snap_bredr_count(22u), 20u);
     CHECK_U64("snap 78", session_snap_bredr_count(78u), 72u);
+    CHECK_U64("snap 79", session_snap_bredr_count(79u), 79u);
+    CHECK_U64("snap 80", session_snap_bredr_count(80u), 79u);
     CHECK_U64("hackrf max rate", session_device_max_rate_hz(RADIO_DEVICE_HACKRF),
               20000000u);
     CHECK_U64("hackrf type name non-null",
@@ -447,6 +530,9 @@ static void test_validate_layout(void)
             { 0, 0, 1, SESSION_REF_BREDR, 0u, 40u },
             { 1, 0, 1, SESSION_REF_BREDR, 0u, 40u },
             { 1, 0, 1, SESSION_REF_BREDR, 0u, 72u },
+            { 1, 0, 1, SESSION_REF_BREDR, 0u, 79u },
+            { 1, 1, 1, SESSION_REF_BREDR, 0u, 79u },
+            { 0, 0, 1, SESSION_REF_BREDR, 0u, 79u },
             { 1, 1, 1, SESSION_REF_BREDR, 0u, 40u },
             { 0, 1, 0, SESSION_REF_BLE, 0u, 10u },
             { 1, 1, 0, SESSION_REF_BLE, 0u, 40u },

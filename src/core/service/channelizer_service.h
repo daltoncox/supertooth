@@ -18,7 +18,9 @@
  *
  * Lane plan (no tables): K = ceil(Fs / 20 MHz), capped at 4, with Fs % K
  * == 0 and M_lane = (Fs/K)/grid even. This yields exactly the supported
- * BR/EDR counts 2..20 (even) + 24,28,32,36,40,42,48,54,60,64,72.
+ * BR/EDR counts 2..20 (even) + 24,28,32,36,40,42,48,54,60,64,72, plus 79
+ * ("all": the full 0..78 band at 80 Msps, LO 2441 MHz, no half-channel
+ * grid premix).
  *
  * The service hands the session configured readers (one next() call yields
  * the channel's contiguous stream); the session builds channel processors
@@ -141,12 +143,15 @@ int channelizer_service_plan(unsigned int sample_rate_hz,
                               unsigned int *K_out,
                               unsigned int *M_lane_out);
 
-/** Nonzero when @p C is a supported BR/EDR channel count. */
+/** Nonzero when @p C is a supported BR/EDR channel count (79 = "all":
+ *  full band at 80 Msps; every other count is even and plans at C MHz). */
 int channelizer_service_valid_bredr_count(unsigned int C);
 
 /**
  * Largest supported BR/EDR count <= @p C (floored, min 0 when none).
- * Used by CLIs/GUI to snap a requested count down to something tuneable.
+ * Requests >= 79 snap to 79 ("all", 80 Msps) instead of flooring to the
+ * even lane-split table. Used by CLIs/GUI to snap a requested count down
+ * to something tuneable.
  */
 unsigned int channelizer_service_snap_bredr_count(unsigned int C);
 

@@ -91,8 +91,14 @@ static void test_plan(void)
               20u);
     CHECK_U64("snap 78 -> 72", channelizer_service_snap_bredr_count(78u),
               72u);
-    CHECK_U64("snap 80 -> 72", channelizer_service_snap_bredr_count(80u),
-              72u);
+    /* 79 ("all") is the full-band sentinel at 80 Msps: requests >= 79 snap
+     * to it rather than flooring to the even lane-split table. */
+    CHECK_U64("valid 79 (all)", channelizer_service_valid_bredr_count(79u),
+              1u);
+    CHECK_U64("snap 79 -> 79", channelizer_service_snap_bredr_count(79u),
+              79u);
+    CHECK_U64("snap 80 -> 79", channelizer_service_snap_bredr_count(80u),
+              79u);
     CHECK_U64("snap 20 -> 20", channelizer_service_snap_bredr_count(20u),
               20u);
 }
@@ -203,8 +209,9 @@ static void test_init_wideband(void)
     channelizer_service_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.sample_rate_hz = 80000000u;
-    /* LO for BR/EDR ch0..79 window centre ( Aspirational full span ). */
-    cfg.lo_hz   = 2441500000u;
+    /* "all" mode: full 0..78 band, LO on the exact band centre (2441 MHz,
+     * on the 1 MHz raster, so no half-channel grid premix). */
+    cfg.lo_hz   = 2441000000u;
     cfg.grid_hz = 1000000u;
     CHECK_TRUE("wideband init",
                channelizer_service_init(&s, rf, &cfg) == 0);
@@ -213,6 +220,15 @@ static void test_init_wideband(void)
     CHECK_U64("wideband D", s.D, 4u);
     CHECK_U64("wideband dispatchers",
               channelizer_service_dispatcher_count(&s), 8u);
+    CHECK_U64("wideband bredr (all 79)", s.bredr_count, 79u);
+    CHECK_U64("wideband ble (all 40)", s.ble_count, 40u);
+    /* No half-channel mix: LO already grid-aligned, every DDC shift is a
+     * whole-MHz lane offset. */
+    CHECK_U64("wideband lo_eff == lo", s.lo_eff_hz, 2441000000u);
+    for (unsigned int k = 0u; k < s.K; k++)
+        CHECK_U64("wideband ddc shift whole-MHz",
+                  (uint64_t)((s.ddc[k].shift_hz % 1000000) + 1000000),
+                  1000000u);
     check_readers(&s, "wideband");
     channelizer_service_destroy(&s);
     sample_dispatcher_destroy(rf);
