@@ -41,6 +41,21 @@ typedef struct
     pthread_mutex_t mutex;
     pthread_cond_t cv;
     unsigned long dropped_blocks;
+
+    /* Optional channel view. view_stride == 0 means raw mode: next()
+     * hands out pool blocks directly (zero copy). Otherwise next() gathers
+     * blk[view_bin + k*view_M], stepping k by view_stride, into
+     * view_scratch (exactly one copy, owned here). */
+    unsigned int  view_bin;        /* element offset of this stream in a frame */
+    unsigned int  view_M;          /* elements per frame */
+    unsigned int  view_stride;     /* frames skipped per output sample; 0 = raw */
+    unsigned int  view_decimation; /* end-to-end RF->demod decimation */
+    unsigned int  view_rate_hz;    /* post-gather stream rate (2 Msps) */
+    uint32_t      view_center_hz;  /* RF centre of this stream */
+    float         view_rssi_cal_db;
+    float complex *view_scratch;   /* gather buffer (view mode only) */
+    size_t         view_cap;
+    sample_block_t *view_held;     /* checked-out block, auto-released */
 } sample_reader_t;
 
 typedef struct
@@ -114,5 +129,36 @@ void sample_reader_signal(sample_reader_t *reader);
 int sample_reader_wait_pop(sample_reader_t *reader,
                             const _Atomic unsigned int *shutdown_requested,
                             sample_block_t **block);
+
+/**
+ * Describe an already-registered reader as one strided stream (plain
+ * scalars, so no service types cross into the radio layer). Copies the
+ * view fields and sizes view_scratch = BLOCK_CAP/M/stride + 16.
+ * Fails (-1, reader left raw) on bad args (NULL, M==0, stride==0,
+ * bin>=M, decimation==0, rate==0) or double-configure.
+ */
+int sample_reader_configure_view(sample_reader_t *reader,
+                                 unsigned int bin, unsigned int M,
+                                 unsigned int stride,
+                                 unsigned int decimation,
+                                 unsigned int rate_hz,
+                                 uint32_t center_hz,
+                                 float rssi_cal_db);
+
+/**
+ * The single stream function every dispatcher consumer calls. Releases the
+ * previously held block, wait_pops the next one and holds it (nonzero
+ * return on shutdown/bad args; any held block is kept for destroy).
+ *
+ * Raw mode returns pool pointers directly (zero copy); view mode gathers
+ * into the reader-owned scratch (one copy). Empty blocks are returned
+ * as-is (count 0, caller continues). Output is valid until the next call
+ * or destroy; single-thread owner only.
+ */
+int sample_reader_next(sample_reader_t *reader,
+                       const _Atomic unsigned int *shutdown,
+                       const float complex **out_samples,
+                       unsigned int *out_count,
+                       uint64_t *out_base_radio);
 
 #endif

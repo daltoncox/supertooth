@@ -400,36 +400,33 @@ static void *svc_ddc_worker(void *arg)
     sample_dispatcher_t *dst = s->sub[lane];
     const _Atomic unsigned int *shutdown = s->cfg.shutdown;
 
-    sample_block_t *rfb = NULL;
     for (;;)
     {
-        if (sample_reader_wait_pop(reader, shutdown, &rfb) != 0)
+        const float complex *in;
+        unsigned int in_n;
+        uint64_t in_base;
+
+        /* Raw mode: next() hands out the pool block directly (zero copy);
+         * it stays held until the next call or destroy. */
+        if (sample_reader_next(reader, shutdown, &in, &in_n, &in_base) != 0)
             break;
-        if (!rfb)
-            continue;
 
         sample_block_t *db = svc_acquire_block(dst, s);
         if (!db)
         {
-            sample_block_release(rfb);
-            rfb = NULL;
             if (s->cfg.exhaustive)
-                break; /* shutdown requested */
+                break; /* shutdown requested; held block flushes at destroy */
             continue;
         }
 
         unsigned int n_out = 0u;
         uint64_t out_base  = 0u;
-        ddc_stage_execute(stage, rfb->samples, rfb->num_samples,
-                          rfb->block_base_sample, db->samples, &n_out,
-                          &out_base);
+        ddc_stage_execute(stage, in, in_n, in_base,
+                          db->samples, &n_out, &out_base);
         db->num_samples       = n_out;
         db->block_base_sample = out_base;
 
-        int stop = svc_push_block(dst, db, s);
-        sample_block_release(rfb);
-        rfb = NULL;
-        if (stop != 0)
+        if (svc_push_block(dst, db, s) != 0)
             break;
     }
     return NULL;
@@ -456,19 +453,22 @@ static void *svc_pfb_worker(void *arg)
     sample_block_t *sb = NULL;
     for (;;)
     {
-        if (sample_reader_wait_pop(reader, shutdown, &sb) != 0)
+        const float complex *in;
+        unsigned int in_n;
+        uint64_t base;
+
+        /* Raw mode: next() hands out the pool block directly (zero copy);
+         * it stays held across the max_in sub-chunks below. */
+        if (sample_reader_next(reader, shutdown, &in, &in_n, &base) != 0)
             break;
-        if (!sb)
-            continue;
 
         /* Bank keeps its own carry across calls; feed in place in
          * max_in-sized sub-chunks. Bases stay in input-domain units. */
-        uint64_t base = sb->block_base_sample;
         size_t done   = 0u;
         int stop      = 0;
-        while (done < (size_t)sb->num_samples && stop == 0)
+        while (done < (size_t)in_n && stop == 0)
         {
-            size_t n = (size_t)sb->num_samples - done;
+            size_t n = (size_t)in_n - done;
             if (n > max_in)
                 n = max_in;
 
@@ -477,7 +477,7 @@ static void *svc_pfb_worker(void *arg)
                 break; /* live: drop rest of block; exhaustive: shutdown */
 
             unsigned int frames_out = 0u;
-            channelizer_bank_execute(bank, &sb->samples[done], n,
+            channelizer_bank_execute(bank, &in[done], n,
                                      fm->samples, &frames_out, NULL);
             fm->num_samples       = (unsigned int)((size_t)M * frames_out);
             fm->block_base_sample = base + (uint64_t)done * lane_scale;
@@ -486,8 +486,8 @@ static void *svc_pfb_worker(void *arg)
             done += n;
         }
 
-        sample_block_release(sb);
-        sb = NULL;
+        if (stop != 0)
+            break;
     }
     return NULL;
 }
@@ -579,32 +579,66 @@ sample_dispatcher_t *channelizer_service_dispatcher_at(
     return i < (size_t)s->K ? s->out[i] : NULL;
 }
 
-size_t channelizer_service_get_bredr_channels(
-    const channelizer_service_t *s,
-    channelizer_channel_t *out, size_t cap)
+size_t channelizer_service_get_bredr_count(const channelizer_service_t *s)
 {
-    if (!s)
-        return 0u;
-    if (out && cap > 0u)
-    {
-        size_t n = s->bredr_count < cap ? s->bredr_count : cap;
-        memcpy(out, s->bredr_desc, n * sizeof(*out));
-    }
-    return s->bredr_count;
+    return s ? s->bredr_count : 0u;
 }
 
-size_t channelizer_service_get_ble_channels(
-    const channelizer_service_t *s,
-    channelizer_channel_t *out, size_t cap)
+size_t channelizer_service_get_ble_count(const channelizer_service_t *s)
 {
-    if (!s)
+    return s ? s->ble_count : 0u;
+}
+
+uint32_t channelizer_service_bredr_center(const channelizer_service_t *s,
+                                          size_t idx)
+{
+    if (!s || idx >= s->bredr_count)
         return 0u;
-    if (out && cap > 0u)
+    return s->bredr_desc[idx].center_hz;
+}
+
+uint32_t channelizer_service_ble_center(const channelizer_service_t *s,
+                                        size_t idx)
+{
+    if (!s || idx >= s->ble_count)
+        return 0u;
+    return s->ble_desc[idx].center_hz;
+}
+
+static int svc_reader_init_from(const channelizer_channel_t *d,
+                                sample_reader_t *reader)
+{
+    if (!d || !reader || !d->dispatcher)
+        return -1;
+    if (sample_reader_init(reader, d->dispatcher) != 0)
+        return -1;
+    if (sample_reader_configure_view(reader, d->bin, d->M, d->stride,
+                                     d->input_decimation,
+                                     CHANNELIZER_BANK_OUTPUT_RATE_HZ,
+                                     d->center_hz, d->rssi_cal_db) != 0)
     {
-        size_t n = s->ble_count < cap ? s->ble_count : cap;
-        memcpy(out, s->ble_desc, n * sizeof(*out));
+        sample_reader_destroy(reader);
+        return -1;
     }
-    return s->ble_count;
+    return 0;
+}
+
+int channelizer_service_bredr_reader_init(channelizer_service_t *s,
+                                          size_t idx,
+                                          sample_reader_t *reader)
+{
+    if (!s || idx >= s->bredr_count || !reader)
+        return -1;
+    return svc_reader_init_from(&s->bredr_desc[idx], reader);
+}
+
+int channelizer_service_ble_reader_init(channelizer_service_t *s,
+                                        size_t idx,
+                                        sample_reader_t *reader)
+{
+    if (!s || idx >= s->ble_count || !reader)
+        return -1;
+    return svc_reader_init_from(&s->ble_desc[idx], reader);
 }
 
 void channelizer_service_destroy(channelizer_service_t *s)

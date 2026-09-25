@@ -44,3 +44,13 @@ target_link_libraries(test_dispatcher_backpressure
 )
 
 add_test(NAME test_dispatcher_backpressure COMMAND test_dispatcher_backpressure)
+
+add_executable(test_reader_view
+    test_reader_view.c
+)
+
+target_link_libraries(test_reader_view
+    supertooth_core
+)
+
+add_test(NAME test_reader_view COMMAND test_reader_view)

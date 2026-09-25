@@ -239,13 +239,11 @@ static int session_create_channels(session_t *session)
         return -1;
     }
 
-    /* BR/EDR processors from the service descriptors. */
+    /* BR/EDR processors: the service configures each reader in place
+     * (lane dispatcher + channel view); init only wires demod/decoder. */
     if (session->bredr_enabled)
     {
-        channelizer_channel_t desc[BREDR_SESSION_MAX_CHANNELS];
-        size_t n = channelizer_service_get_bredr_channels(
-            &session->chan_svc, desc,
-            sizeof(desc) / sizeof(desc[0]));
+        size_t n = channelizer_service_get_bredr_count(&session->chan_svc);
 
         session->bredr_channel_count = 0u;
         session->bredr_channels = calloc(BREDR_SESSION_MAX_CHANNELS,
@@ -257,14 +255,21 @@ static int session_create_channels(session_t *session)
         }
         for (size_t i = 0u; i < n; i++)
         {
-            /* Descriptor order follows the band (channel c at index c for
-             * the in-span subset); recover the RF index from the centre. */
-            uint16_t c = (uint16_t)((desc[i].center_hz -
-                                     2402000000u) / 1000000u);
             bredr_channel_processor_t *proc =
                 &session->bredr_channels[session->bredr_channel_count];
-            if (bredr_channel_processor_init(proc, &desc[i], c) != 0)
+            /* Descriptor order follows the band; recover the RF index
+             * from the centre. */
+            uint32_t center =
+                channelizer_service_bredr_center(&session->chan_svc, i);
+            uint16_t c = (uint16_t)((center - 2402000000u) / 1000000u);
+            if (channelizer_service_bredr_reader_init(&session->chan_svc, i,
+                                                      &proc->reader) != 0)
                 continue;
+            if (bredr_channel_processor_init(proc, c) != 0)
+            {
+                sample_reader_destroy(&proc->reader);
+                continue;
+            }
             proc->session = session;
             session->bredr_channel_count++;
         }
@@ -275,14 +280,11 @@ static int session_create_channels(session_t *session)
         }
     }
 
-    /* BLE processors from the service descriptors (shared 1 MHz lanes in
+    /* BLE processors from configured readers (shared 1 MHz lanes in
      * hybrid mode, dedicated 2 MHz lanes when BLE-only). */
     if (session->ble_enabled)
     {
-        channelizer_channel_t desc[BLE_RF_CHANNEL_COUNT];
-        size_t n = channelizer_service_get_ble_channels(
-            &session->chan_svc, desc,
-            sizeof(desc) / sizeof(desc[0]));
+        size_t n = channelizer_service_get_ble_count(&session->chan_svc);
 
         session->ble_channel_count = 0u;
         session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT,
@@ -294,12 +296,19 @@ static int session_create_channels(session_t *session)
         }
         for (size_t i = 0u; i < n; i++)
         {
-            uint16_t rf = (uint16_t)((desc[i].center_hz -
-                                      2402000000u) / 2000000u);
             ble_channel_processor_t *proc =
                 &session->ble_channels[session->ble_channel_count];
-            if (ble_channel_processor_init(proc, &desc[i], rf) != 0)
+            uint32_t center =
+                channelizer_service_ble_center(&session->chan_svc, i);
+            uint16_t rf = (uint16_t)((center - 2402000000u) / 2000000u);
+            if (channelizer_service_ble_reader_init(&session->chan_svc, i,
+                                                    &proc->reader) != 0)
                 continue;
+            if (ble_channel_processor_init(proc, rf) != 0)
+            {
+                sample_reader_destroy(&proc->reader);
+                continue;
+            }
             proc->session = session;
             session->ble_channel_count++;
         }

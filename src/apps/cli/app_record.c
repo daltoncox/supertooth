@@ -146,24 +146,24 @@ int app_record_run(const app_record_config_t *cfg)
     while (atomic_load_explicit(&g_record_stop,
                                 memory_order_acquire) == 0u)
     {
-        sample_block_t *block = NULL;
-        if (sample_reader_wait_pop(&reader, &g_record_stop, &block) != 0)
+        const float complex *samples;
+        unsigned int count;
+        uint64_t base;
+        (void)base;
+
+        /* Raw mode: next() hands out pool blocks directly (zero copy);
+         * each call releases the previous block. */
+        if (sample_reader_next(&reader, &g_record_stop,
+                               &samples, &count, &base) != 0)
             break;
-        if (!block || block->num_samples == 0u)
-        {
-            if (block)
-                sample_block_release(block);
+        if (count == 0u)
             continue;
-        }
-        if (wav_write_frames(&writer, block->samples,
-                             block->num_samples) != 0)
+        if (wav_write_frames(&writer, samples, count) != 0)
         {
             fprintf(stderr, "--record: write failed\n");
-            sample_block_release(block);
             break;
         }
-        samples_written += block->num_samples;
-        sample_block_release(block);
+        samples_written += count;
         blocks++;
         if (cfg->debug && (blocks % 500ul) == 0ul)
             fprintf(stderr, "[record] blocks=%lu samples=%llu\n", blocks,

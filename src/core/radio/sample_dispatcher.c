@@ -52,6 +52,12 @@ void sample_reader_destroy(sample_reader_t *reader)
     if (!reader)
         return;
 
+    sample_block_release(reader->view_held);
+    reader->view_held = NULL;
+    free(reader->view_scratch);
+    reader->view_scratch = NULL;
+    reader->view_cap = 0u;
+
     pthread_cond_destroy(&reader->cv);
     pthread_mutex_destroy(&reader->mutex);
     memset(reader, 0, sizeof(*reader));
@@ -155,6 +161,79 @@ int sample_reader_init(sample_reader_t *reader,
         return -1;
     }
 
+    return 0;
+}
+
+int sample_reader_configure_view(sample_reader_t *reader,
+                                 unsigned int bin, unsigned int M,
+                                 unsigned int stride,
+                                 unsigned int decimation,
+                                 unsigned int rate_hz,
+                                 uint32_t center_hz,
+                                 float rssi_cal_db)
+{
+    float complex *scratch;
+    size_t cap;
+
+    if (!reader || M == 0u || stride == 0u || bin >= M ||
+        decimation == 0u || rate_hz == 0u)
+        return -1;
+    if (reader->view_stride != 0u || reader->view_scratch != NULL)
+        return -1; /* single configuration per reader lifetime */
+
+    cap = SAMPLE_BLOCK_SAMPLE_CAPACITY / (size_t)M / (size_t)stride + 16u;
+    scratch = (float complex *)malloc(cap * sizeof(*scratch));
+    if (!scratch)
+        return -1;
+
+    reader->view_bin        = bin;
+    reader->view_M          = M;
+    reader->view_stride     = stride;
+    reader->view_decimation = decimation;
+    reader->view_rate_hz    = rate_hz;
+    reader->view_center_hz  = center_hz;
+    reader->view_rssi_cal_db = rssi_cal_db;
+    reader->view_scratch    = scratch;
+    reader->view_cap        = cap;
+    return 0;
+}
+
+int sample_reader_next(sample_reader_t *reader,
+                       const _Atomic unsigned int *shutdown,
+                       const float complex **out_samples,
+                       unsigned int *out_count,
+                       uint64_t *out_base_radio)
+{
+    sample_block_t *block = NULL;
+    unsigned int frames, out = 0u;
+
+    if (!reader || !shutdown || !out_samples || !out_count || !out_base_radio)
+        return -1;
+
+    sample_block_release(reader->view_held);
+    reader->view_held = NULL;
+
+    if (sample_reader_wait_pop(reader, shutdown, &block) != 0 || !block)
+        return -1;
+    reader->view_held = block;
+
+    *out_base_radio = block->block_base_sample;
+    if (reader->view_stride == 0u)
+    {
+        /* Raw mode: pool block handed out directly, zero copy. */
+        *out_samples = block->samples;
+        *out_count   = block->num_samples;
+        return 0;
+    }
+
+    frames = block->num_samples / reader->view_M;
+    for (unsigned int k = 0u;
+         k < frames && out < reader->view_cap;
+         k += reader->view_stride)
+        reader->view_scratch[out++] =
+            block->samples[reader->view_bin + (size_t)k * reader->view_M];
+    *out_samples = reader->view_scratch;
+    *out_count   = out;
     return 0;
 }
 

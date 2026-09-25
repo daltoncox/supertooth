@@ -31,39 +31,31 @@ static rx_metadata_t bredr_make_metadata(uint64_t radio_start_sample_index,
 }
 
 int bredr_channel_processor_init(bredr_channel_processor_t *proc,
-                                 const channelizer_channel_t *ch,
                                  uint16_t rf_channel_index)
 {
-    if (!proc || !ch || !ch->dispatcher)
+    if (!proc)
         return -1;
-    if (ch->M == 0u)
+    /* Stream layout lives on the pre-configured reader (service fills it
+     * before this runs). No memset here: it would wipe that configuration. */
+    if (proc->reader.view_stride == 0u)
         return -1;
-    memset(proc, 0, sizeof(*proc));
 
     proc->rf_channel_index    = rf_channel_index;
     proc->frequency_offset_hz = 0;
-    proc->center_frequency_hz  = ch->center_hz;
-    proc->samps_per_symbol     = BREDR_SESSION_SAMPLES_PER_SYMBOL;
+    proc->center_frequency_hz = proc->reader.view_center_hz;
+    proc->samps_per_symbol    = BREDR_SESSION_SAMPLES_PER_SYMBOL;
 
-    proc->bin              = ch->bin;
-    proc->bank_M           = ch->M;
-    proc->input_decimation = ch->input_decimation;
-    proc->rssi_cal_db      = ch->rssi_cal_db;
+    /* Cached from the reader for the hot loop. */
+    proc->input_decimation = proc->reader.view_decimation;
+    proc->rssi_cal_db      = proc->reader.view_rssi_cal_db;
 
-    if (sample_reader_init(&proc->reader, ch->dispatcher) != 0)
+    proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samps_per_symbol,
+                                        3u, 0.5f, LIQUID_CPFSK_GMSK);
+    if (!proc->demodulator)
     {
         bredr_channel_processor_destroy(proc);
         return -1;
     }
-
-    proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samps_per_symbol,
-                                        3u, 0.5f, LIQUID_CPFSK_GMSK);
-    if (!proc->demodulator) { bredr_channel_processor_destroy(proc); return -1; }
-
-    /* Frame-major block holds at most SAMPLE_BLOCK_SAMPLE_CAPACITY / M frames. */
-    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / (size_t)ch->M + 16u;
-    proc->decimated = malloc(sizeof(float complex) * proc->buf_cap_samples);
-    if (!proc->decimated) { bredr_channel_processor_destroy(proc); return -1; }
 
     bredr_bitstream_decoder_init(&proc->decoder);
 
@@ -72,7 +64,14 @@ int bredr_channel_processor_init(bredr_channel_processor_t *proc,
     proc->noise_floor_initialized  = 0u;
     proc->pending_rssi_dbr         = RECEIVER_RSSI_INVALID;
     proc->pending_rssi_valid       = 0;
+    proc->pending_header_abs_radio = 0u;
+    proc->pending_header_valid     = 0;
+    proc->prev_block_end_radio     = 0u;
+    proc->has_prev_block           = 0;
+    proc->valid_packets            = 0ul;
+    proc->dbg_blocks_seen          = 0u;
     proc->active                   = 1;
+    /* session + reader left as the caller set them. */
     return 0;
 }
 
@@ -80,7 +79,7 @@ void bredr_channel_processor_destroy(bredr_channel_processor_t *proc)
 {
     if (!proc) return;
     if (proc->demodulator) cpfskdem_destroy(proc->demodulator);
-    free(proc->decimated);
+    proc->demodulator = NULL;
     sample_reader_destroy(&proc->reader);
     memset(proc, 0, sizeof(*proc));
 }
@@ -157,33 +156,30 @@ static int emit_frame(bredr_channel_processor_t *proc,
     return 0;
 }
 
-int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sample_block_t *blk)
+int bredr_channel_processor_process_stream(bredr_channel_processor_t *proc,
+                                            const float complex *samples,
+                                            unsigned int count,
+                                            uint64_t base_radio)
 {
-    if (!proc || !proc->active || !blk) return -1;
+    if (!proc || !proc->active || !samples) return -1;
 
-    unsigned int decim_out;
-
-    unsigned int frames = blk->num_samples / proc->bank_M;
-    if (frames > proc->buf_cap_samples)
-        frames = (unsigned int)proc->buf_cap_samples;
-    for (unsigned int k = 0u; k < frames; k++)
-        proc->decimated[k] = blk->samples[proc->bin + (size_t)k * proc->bank_M];
-    decim_out = frames;
+    unsigned int decim_out = count;
 
     int dbg = proc->session ? proc->session->config.debug : 0;
     if (dbg && proc->dbg_blocks_seen < 4u)
         fprintf(stderr,
-                "[bredr_proc ch=%u] block #%u: num_samples=%u decim_out=%u\n",
+                "[bredr_proc ch=%u] block #%u: decim_out=%u\n",
                 proc->rf_channel_index, proc->dbg_blocks_seen,
-                blk->num_samples, decim_out);
+                decim_out);
     proc->dbg_blocks_seen++;
 
     unsigned int num_bits = decim_out / proc->samps_per_symbol;
     for (unsigned int s = 0u; s < num_bits; s++)
     {
         unsigned int sample_index = s * proc->samps_per_symbol;
+        /* Liquid's demodulate omits const (it only reads); our stream is const. */
         uint32_t raw_sym_val = cpfskdem_demodulate(proc->demodulator,
-                                                   &proc->decimated[sample_index]);
+                                    (float complex *)&samples[sample_index]);
         uint8_t bit = (uint8_t)(raw_sym_val & 0x1u);
 
         bredr_status_t status = bredr_bitstream_decoder_push_bit(&proc->decoder, bit);
@@ -201,7 +197,7 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
                                              decim_out,
                                              &i_start, &i_end, &i_idle);
             proc->pending_rssi_dbr = receiver_rssi_signal_dbr(
-                proc->decimated, i_start, i_end, i_idle,
+                samples, i_start, i_end, i_idle,
                 &proc->noise_floor_linear, &proc->noise_floor_initialized,
                 RECEIVER_RSSI_INVALID);
             proc->pending_rssi_valid = !isnan(proc->pending_rssi_dbr);
@@ -215,14 +211,14 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
             int sync_start = (int)ac_end - 64;
             if (sync_start >= 0)
             {
-                uint64_t abs_sync = blk->block_base_sample +
+                uint64_t abs_sync = base_radio +
                     (uint64_t)sync_start * (uint64_t)proc->input_decimation;
                 proc->pending_header_abs_radio =
                     abs_sync + 68u * (uint64_t)proc->input_decimation;
                 proc->pending_header_valid = 1;
             }
             else if (proc->has_prev_block &&
-                     proc->prev_block_end_radio == blk->block_base_sample)
+                     proc->prev_block_end_radio == base_radio)
             {
                 proc->pending_header_abs_radio =
                     proc->prev_block_end_radio -
@@ -248,12 +244,12 @@ int bredr_channel_processor_process_block(bredr_channel_processor_t *proc, sampl
         if (status == BREDR_VALID_PACKET)
         {
             proc->valid_packets++;
-            emit_frame(proc, sample_index, decim_out, blk->block_base_sample);
+            emit_frame(proc, sample_index, decim_out, base_radio);
         }
     }
     /* Remember this block's trailing edge so an access code detected at the
      * top of the next block can still be located (see the latch above). */
-    proc->prev_block_end_radio = blk->block_base_sample +
+    proc->prev_block_end_radio = base_radio +
         (uint64_t)decim_out * (uint64_t)proc->input_decimation;
     proc->has_prev_block = 1;
     return 0;
@@ -265,19 +261,19 @@ void *bredr_channel_worker(void *arg)
     if (!proc || !proc->session) return NULL;
 
     const _Atomic unsigned int *shutdown = &proc->session->shutdown_requested;
-    sample_block_t *block = NULL;
 
     for (;;)
     {
-        if (sample_reader_wait_pop(&proc->reader, shutdown, &block) != 0)
+        const float complex *samples;
+        unsigned int count;
+        uint64_t base;
+
+        /* The reader's single call pops, gathers and holds the block. */
+        if (sample_reader_next(&proc->reader, shutdown,
+                               &samples, &count, &base) != 0)
             break;
 
-        if (block)
-        {
-            bredr_channel_processor_process_block(proc, block);
-            sample_block_release(block);
-            block = NULL;
-        }
+        bredr_channel_processor_process_stream(proc, samples, count, base);
     }
 
     return NULL;

@@ -161,7 +161,7 @@ static void test_processor_counts(void)
                   s.dispatcher->reader_count, 1u);
         for (size_t i = 0u; i < ble_n; i++)
             CHECK_U64("hybrid shared ble stride 1",
-                      s.ble_channels[i].frame_stride, 1u);
+                      s.ble_channels[i].reader.view_stride, 1u);
         session_destroy(&s);
     }
 
@@ -264,14 +264,14 @@ static void test_wideband_lanes(void)
         CHECK_U64("wideband 40ch rf readers", s.dispatcher->reader_count, 2u);
         for (size_t i = 0u; i < bredr_n; i++)
         {
-            if (s.bredr_channels[i].bank_M != 20u ||
-                s.bredr_channels[i].input_decimation != 20u)
+            if (s.bredr_channels[i].reader.view_M != 20u ||
+                s.bredr_channels[i].reader.view_decimation != 20u)
             {
                 printf("FAIL wideband 40ch bredr[%zu] M/decim\n", i);
                 g_failures++;
                 break;
             }
-            if (s.bredr_channels[i].bin >= 20u)
+            if (s.bredr_channels[i].reader.view_bin >= 20u)
             {
                 printf("FAIL wideband 40ch bredr[%zu] bin range\n", i);
                 g_failures++;
@@ -336,7 +336,7 @@ static void test_wideband_lanes(void)
         CHECK_U64("ble wideband 40ch count", ble_n, 40u);
         for (size_t i = 0u; i < ble_n; i++)
             CHECK_U64("ble wideband stride 2",
-                      s.ble_channels[i].frame_stride, 2u);
+                      s.ble_channels[i].reader.view_stride, 2u);
         session_destroy(&s);
     }
 
@@ -352,7 +352,7 @@ static void test_wideband_lanes(void)
                   s.chan_svc.grid_actual_hz, 2000000u);
         for (size_t i = 0u; i < ble_n; i++)
             CHECK_U64("ble narrow stride 2",
-                      s.ble_channels[i].frame_stride, 2u);
+                      s.ble_channels[i].reader.view_stride, 2u);
         session_destroy(&s);
     }
 }

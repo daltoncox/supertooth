@@ -20,8 +20,9 @@
  * == 0 and M_lane = (Fs/K)/grid even. This yields exactly the supported
  * BR/EDR counts 2..20 (even) + 24,28,32,36,40,42,48,54,60,64,72.
  *
- * The service hands the session plain channel descriptors; the session
- * builds channel processors from them and never touches M/M2/bin/stride.
+ * The service hands the session configured readers (one next() call yields
+ * the channel's contiguous stream); the session builds channel processors
+ * around them and never touches bins, strides, or gather buffers.
  * 2 MHz bins are BLE-only (power saver): a 2 MHz request with an odd bin
  * count transparently falls back to the 1 MHz grid.
  */
@@ -55,8 +56,9 @@ extern "C" {
 #define CHANNELIZER_SERVICE_MAX_BLE_CHANNELS 40u
 
 /**
- * One deliverable channel. Everything a channel processor needs to attach
- * to its lane's output dispatcher and read its bin.
+ * @internal Channel descriptor. Service-internal: built once per tune into
+ * the tables below and never exposed — consumers receive configured readers
+ * (see channelizer_service_*_reader_init) instead of these.
  */
 typedef struct
 {
@@ -185,15 +187,29 @@ size_t channelizer_service_dispatcher_count(const channelizer_service_t *s);
 sample_dispatcher_t *channelizer_service_dispatcher_at(
     const channelizer_service_t *s, size_t i);
 
-/** Copy BR/EDR descriptors (up to @p cap). @return total available. */
-size_t channelizer_service_get_bredr_channels(
-    const channelizer_service_t *s,
-    channelizer_channel_t *out, size_t cap);
+/** Channel counts available for processor fan-out. */
+size_t channelizer_service_get_bredr_count(const channelizer_service_t *s);
+size_t channelizer_service_get_ble_count(const channelizer_service_t *s);
 
-/** Copy BLE descriptors (up to @p cap). @return total available. */
-size_t channelizer_service_get_ble_channels(
-    const channelizer_service_t *s,
-    channelizer_channel_t *out, size_t cap);
+/** RF centre of channel @p idx (0 on bad index — never a valid centre). */
+uint32_t channelizer_service_bredr_center(const channelizer_service_t *s,
+                                          size_t idx);
+uint32_t channelizer_service_ble_center(const channelizer_service_t *s,
+                                        size_t idx);
+
+/**
+ * Register + configure @p reader (caller-owned storage, e.g. embedded in a
+ * channel processor) for channel @p idx: attaches it to the owning lane
+ * dispatcher and applies the channel view. Returns 0 on success, -1 on bad
+ * index/args or scratch exhaustion (reader left raw; caller destroys it).
+ * Readers must be destroyed before the service (dispatcher teardown).
+ */
+int channelizer_service_bredr_reader_init(channelizer_service_t *s,
+                                          size_t idx,
+                                          sample_reader_t *reader);
+int channelizer_service_ble_reader_init(channelizer_service_t *s,
+                                        size_t idx,
+                                        sample_reader_t *reader);
 
 #ifdef __cplusplus
 }

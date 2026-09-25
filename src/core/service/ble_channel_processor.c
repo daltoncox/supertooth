@@ -9,61 +9,44 @@
 #include "rssi_measurements.h"
 
 int ble_channel_processor_init(ble_channel_processor_t *proc,
-                               const channelizer_channel_t *ch,
                                uint16_t rf_channel_index)
 {
-    if (!proc || !ch || !ch->dispatcher ||
-        rf_channel_index >= BLE_RF_CHANNEL_COUNT)
+    if (!proc || rf_channel_index >= BLE_RF_CHANNEL_COUNT)
         return -1;
-    if (ch->M == 0u || ch->stride == 0u)
+    /* Stream layout lives on the pre-configured reader (service fills it
+     * before this runs). No memset here: it would wipe that configuration. */
+    if (proc->reader.view_stride == 0u)
         return -1;
-    memset(proc, 0, sizeof(*proc));
 
     proc->rf_channel_index    = rf_channel_index;
     proc->frequency_offset_hz = 0;
-    proc->center_frequency_hz = ch->center_hz;
+    proc->center_frequency_hz = proc->reader.view_center_hz;
     proc->samples_per_symbol  = BLE_SESSION_SAMPLES_PER_SYMBOL;
 
-    proc->bin           = ch->bin;
-    proc->bank_M        = ch->M;
-    proc->frame_stride  = ch->stride;
-    /* Bank output is 2*grid Msps per bin; the reader strides by grid/1MHz to
-     * reach 2 Msps, so the end-to-end RF->demod decimation comes straight
-     * from the service descriptor (D*M2*stride, D=1 narrowband). */
-    proc->input_decimation = ch->input_decimation;
-    proc->rssi_cal_db      = ch->rssi_cal_db;
+    /* Cached from the reader for the hot loop. */
+    proc->input_decimation = proc->reader.view_decimation;
+    proc->rssi_cal_db      = proc->reader.view_rssi_cal_db;
 
-    if (sample_reader_init(&proc->reader, ch->dispatcher) != 0)
+    proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samples_per_symbol,
+                                        3u, 0.5f, LIQUID_CPFSK_GMSK);
+    if (!proc->demodulator)
     {
         ble_channel_processor_destroy(proc);
         return -1;
     }
 
-    unsigned int m_taps   = 3u;
-    proc->demodulator = cpfskdem_create(1u, 0.5f, proc->samples_per_symbol,
-                                        m_taps, 0.5f, LIQUID_CPFSK_GMSK);
-    if (!proc->demodulator) { ble_channel_processor_destroy(proc); return -1; }
-
-    /* Decimated (post stride) buffer is at 2 Msps: block holds at most
-     * (SAMPLE_BLOCK_SAMPLE_CAPACITY / bank_M / frame_stride) samples. */
-    proc->buf_cap_samples = SAMPLE_BLOCK_SAMPLE_CAPACITY / ((size_t)ch->M * ch->stride) + 16u;
-    proc->decimated       = malloc(sizeof(float complex) * proc->buf_cap_samples);
-    if (!proc->decimated) { ble_channel_processor_destroy(proc); return -1; }
-
-    proc->abs_sample_scale = (proc->input_decimation > 0u)
-                             ? (uint64_t)(1000000000ull /
-                                          ((uint64_t)proc->input_decimation *
-                                           2000000ull))
-                             : 1u;
-
     uint8_t le_ch = ble_rf_to_le_channel(rf_channel_index);
     ble_bitstream_decoder_init(&proc->decoder, le_ch);
 
-    proc->prev_state       = BLE_SEARCHING;
-    proc->pkt_start_decim_sample = -1L;
-    proc->noise_floor_linear     = 0.0f;
-    proc->noise_floor_initialized = 0u;
-    proc->active           = 1;
+    proc->block_start_decim_sample = 0u;
+    proc->pkt_start_decim_sample   = -1L;
+    proc->prev_state               = BLE_SEARCHING;
+    proc->noise_floor_linear       = 0.0f;
+    proc->noise_floor_initialized  = 0u;
+    proc->valid_packets            = 0ul;
+    proc->dbg_blocks_seen          = 0u;
+    proc->active                   = 1;
+    /* session + reader left as the caller set them. */
     return 0;
 }
 
@@ -71,7 +54,7 @@ void ble_channel_processor_destroy(ble_channel_processor_t *proc)
 {
     if (!proc) return;
     if (proc->demodulator) cpfskdem_destroy(proc->demodulator);
-    free(proc->decimated);
+    proc->demodulator = NULL;
     sample_reader_destroy(&proc->reader);
     memset(proc, 0, sizeof(*proc));
 }
@@ -80,7 +63,8 @@ static int emit_frame(ble_channel_processor_t *proc,
                       unsigned long block_start_decim_sample,
                       unsigned int end_decim_sample,
                       unsigned int decim_out,
-                      unsigned long abs_block_base_radio)
+                      unsigned long abs_block_base_radio,
+                      const float complex *samples)
 {
     ble_frame_t frame;
     if (ble_bitstream_decoder_get_frame(&proc->decoder, &frame) != 0) return -1;
@@ -108,7 +92,7 @@ static int emit_frame(ble_channel_processor_t *proc,
         sig_start += RECEIVER_RSSI_DEMOD_DELAY_SAMPLES;
 
     float rssi_dbr = receiver_rssi_signal_dbr(
-        proc->decimated, sig_start, i_end, i_start_ui,
+        samples, sig_start, i_end, i_start_ui,
         &proc->noise_floor_linear, &proc->noise_floor_initialized,
         RECEIVER_RSSI_INVALID);
     rssi_dbr += proc->rssi_cal_db;
@@ -138,26 +122,23 @@ static int emit_frame(ble_channel_processor_t *proc,
     return 0;
 }
 
-int ble_channel_processor_process_block(ble_channel_processor_t *proc, sample_block_t *blk)
+int ble_channel_processor_process_stream(ble_channel_processor_t *proc,
+                                         const float complex *samples,
+                                         unsigned int count,
+                                         uint64_t base_radio)
 {
-    if (!proc || !proc->active || !blk) return -1;
+    if (!proc || !proc->active || !samples) return -1;
 
-    unsigned int decim_out;
+    unsigned int decim_out = count;
 
-    /* Frame-major block: out[frame*M + bin]. The bank runs at 2*grid Msps, decimated
-     * to 2 Msps by striding frame_stride frames (2 for a 2 MHz grid, 1 for 1 MHz). */
-    unsigned int frames = blk->num_samples / proc->bank_M;
-    decim_out = 0u;
-    for (unsigned int k = 0u; k < frames && decim_out < proc->buf_cap_samples; k += proc->frame_stride)
-        proc->decimated[decim_out++] = blk->samples[proc->bin + (size_t)k * proc->bank_M];
-    proc->block_start_decim_sample = blk->block_base_sample / proc->input_decimation;
+    proc->block_start_decim_sample = base_radio / proc->input_decimation;
 
     int dbg = proc->session ? proc->session->config.debug : 0;
     if (dbg && proc->dbg_blocks_seen < 4u)
         fprintf(stderr,
-                "[ble_proc rf=%u] block #%u: num_samples=%u decim_out=%u\n",
+                "[ble_proc rf=%u] block #%u: decim_out=%u\n",
                 proc->rf_channel_index, proc->dbg_blocks_seen,
-                blk->num_samples, decim_out);
+                decim_out);
     proc->dbg_blocks_seen++;
 
     unsigned long block_start_decim_sample = proc->block_start_decim_sample;
@@ -166,8 +147,9 @@ int ble_channel_processor_process_block(ble_channel_processor_t *proc, sample_bl
     for (unsigned int s = 0u; s < num_bits; s++)
     {
         unsigned int sample_index = s * proc->samples_per_symbol;
+        /* Liquid's demodulate omits const (it only reads); our stream is const. */
         uint32_t raw_sym_val = cpfskdem_demodulate(proc->demodulator,
-                                                    &proc->decimated[sample_index]);
+                                    (float complex *)&samples[sample_index]);
         uint8_t bit = (uint8_t)(raw_sym_val & 0x1u);
 
         ble_status_t status = ble_bitstream_decoder_push_bit(&proc->decoder, bit);
@@ -181,7 +163,7 @@ int ble_channel_processor_process_block(ble_channel_processor_t *proc, sample_bl
         {
             proc->valid_packets++;
             emit_frame(proc, block_start_decim_sample, sample_index,
-                       decim_out, blk->block_base_sample);
+                       decim_out, base_radio, samples);
         }
     }
     return 0;
@@ -193,19 +175,19 @@ void *ble_channel_worker(void *arg)
     if (!proc || !proc->session) return NULL;
 
     const _Atomic unsigned int *shutdown = &proc->session->shutdown_requested;
-    sample_block_t *block = NULL;
 
     for (;;)
     {
-        if (sample_reader_wait_pop(&proc->reader, shutdown, &block) != 0)
+        const float complex *samples;
+        unsigned int count;
+        uint64_t base;
+
+        /* The reader's single call pops, gathers and holds the block. */
+        if (sample_reader_next(&proc->reader, shutdown,
+                               &samples, &count, &base) != 0)
             break;
 
-        if (block)
-        {
-            ble_channel_processor_process_block(proc, block);
-            sample_block_release(block);
-            block = NULL;
-        }
+        ble_channel_processor_process_stream(proc, samples, count, base);
     }
 
     return NULL;

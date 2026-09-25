@@ -29,15 +29,9 @@ typedef struct {
     sample_reader_t reader;
 
     cpfskdem demodulator;
-    unsigned int input_decimation;
+    unsigned int input_decimation; /**< cached from reader.view_decimation */
     unsigned int samps_per_symbol;
-
-    unsigned int bin;
-    unsigned int bank_M;
-    float rssi_cal_db;
-
-    float complex *decimated;
-    size_t buf_cap_samples;
+    float rssi_cal_db;             /**< cached from reader.view_rssi_cal_db */
 
     /* Per-channel BR/EDR bitstream decoder (owns its own packet state). */
     bredr_bitstream_decoder_t decoder;
@@ -94,16 +88,23 @@ typedef struct {
     _Bool active;
 } bredr_channel_processor_t;
 
+/* The reader is configured by the channelizer service before init (bin,
+ * stride, centre and friends live on reader.view_*); init only wires the
+ * demodulator/decoder and caches stream scalars. */
 int  bredr_channel_processor_init(bredr_channel_processor_t *proc,
-                                  const channelizer_channel_t *ch,
                                   uint16_t rf_channel_index);
 
 void bredr_channel_processor_destroy(bredr_channel_processor_t *proc);
 
 void *bredr_channel_worker(void *arg);
 
-int  bredr_channel_processor_process_block(bredr_channel_processor_t *proc,
-                                           sample_block_t *blk);
+/* Demodulate one gathered stream (as returned by sample_reader_next):
+ * @p samples holds @p count contiguous 2 Msps samples, @p base_radio is
+ * the block's RF-domain base. */
+int  bredr_channel_processor_process_stream(bredr_channel_processor_t *proc,
+                                            const float complex *samples,
+                                            unsigned int count,
+                                            uint64_t base_radio);
 
 #ifdef __cplusplus
 }

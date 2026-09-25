@@ -111,42 +111,47 @@ static sample_dispatcher_t *make_rf(void)
     return rf;
 }
 
-static void check_descriptors(channelizer_service_t *s, const char *tag)
+static void check_readers(channelizer_service_t *s, const char *tag)
 {
-    channelizer_channel_t bredr[79];
-    channelizer_channel_t ble[40];
-    size_t nb = channelizer_service_get_bredr_channels(s, bredr, 79u);
-    size_t nl = channelizer_service_get_ble_channels(s, ble, 40u);
+    size_t nb = channelizer_service_get_bredr_count(s);
+    size_t nl = channelizer_service_get_ble_count(s);
     CHECK_TRUE(tag, nb > 0u && nl > 0u);
+    /* Bad indexes are rejected. */
+    {
+        sample_reader_t r;
+        memset(&r, 0, sizeof(r));
+        CHECK_TRUE(tag, channelizer_service_bredr_reader_init(s, nb, &r) != 0);
+        CHECK_TRUE(tag, channelizer_service_ble_reader_init(s, nl, &r) != 0);
+        CHECK_TRUE(tag, channelizer_service_bredr_center(s, nb) == 0u);
+        CHECK_TRUE(tag, channelizer_service_ble_center(s, nl) == 0u);
+    }
     for (size_t i = 0u; i < nb; i++)
     {
-        if (bredr[i].dispatcher == NULL || bredr[i].bin >= bredr[i].M ||
-            bredr[i].M != s->M_lane || bredr[i].stride != 1u ||
-            bredr[i].input_decimation != s->D * s->M2_lane)
+        sample_reader_t r;
+        memset(&r, 0, sizeof(r));
+        uint32_t center = channelizer_service_bredr_center(s, i);
+        if (channelizer_service_bredr_reader_init(s, i, &r) != 0 ||
+            center == 0u)
         {
-            printf("FAIL %s bredr[%zu] descriptor\n", tag, i);
+            printf("FAIL %s bredr[%zu] reader init\n", tag, i);
             g_failures++;
             break;
         }
-    }
-    /* Every descriptor's dispatcher must be one of the owned outputs. */
-    size_t nd = channelizer_service_dispatcher_count(s);
-    for (size_t i = 0u; i < nb; i++)
-    {
-        int found = 0;
-        for (size_t d = 0u; d < nd; d++)
+        if (r.view_bin >= r.view_M || r.view_M != s->M_lane ||
+            r.view_stride != 1u ||
+            r.view_decimation != s->D * s->M2_lane ||
+            r.view_center_hz != center ||
+            r.view_rate_hz != CHANNELIZER_BANK_OUTPUT_RATE_HZ)
         {
-            if (channelizer_service_dispatcher_at(s, d) ==
-                bredr[i].dispatcher)
-                found = 1;
-        }
-        if (!found)
-        {
-            printf("FAIL %s bredr[%zu] foreign dispatcher\n", tag, i);
+            printf("FAIL %s bredr[%zu] view\n", tag, i);
             g_failures++;
+            sample_reader_destroy(&r);
             break;
         }
+        sample_reader_destroy(&r);
     }
+    /* Lane outputs exist for the partitioned dispatchers. */
+    CHECK_TRUE(tag, channelizer_service_dispatcher_at(s, s->K) != NULL);
 }
 
 static void test_init_narrowband(void)
@@ -180,7 +185,7 @@ static void test_init_narrowband(void)
               (uint64_t)((int32_t)2412000000u - (int32_t)2411500000u +
                          1000000));
     CHECK_U64("narrowband rf readers", rf->reader_count, 1u);
-    check_descriptors(&s, "narrowband");
+    check_readers(&s, "narrowband");
     channelizer_service_destroy(&s);
     sample_dispatcher_destroy(rf);
     free(rf);
@@ -208,7 +213,7 @@ static void test_init_wideband(void)
     CHECK_U64("wideband D", s.D, 4u);
     CHECK_U64("wideband dispatchers",
               channelizer_service_dispatcher_count(&s), 8u);
-    check_descriptors(&s, "wideband");
+    check_readers(&s, "wideband");
     channelizer_service_destroy(&s);
     sample_dispatcher_destroy(rf);
     free(rf);
