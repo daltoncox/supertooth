@@ -5,7 +5,6 @@
 
 #include "channelizer_bank.h"
 
-#include <math.h>
 #include <string.h>
 
 unsigned int channelizer_bank_bins_for_rate(unsigned int sample_rate_hz,
@@ -26,11 +25,6 @@ uint32_t channelizer_bank_grid_align(uint32_t lo_hz, uint32_t grid_hz)
         return lo_hz;
     uint32_t half = grid_hz / 2u;
     return ((lo_hz + half) / grid_hz) * grid_hz;
-}
-
-int32_t channelizer_bank_grid_shift(uint32_t lo_hz, uint32_t grid_hz)
-{
-    return (int32_t)channelizer_bank_grid_align(lo_hz, grid_hz) - (int32_t)lo_hz;
 }
 
 int channelizer_bank_bin_for_center(unsigned int M, uint32_t lo_eff_hz,
@@ -66,11 +60,11 @@ uint32_t channelizer_bank_center_for_bin(unsigned int M, uint32_t lo_eff_hz,
 }
 
 int channelizer_bank_init(channelizer_bank_t *q,
-                          unsigned int sample_rate_hz,
-                          uint32_t lo_hz,
-                          uint32_t grid_hz,
-                          unsigned int m,
-                          float as)
+                           unsigned int sample_rate_hz,
+                           uint32_t lo_eff_hz,
+                           uint32_t grid_hz,
+                           unsigned int m,
+                           float as)
 {
     if (!q || grid_hz == 0u)
         return -1;
@@ -84,26 +78,9 @@ int channelizer_bank_init(channelizer_bank_t *q,
     q->M2             = M / 2u;
     q->sample_rate_hz = sample_rate_hz;
     q->grid_hz        = grid_hz;
-    q->lo_hz          = lo_hz;
-    /* The generic aligner covers every grid: 2402 MHz is itself a multiple
-     * of 2 MHz, so BLE centers need no special base. */
-    q->lo_eff_hz      = channelizer_bank_grid_align(lo_hz, grid_hz);
-    q->shift_hz       = (int32_t)q->lo_eff_hz - (int32_t)lo_hz;
-
-    if (q->shift_hz != 0)
-    {
-        q->nco = nco_crcf_create(LIQUID_NCO);
-        if (!q->nco)
-        {
-            channelizer_bank_destroy(q);
-            return -1;
-        }
-        /* mix_block_down multiplies by exp(-j*omega*n), moving a component at
-         * baseband f to f - shift. We want the grid to move by -shift so that
-         * (center - lo) becomes (center - lo_eff). */
-        double omega = ((double)q->shift_hz / (double)sample_rate_hz) * 2.0 * M_PI;
-        nco_crcf_set_frequency(q->nco, (float)omega);
-    }
+    /* The caller premixes (see ddc_stage_t): lo_eff is already on the grid
+     * the bins are centred on, so the bank itself never mixes. */
+    q->lo_eff_hz      = lo_eff_hz;
 
     q->pfb = firpfbch2_crcf_create_kaiser(LIQUID_ANALYZER, M, m, as);
     if (!q->pfb)
@@ -129,10 +106,7 @@ void channelizer_bank_destroy(channelizer_bank_t *q)
         return;
     if (q->pfb)
         firpfbch2_crcf_destroy(q->pfb);
-    if (q->nco)
-        nco_crcf_destroy(q->nco);
     free(q->carry);
-    free(q->mix);
     memset(q, 0, sizeof(*q));
 }
 
@@ -142,22 +116,8 @@ void channelizer_bank_reset(channelizer_bank_t *q)
         return;
     if (q->pfb)
         firpfbch2_crcf_reset(q->pfb);
-    if (q->nco)
-        nco_crcf_reset(q->nco);
     q->carry_len  = 0u;
     q->frames_out = 0u;
-}
-
-static int channelizer_bank_reserve_mix(channelizer_bank_t *q, size_t n)
-{
-    if (q->mix_cap >= n)
-        return 0;
-    float complex *p = (float complex *)realloc(q->mix, n * sizeof(float complex));
-    if (!p)
-        return -1;
-    q->mix     = p;
-    q->mix_cap = n;
-    return 0;
 }
 
 int channelizer_bank_execute(channelizer_bank_t *q,
@@ -176,26 +136,15 @@ int channelizer_bank_execute(channelizer_bank_t *q,
     if (n == 0u)
         return 0;
 
-    /* ---- 1. half-bin pre-rotation so the channel grid lands on bin centres */
-    const float complex *src;
-    if (q->nco)
-    {
-        if (channelizer_bank_reserve_mix(q, n) != 0)
-            return -1;
-        nco_crcf_mix_block_down(q->nco, (float complex *)in, q->mix, (unsigned int)n);
-        src = q->mix;
-    }
-    else
-    {
-        src = in;
-    }
-
+    /* The input is already premixed by the caller, so frames are read
+     * straight from it (copy-free) and written frame-major. */
+    const float complex *src = in;
     const unsigned int M  = q->M;
     const unsigned int M2 = q->M2;
     unsigned int frames = 0u;
     size_t consumed = 0u;
 
-    /* ---- 2. finish the frame left over from the previous call */
+    /* ---- finish the frame left over from the previous call */
     if (q->carry_len > 0u)
     {
         unsigned int need = M2 - q->carry_len;
@@ -212,7 +161,7 @@ int channelizer_bank_execute(channelizer_bank_t *q,
         q->carry_len = 0u;
     }
 
-    /* ---- 3. whole frames straight from the input, written frame-major */
+    /* ---- whole frames straight from the input, written frame-major */
     while (consumed + M2 <= n)
     {
         firpfbch2_crcf_execute(q->pfb,
@@ -222,7 +171,7 @@ int channelizer_bank_execute(channelizer_bank_t *q,
         consumed += M2;
     }
 
-    /* ---- 4. stash the ragged tail for the next call */
+    /* ---- stash the ragged tail for the next call */
     if (consumed < n)
     {
         q->carry_len = (unsigned int)(n - consumed);

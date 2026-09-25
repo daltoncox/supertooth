@@ -17,7 +17,7 @@ int ddc_stage_init(ddc_stage_t *q,
                     unsigned int m,
                     float as)
 {
-    if (!q || sample_rate_in == 0u || decim < 2u ||
+    if (!q || sample_rate_in == 0u || decim < 1u ||
         decim > DDC_STAGE_MAX_DECIM)
         return -1;
     if (sample_rate_in % decim != 0u)
@@ -45,6 +45,13 @@ int ddc_stage_init(ddc_stage_t *q,
         double omega =
             ((double)q->shift_hz / (double)sample_rate_in) * 2.0 * M_PI;
         nco_crcf_set_frequency(q->nco, (float)omega);
+    }
+
+    /* decim == 1 is premix-only: no FIR, no scale, no fractional carry. */
+    if (decim == 1u)
+    {
+        q->samples_out = 0u;
+        return 0;
     }
 
     q->decim_fir = firdecim_crcf_create_kaiser(decim, m, as);
@@ -119,6 +126,28 @@ int ddc_stage_execute(ddc_stage_t *q,
 {
     if (!q || !in || !out || !n_out)
         return -1;
+
+    /* Premix-only: NCO straight into the caller's buffer, 1:1. No scratch
+     * (nothing to stage), no carry, no second copy. The shared input is
+     * never mutated in place. */
+    if (q->decim == 1u)
+    {
+        if (out_base)
+            *out_base = in_base;
+        if (n == 0u)
+        {
+            *n_out = 0u;
+            return 0;
+        }
+        if (q->nco)
+            nco_crcf_mix_block_down(q->nco, (float complex *)in, out,
+                                    (unsigned int)n);
+        else if (out != in)
+            memcpy(out, in, n * sizeof(float complex));
+        q->samples_out += (uint64_t)n;
+        *n_out = (unsigned int)n;
+        return 0;
+    }
 
     unsigned int prev_carry = q->carry_len;
     if (out_base)

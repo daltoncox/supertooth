@@ -166,10 +166,20 @@ static void test_init_narrowband(void)
     CHECK_TRUE("narrowband init",
                channelizer_service_init(&s, rf, &cfg) == 0);
     CHECK_U64("narrowband K", s.K, 1u);
+    CHECK_U64("narrowband D", s.D, 1u);
     CHECK_U64("narrowband dispatchers",
-              channelizer_service_dispatcher_count(&s), 1u);
+              channelizer_service_dispatcher_count(&s), 2u);
     CHECK_U64("narrowband bredr", s.bredr_count, 20u);
     CHECK_U64("narrowband ble", s.ble_count, 10u);
+    /* Premix-only first stage: decim 1, shift is the grid residual, no FIR. */
+    CHECK_U64("narrowband ddc decim", s.ddc[0].decim, 1u);
+    CHECK_U64("narrowband ddc rate", s.ddc[0].sample_rate_out, 20000000u);
+    CHECK_TRUE("narrowband ddc no fir", s.ddc[0].decim_fir == NULL);
+    CHECK_U64("narrowband ddc shift",
+              (uint64_t)(s.ddc[0].shift_hz + 1000000),
+              (uint64_t)((int32_t)2412000000u - (int32_t)2411500000u +
+                         1000000));
+    CHECK_U64("narrowband rf readers", rf->reader_count, 1u);
     check_descriptors(&s, "narrowband");
     channelizer_service_destroy(&s);
     sample_dispatcher_destroy(rf);

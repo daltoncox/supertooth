@@ -3,16 +3,18 @@
  * @brief Two-stage channelization service: owns DDC + PFB DSP objects,
  *        intermediate/output dispatchers, and worker threads.
  *
- * Replaces service/channelizer_thread.h (single PFB thread). The service is
- * configured by wideband rate + grid and stages the work so no single thread
- * carries more than a ~20-channel PFB:
+ * Every lane is uniformly DDC -> PFB on its own threads, so no single
+ * thread carries more than one stage:
  *
- *   K = 1 (Fs <= 20 Msps): legacy path. One PFB bank reads the RF
- *           dispatcher directly, no DDC, no intermediate dispatcher.
+ *   K = 1 (Fs <= 20 Msps): one premix-only DDC (NCO, decim == 1, no FIR)
+ *           feeds one PFB (M <= 20) through a private sub dispatcher.
  *   K > 1 (Fs up to 80 Msps): K DDC lanes (nco + firdecim, decim = K)
- *           broadcast-read the RF dispatcher into K private 20 Msps-class
- *           sub dispatchers; K PFB lanes (each M_lane <= 20) publish
+ *           broadcast-read the RF dispatcher into K private sub
+ *           dispatchers; K PFB lanes (each M_lane <= 20) publish
  *           frame-major blocks to K partitioned output dispatchers.
+ *
+ * The PFB itself never mixes: the DDC's single folded NCO covers lane
+ * translation + grid premix on every path.
  *
  * Lane plan (no tables): K = ceil(Fs / 20 MHz), capped at 4, with Fs % K
  * == 0 and M_lane = (Fs/K)/grid even. This yields exactly the supported
@@ -86,7 +88,7 @@ struct channelizer_service
     channelizer_service_config_t cfg;
 
     unsigned int K;            /**< lane count (1 narrowband, 2..4 wideband) */
-    unsigned int D;            /**< DDC decimation (== K; 1 when K == 1) */
+    unsigned int D;            /**< DDC decimation (== K; 1 = premix-only) */
     unsigned int sub_rate_hz;  /**< per-lane rate = Fs / K */
     unsigned int M_lane;       /**< per-lane PFB bins */
     unsigned int M2_lane;      /**< M_lane / 2 */
@@ -96,9 +98,9 @@ struct channelizer_service
     uint32_t     sub_centers_hz[CHANNELIZER_SERVICE_MAX_LANES];
 
     sample_dispatcher_t *rf; /**< borrowed RF dispatcher (not owned) */
-    ddc_stage_t          ddc[CHANNELIZER_SERVICE_MAX_LANES]; /**< K > 1 only */
+    ddc_stage_t          ddc[CHANNELIZER_SERVICE_MAX_LANES]; /**< one per lane */
     channelizer_bank_t   pfb[CHANNELIZER_SERVICE_MAX_LANES];
-    sample_dispatcher_t *sub[CHANNELIZER_SERVICE_MAX_LANES]; /**< K > 1, owned */
+    sample_dispatcher_t *sub[CHANNELIZER_SERVICE_MAX_LANES]; /**< owned, one per lane */
     sample_dispatcher_t *out[CHANNELIZER_SERVICE_MAX_LANES]; /**< owned */
     sample_reader_t      ddc_readers[CHANNELIZER_SERVICE_MAX_LANES];
     sample_reader_t      pfb_readers[CHANNELIZER_SERVICE_MAX_LANES];
@@ -110,12 +112,11 @@ struct channelizer_service
     channelizer_channel_t ble_desc[CHANNELIZER_SERVICE_MAX_BLE_CHANNELS];
     size_t                ble_count;
 
-    /* Worker threads (service-owned): K DDC + K PFB, or 1 PFB when K == 1. */
+    /* Worker threads (service-owned): K DDC + K PFB. */
     pthread_t worker_threads[2u * CHANNELIZER_SERVICE_MAX_LANES];
     struct {
         channelizer_service_t *svc;
         unsigned int lane;
-        int is_ddc;
     } worker_ctx[2u * CHANNELIZER_SERVICE_MAX_LANES];
     size_t    worker_count;
     int       running;
@@ -128,8 +129,9 @@ struct channelizer_service
  * -------------------------------------------------------------------------- */
 
 /**
- * Lane plan for a wideband rate + grid: smallest K in 1..4 with Fs % K == 0,
- * Fs/K <= 20 MHz and M_lane = (Fs/K)/grid even.
+ * Lane plan for a wideband rate + grid: K = ceil(Fs / 20 MHz), capped at 4,
+ * with Fs % K == 0 and M_lane = (Fs/K)/grid even. Fewest lanes that fit the
+ * per-lane budget (minimum thread count).
  * @return 0 on success (K/M_lane written), -1 when unsupported.
  */
 int channelizer_service_plan(unsigned int sample_rate_hz,
@@ -137,7 +139,7 @@ int channelizer_service_plan(unsigned int sample_rate_hz,
                               unsigned int *K_out,
                               unsigned int *M_lane_out);
 
-/** Nonzero when @p C is a supported BR/EDR channel count (the 22 values). */
+/** Nonzero when @p C is a supported BR/EDR channel count. */
 int channelizer_service_valid_bredr_count(unsigned int C);
 
 /**

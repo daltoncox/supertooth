@@ -23,6 +23,7 @@
 #include <stdlib.h>
 
 #include "channelizer_bank.h"
+#include "ddc_stage.h"
 #include "rssi_measurements.h"
 
 static int g_failures = 0;
@@ -165,14 +166,32 @@ static void test_bank_gain_uniformity(void)
         return;
     }
 
-    /* Production BR/EDR tuning: 20 channels, LO on a half-MHz boundary so the
-     * wideband pre-rotation NCO is active. */
+    /* Production BR/EDR tuning: 20 channels, LO on a half-MHz boundary so
+     * the premix stage is active. Mirrors the service chain: DDC (premix,
+     * decim == 1) feeds an NCO-free bank centred on the aligned LO. */
+    uint32_t lo_hz = 2411500000u;
+    uint32_t lo_eff_hz = channelizer_bank_grid_align(
+        lo_hz, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
+    ddc_stage_t premix;
+    CHECK(ddc_stage_init(&premix, 20000000u, lo_hz, lo_eff_hz, 1u,
+                         CHANNELIZER_BANK_DEFAULT_M,
+                         CHANNELIZER_BANK_DEFAULT_AS) == 0,
+          "premix init failed%s", "");
     channelizer_bank_t q;
-    CHECK(channelizer_bank_init(&q, 20000000u, 2411500000u,
+    CHECK(channelizer_bank_init(&q, 20000000u, lo_eff_hz,
                                 CHANNELIZER_BANK_GRID_BR_EDR_HZ,
                                 CHANNELIZER_BANK_DEFAULT_M,
                                 CHANNELIZER_BANK_DEFAULT_AS) == 0,
           "channelizer_bank_init failed%s", "");
+
+    float complex *rot = malloc(n * sizeof(float complex));
+    if (!rot)
+    {
+        printf("FAIL out of memory\n");
+        g_failures++;
+        free(in);
+        return;
+    }
 
     double lo = 1e300, hi = -1e300;
     unsigned int mapped = 0u;
@@ -184,8 +203,12 @@ static void test_bank_gain_uniformity(void)
         if (bin < 0)
             continue;
 
-        make_tone(in, n, (double)center - (double)q.lo_hz, 20000000.0);
-        double db = 10.0 * log10(bin_power(&q, in, n, (unsigned int)bin) + 1e-300);
+        make_tone(in, n, (double)center - (double)lo_hz, 20000000.0);
+        ddc_stage_reset(&premix);
+        unsigned int n_out = 0u;
+        ddc_stage_execute(&premix, in, n, 0ull, rot, &n_out, NULL);
+        double db = 10.0 * log10(bin_power(&q, rot, n_out,
+                                           (unsigned int)bin) + 1e-300);
         if (db < lo) lo = db;
         if (db > hi) hi = db;
         mapped++;
@@ -193,6 +216,8 @@ static void test_bank_gain_uniformity(void)
     CHECK(mapped == 20u, "mapped %u channels, expected 20", mapped);
     CHECK(hi - lo < 0.25, "per-bin gain spread %.4f dB (expected < 0.25)",
           hi - lo);
+    free(rot);
+    ddc_stage_destroy(&premix);
     channelizer_bank_destroy(&q);
 
     /* The bank normalises to unity for any bin count, so the fixed dBr offset

@@ -40,10 +40,14 @@ static void test_init_validation(void)
 {
     ddc_stage_t q;
     memset(&q, 0, sizeof(q));
-    /* decim < 2 rejected */
-    CHECK_TRUE("decim 1 rejected",
+    /* decim 1 = premix-only, accepted */
+    CHECK_TRUE("decim 1 accepted",
                ddc_stage_init(&q, 80000000u, 2441000000u, 2431000000u,
-                              1u, 4u, 60.0f) != 0);
+                              1u, 4u, 60.0f) == 0);
+    CHECK_U64("premix out rate", q.sample_rate_out, 80000000u);
+    CHECK_TRUE("premix no fir", q.decim_fir == NULL);
+    ddc_stage_destroy(&q);
+    memset(&q, 0, sizeof(q));
     /* decim > max rejected */
     CHECK_TRUE("decim 5 rejected",
                ddc_stage_init(&q, 80000000u, 2441000000u, 2431000000u,
@@ -190,11 +194,91 @@ static void test_tone_to_dc(void)
     ddc_stage_destroy(&q);
 }
 
+static void test_premix_passthrough(void)
+{
+    /* decim == 1: NCO straight to out, 1:1, out_base == in_base, no carry
+     * ever engages. Phase must stay continuous across split calls. */
+    const unsigned int FS = 20000000u;
+    const uint32_t LO = 2411500000u, SUB = 2412000000u; /* +0.5 MHz */
+    ddc_stage_t q;
+    memset(&q, 0, sizeof(q));
+    if (ddc_stage_init(&q, FS, LO, SUB, 1u, 4u, 60.0f) != 0)
+    {
+        printf("FAIL premix init\n");
+        g_failures++;
+        return;
+    }
+
+    const size_t N = 65536u;
+    float complex *in = malloc(N * sizeof(*in));
+    float complex *o1 = malloc(N * sizeof(*o1));
+    float complex *o2 = malloc(N * sizeof(*o2));
+    if (!in || !o1 || !o2)
+    {
+        printf("FAIL alloc premix\n");
+        g_failures++;
+        free(in);
+        free(o1);
+        free(o2);
+        ddc_stage_destroy(&q);
+        return;
+    }
+    /* Tone at the subband centre (baseband +0.5 MHz) must emerge at DC. */
+    double omega = 0.5e6 / (double)FS * 2.0 * M_PI;
+    for (size_t i = 0u; i < N; i++)
+        in[i] = cexpf(_Complex_I * (float)(omega * (double)i));
+
+    /* Split across two calls at an odd boundary: counts/bases stay 1:1. */
+    size_t half = N / 2u + 1u;
+    unsigned int n_a = 0u, n_b = 0u;
+    uint64_t b_a = 0u, b_b = 0u;
+    ddc_stage_execute(&q, in, half, 1000000ull, o1, &n_a, &b_a);
+    ddc_stage_execute(&q, &in[half], N - half, 1000000ull + half, o2,
+                      &n_b, &b_b);
+    CHECK_U64("premix count a", n_a, half);
+    CHECK_U64("premix count b", n_b, N - half);
+    CHECK_U64("premix base a", b_a, 1000000ull);
+    CHECK_U64("premix base b", b_b, 1000000ull + half);
+
+    /* Joined output is DC at unity magnitude: phase-continuous premix. */
+    double mag_sum = 0.0, ph_sum = 0.0;
+    unsigned int ph_n = 0u;
+    float complex prev = o1[half - 1u];
+    for (size_t i = 0u; i < N - half; i++)
+    {
+        mag_sum += cabsf(o2[i]);
+        ph_sum += cargf(o2[i] * conjf(prev));
+        prev = o2[i];
+        ph_n++;
+    }
+    for (size_t i = 0u; i < half; i++)
+        mag_sum += cabsf(o1[i]);
+    double mag = mag_sum / (double)N;
+    if (fabs(mag - 1.0) > 0.01)
+    {
+        printf("FAIL premix mag %f (want ~1.0)\n", mag);
+        g_failures++;
+    }
+    /* Boundary + interior drift: one symbol-free DC stream. */
+    double mean_dphi = ph_sum / (double)ph_n;
+    if (fabs(mean_dphi) > 0.01)
+    {
+        printf("FAIL premix drift %f rad/sample (want ~0)\n", mean_dphi);
+        g_failures++;
+    }
+
+    free(in);
+    free(o1);
+    free(o2);
+    ddc_stage_destroy(&q);
+}
+
 int main(void)
 {
     test_init_validation();
     test_carry_and_bases();
     test_tone_to_dc();
+    test_premix_passthrough();
 
     if (g_failures)
     {

@@ -19,10 +19,11 @@
  *  - Output rate: firpfbch2 is natively 2x oversampled (M/2 in -> M out), so
  *                 every bin emerges at exactly 2.000 Msps, which is what
  *                 `cpfskdem(k=2)` already expects.  No trailing resampler.
- *  - Alignment:   `session_tune()` may put the LO on a half-MHz boundary for
- *                 DC-spur avoidance, which is off-grid from the channel raster.
- *                 A single wideband NCO rotates the stream by the residual so
- *                 the channel grid lands on bin centres.
+ *  - Alignment:   the input must already sit on the channel raster: the
+ *                 caller (a `ddc_stage_t` premix, including its decim == 1
+ *                 premix-only mode) rotates the stream by the LO grid
+ *                 residual, so the channel grid lands on bin centres.  The
+ *                 bank itself does no mixing.
  *  - Nyquist bin: because the bank is 2x oversampled, bin M/2 is an ordinary
  *                 complex bin whose +/-grid window wraps circularly.  It is
  *                 fully usable, so an N MHz span yields N usable channels.
@@ -99,20 +100,13 @@ typedef struct
     unsigned int sample_rate_hz;
     uint32_t     grid_hz;    /**< channel spacing (Hz) */
 
-    uint32_t lo_hz;          /**< physical radio LO */
     uint32_t lo_eff_hz;      /**< grid-aligned LO the bins are centred on */
-    int32_t  shift_hz;       /**< mix-down applied to the input: lo_eff - lo */
 
-    nco_crcf       nco;      /**< NULL when shift_hz == 0 */
     firpfbch2_crcf pfb;
 
     /** Partial frame carried across execute() calls. */
     float complex *carry;
     unsigned int   carry_len;
-
-    /** Scratch for the pre-rotated stream. */
-    float complex *mix;
-    size_t         mix_cap;
 
     /** Monotonic count of frames emitted since reset. */
     uint64_t frames_out;
@@ -132,9 +126,6 @@ unsigned int channelizer_bank_bins_for_rate(unsigned int sample_rate_hz,
  *  base. */
 uint32_t channelizer_bank_grid_align(uint32_t lo_hz, uint32_t grid_hz);
 
-/** Mix-down applied to the input so the channel grid lands on bin centres. */
-int32_t channelizer_bank_grid_shift(uint32_t lo_hz, uint32_t grid_hz);
-
 /**
  * Bin index carrying @p center_hz, or -1 when the channel is outside the span.
  * @p lo_eff_hz must be grid-aligned (see channelizer_bank_grid_align).
@@ -151,11 +142,11 @@ uint32_t channelizer_bank_center_for_bin(unsigned int M, uint32_t lo_eff_hz,
  * -------------------------------------------------------------------------- */
 
 int  channelizer_bank_init(channelizer_bank_t *q,
-                           unsigned int sample_rate_hz,
-                           uint32_t lo_hz,
-                           uint32_t grid_hz,
-                           unsigned int m,
-                           float as);
+                            unsigned int sample_rate_hz,
+                            uint32_t lo_eff_hz,
+                            uint32_t grid_hz,
+                            unsigned int m,
+                            float as);
 
 void channelizer_bank_destroy(channelizer_bank_t *q);
 void channelizer_bank_reset(channelizer_bank_t *q);

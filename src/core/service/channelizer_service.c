@@ -245,13 +245,13 @@ int channelizer_service_init(channelizer_service_t *s,
     }
     s->grid_actual_hz = grid;
     s->K              = K;
-    s->D              = K; /* Fs/sub_rate; 1 when K == 1 */
+    s->D              = K; /* DDC decimation; 1 = premix-only */
     s->sub_rate_hz    = cfg->sample_rate_hz / K;
     s->M_lane         = M_lane;
     s->M2_lane        = M_lane / 2u;
     /* Wideband grid anchor: sub-centres inherit this alignment, so every
-     * staged (K > 1) lane is grid-aligned and its PFB runs NCO-free (the
-     * DDC's single folded NCO covers translation + premix). */
+     * PFB runs NCO-free (the DDC's single folded NCO covers lane
+     * translation + grid premix on every path). */
     s->lo_eff_hz      = channelizer_bank_grid_align(cfg->lo_hz, grid);
     s->span_lo_hz = (uint32_t)((int64_t)s->lo_eff_hz -
                                (int64_t)(cfg->sample_rate_hz / 2u));
@@ -270,42 +270,36 @@ int channelizer_service_init(channelizer_service_t *s,
     unsigned int n_out = 0u, n_sub = 0u, n_ddc = 0u, n_pfb = 0u;
     unsigned int n_rd_ddc = 0u, n_rd_pfb = 0u;
 
-    /* Owned dispatchers: K outputs always; K intermediates when staged. */
+    /* Owned dispatchers: K intermediates (DDC output) + K lane outputs. */
     for (unsigned int k = 0u; k < K; k++)
     {
         if (svc_alloc_dispatcher(&s->out[k]) != 0)
             goto fail;
         n_out++;
     }
-    if (K > 1u)
-    {
-        for (unsigned int k = 0u; k < K; k++)
-        {
-            if (svc_alloc_dispatcher(&s->sub[k]) != 0)
-                goto fail;
-            n_sub++;
-        }
-        for (unsigned int k = 0u; k < K; k++)
-        {
-            /* Single folded NCO per lane: lane offset + grid residual. */
-            if (ddc_stage_init(&s->ddc[k], cfg->sample_rate_hz,
-                                cfg->lo_hz, s->sub_centers_hz[k], K,
-                                DDC_STAGE_DEFAULT_M,
-                                DDC_STAGE_DEFAULT_AS) != 0)
-                goto fail;
-            n_ddc++;
-        }
-        s->dsps_live = 1;
-    }
     for (unsigned int k = 0u; k < K; k++)
     {
-        /* K > 1: the DDC already translated + premixed, so the lane PFB is
-         * fed its grid-aligned sub-centre and runs NCO-free. K == 1 has no
-         * DDC: feed the raw LO exactly like the legacy single bank so the
-         * PFB keeps its own residual (half-channel premix) NCO. */
-        uint32_t pfb_lo = (K > 1u) ? s->sub_centers_hz[k] : cfg->lo_hz;
+        if (svc_alloc_dispatcher(&s->sub[k]) != 0)
+            goto fail;
+        n_sub++;
+    }
+    /* One DDC per lane: premix-only (decim == 1) at K == 1, nco + firdecim
+     * above that. The shift folds lane translation + grid residual into a
+     * single NCO everywhere. */
+    for (unsigned int k = 0u; k < K; k++)
+    {
+        if (ddc_stage_init(&s->ddc[k], cfg->sample_rate_hz,
+                            cfg->lo_hz, s->sub_centers_hz[k], K,
+                            DDC_STAGE_DEFAULT_M,
+                            DDC_STAGE_DEFAULT_AS) != 0)
+            goto fail;
+        n_ddc++;
+    }
+    /* One NCO-free PFB per lane, fed its grid-aligned sub-centre. */
+    for (unsigned int k = 0u; k < K; k++)
+    {
         if (channelizer_bank_init(&s->pfb[k], s->sub_rate_hz,
-                                   pfb_lo, grid, m,
+                                   s->sub_centers_hz[k], grid, m,
                                    as) != 0)
             goto fail;
         n_pfb++;
@@ -313,26 +307,16 @@ int channelizer_service_init(channelizer_service_t *s,
     }
     s->dsps_live = 1;
 
-    /* Readers: DDC lanes broadcast-read RF; PFB lanes read their sub lane
-     * (or RF directly when K == 1). */
-    if (K > 1u)
+    /* Readers: DDC lanes broadcast-read RF; PFB lanes read their sub lane. */
+    for (unsigned int k = 0u; k < K; k++)
     {
-        for (unsigned int k = 0u; k < K; k++)
-        {
-            if (sample_reader_init(&s->ddc_readers[k], rf) != 0)
-                goto fail;
-            n_rd_ddc++;
-        }
-        for (unsigned int k = 0u; k < K; k++)
-        {
-            if (sample_reader_init(&s->pfb_readers[k], s->sub[k]) != 0)
-                goto fail;
-            n_rd_pfb++;
-        }
+        if (sample_reader_init(&s->ddc_readers[k], rf) != 0)
+            goto fail;
+        n_rd_ddc++;
     }
-    else
+    for (unsigned int k = 0u; k < K; k++)
     {
-        if (sample_reader_init(&s->pfb_readers[0], rf) != 0)
+        if (sample_reader_init(&s->pfb_readers[k], s->sub[k]) != 0)
             goto fail;
         n_rd_pfb++;
     }
@@ -369,6 +353,39 @@ fail:
     return -1;
 }
 
+/* Acquire one output block (live: NULL + drop note on exhaustion;
+ * exhaustive: wait, NULL only on shutdown). */
+static sample_block_t *svc_acquire_block(sample_dispatcher_t *dst,
+                                         const channelizer_service_t *s)
+{
+    sample_block_t *b = s->cfg.exhaustive
+        ? sample_dispatcher_acquire_blocking(dst, s->cfg.shutdown)
+        : sample_dispatcher_acquire_block(dst);
+    if (!b && !s->cfg.exhaustive)
+        sample_dispatcher_note_drop(dst, s->cfg.debug);
+    return b;
+}
+
+/* Push one filled block. Returns 0 to keep going, -1 when an exhaustive
+ * worker must stop (shutdown observed while pushing). */
+static int svc_push_block(sample_dispatcher_t *dst, sample_block_t *b,
+                          const channelizer_service_t *s)
+{
+    if (!s->cfg.exhaustive)
+    {
+        sample_dispatcher_push_block(dst, b);
+        sample_block_release(b);
+        return 0;
+    }
+    sample_dispatcher_push_blocking(dst, b, s->cfg.shutdown);
+    sample_block_release(b);
+    return (s->cfg.shutdown &&
+            atomic_load_explicit(s->cfg.shutdown,
+                                 memory_order_acquire) != 0u)
+               ? -1
+               : 0;
+}
+
 static void *svc_ddc_worker(void *arg)
 {
     channelizer_service_t *s;
@@ -382,8 +399,6 @@ static void *svc_ddc_worker(void *arg)
     sample_reader_t *reader  = &s->ddc_readers[lane];
     sample_dispatcher_t *dst = s->sub[lane];
     const _Atomic unsigned int *shutdown = s->cfg.shutdown;
-    int exhaustive = s->cfg.exhaustive;
-    int debug      = s->cfg.debug;
 
     sample_block_t *rfb = NULL;
     for (;;)
@@ -393,16 +408,12 @@ static void *svc_ddc_worker(void *arg)
         if (!rfb)
             continue;
 
-        sample_block_t *db = exhaustive
-            ? sample_dispatcher_acquire_blocking(dst, shutdown)
-            : sample_dispatcher_acquire_block(dst);
+        sample_block_t *db = svc_acquire_block(dst, s);
         if (!db)
         {
-            if (!exhaustive)
-                sample_dispatcher_note_drop(dst, debug);
             sample_block_release(rfb);
             rfb = NULL;
-            if (exhaustive)
+            if (s->cfg.exhaustive)
                 break; /* shutdown requested */
             continue;
         }
@@ -415,26 +426,11 @@ static void *svc_ddc_worker(void *arg)
         db->num_samples       = n_out;
         db->block_base_sample = out_base;
 
-        if (exhaustive)
-        {
-            sample_dispatcher_push_blocking(dst, db, shutdown);
-            sample_block_release(db);
-            if (shutdown &&
-                atomic_load_explicit(shutdown,
-                                      memory_order_acquire) != 0u)
-            {
-                sample_block_release(rfb);
-                rfb = NULL;
-                break;
-            }
-        }
-        else
-        {
-            sample_dispatcher_push_block(dst, db);
-            sample_block_release(db);
-        }
+        int stop = svc_push_block(dst, db, s);
         sample_block_release(rfb);
         rfb = NULL;
+        if (stop != 0)
+            break;
     }
     return NULL;
 }
@@ -456,8 +452,6 @@ static void *svc_pfb_worker(void *arg)
     /* Sub-domain offsets convert back to input-domain samples via D. */
     const uint64_t lane_scale = (uint64_t)s->D;
     const _Atomic unsigned int *shutdown = s->cfg.shutdown;
-    int exhaustive = s->cfg.exhaustive;
-    int debug      = s->cfg.debug;
 
     sample_block_t *sb = NULL;
     for (;;)
@@ -471,21 +465,16 @@ static void *svc_pfb_worker(void *arg)
          * max_in-sized sub-chunks. Bases stay in input-domain units. */
         uint64_t base = sb->block_base_sample;
         size_t done   = 0u;
-        while (done < (size_t)sb->num_samples)
+        int stop      = 0;
+        while (done < (size_t)sb->num_samples && stop == 0)
         {
             size_t n = (size_t)sb->num_samples - done;
             if (n > max_in)
                 n = max_in;
 
-            sample_block_t *fm = exhaustive
-                ? sample_dispatcher_acquire_blocking(dst, shutdown)
-                : sample_dispatcher_acquire_block(dst);
+            sample_block_t *fm = svc_acquire_block(dst, s);
             if (!fm)
-            {
-                if (!exhaustive)
-                    sample_dispatcher_note_drop(dst, debug);
-                break;
-            }
+                break; /* live: drop rest of block; exhaustive: shutdown */
 
             unsigned int frames_out = 0u;
             channelizer_bank_execute(bank, &sb->samples[done], n,
@@ -493,20 +482,7 @@ static void *svc_pfb_worker(void *arg)
             fm->num_samples       = (unsigned int)((size_t)M * frames_out);
             fm->block_base_sample = base + (uint64_t)done * lane_scale;
 
-            if (exhaustive)
-            {
-                sample_dispatcher_push_blocking(dst, fm, shutdown);
-                sample_block_release(fm);
-                if (shutdown &&
-                    atomic_load_explicit(shutdown,
-                                          memory_order_acquire) != 0u)
-                    break;
-            }
-            else
-            {
-                sample_dispatcher_push_block(dst, fm);
-                sample_block_release(fm);
-            }
+            stop = svc_push_block(dst, fm, s);
             done += n;
         }
 
@@ -522,28 +498,23 @@ int channelizer_service_start(channelizer_service_t *s)
         return -1;
     size_t started = 0u;
 
-    if (s->K > 1u)
+    for (unsigned int k = 0u; k < s->K; k++)
     {
-        for (unsigned int k = 0u; k < s->K; k++)
+        s->worker_ctx[started].svc  = s;
+        s->worker_ctx[started].lane = k;
+        if (pthread_create(&s->worker_threads[started], NULL,
+                           svc_ddc_worker,
+                           &s->worker_ctx[started]) != 0)
         {
-            s->worker_ctx[started].svc    = s;
-            s->worker_ctx[started].lane   = k;
-            s->worker_ctx[started].is_ddc = 1;
-            if (pthread_create(&s->worker_threads[started], NULL,
-                               svc_ddc_worker,
-                               &s->worker_ctx[started]) != 0)
-            {
-                channelizer_service_stop(s);
-                return -1;
-            }
-            started++;
+            channelizer_service_stop(s);
+            return -1;
         }
+        started++;
     }
     for (unsigned int k = 0u; k < s->K; k++)
     {
-        s->worker_ctx[started].svc    = s;
-        s->worker_ctx[started].lane   = k;
-        s->worker_ctx[started].is_ddc = 0;
+        s->worker_ctx[started].svc  = s;
+        s->worker_ctx[started].lane = k;
         if (pthread_create(&s->worker_threads[started], NULL,
                            svc_pfb_worker,
                            &s->worker_ctx[started]) != 0)
@@ -583,11 +554,8 @@ void channelizer_service_signal(channelizer_service_t *s)
 {
     if (!s || !s->readers_live)
         return;
-    if (s->K > 1u)
-    {
-        for (unsigned int k = 0u; k < s->K; k++)
-            sample_reader_signal(&s->ddc_readers[k]);
-    }
+    for (unsigned int k = 0u; k < s->K; k++)
+        sample_reader_signal(&s->ddc_readers[k]);
     for (unsigned int k = 0u; k < s->K; k++)
         sample_reader_signal(&s->pfb_readers[k]);
 }
@@ -597,7 +565,7 @@ size_t channelizer_service_dispatcher_count(
 {
     if (!s || s->K == 0u)
         return 0u;
-    return s->K > 1u ? 2u * (size_t)s->K : 1u;
+    return 2u * (size_t)s->K; /* K sub + K out */
 }
 
 sample_dispatcher_t *channelizer_service_dispatcher_at(
@@ -605,8 +573,6 @@ sample_dispatcher_t *channelizer_service_dispatcher_at(
 {
     if (!s || s->K == 0u)
         return NULL;
-    if (s->K == 1u)
-        return i == 0u ? s->out[0] : NULL;
     if (i < (size_t)s->K)
         return s->sub[i];
     i -= (size_t)s->K;
@@ -649,22 +615,16 @@ void channelizer_service_destroy(channelizer_service_t *s)
         channelizer_service_stop(s);
     if (s->readers_live)
     {
-        if (s->K > 1u)
-        {
-            for (unsigned int k = 0u; k < s->K; k++)
-                sample_reader_destroy(&s->ddc_readers[k]);
-        }
+        for (unsigned int k = 0u; k < s->K; k++)
+            sample_reader_destroy(&s->ddc_readers[k]);
         for (unsigned int k = 0u; k < s->K; k++)
             sample_reader_destroy(&s->pfb_readers[k]);
         s->readers_live = 0;
     }
     if (s->dsps_live)
     {
-        if (s->K > 1u)
-        {
-            for (unsigned int k = 0u; k < s->K; k++)
-                ddc_stage_destroy(&s->ddc[k]);
-        }
+        for (unsigned int k = 0u; k < s->K; k++)
+            ddc_stage_destroy(&s->ddc[k]);
         for (unsigned int k = 0u; k < s->K; k++)
             channelizer_bank_destroy(&s->pfb[k]);
         s->dsps_live = 0;
