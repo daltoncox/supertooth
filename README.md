@@ -8,16 +8,16 @@
   </picture>
 </div>
 
-Supertooth is a C-based software-defined radio (SDR) project for observing Bluetooth traffic. It offers: 
+Supertooth is a C-based software-defined radio (SDR) project for observing Bluetooth traffic. It offers:
 
 - Passive, wideband multi-channel monitoring for BR/EDR + LE
-- Packet decoding for active bluetooth connections as an outside party
-- Pure host-side processing for using a HackRF or BladRF off the shelf
+- Packet decoding for active Bluetooth connections as an outside party
+- Pure host-side processing for using a HackRF or bladeRF off-the-shelf
 
 It includes two runtime binaries:
 
 1. `supertooth`: CLI with various modes (bredr, le, and hybrid)
-1. `supertooth-desktop`: Qt GUI application with live BR/EDR + LE capture, spectrum view, and packet log.
+2. `supertooth-desktop`: Qt GUI application with live BR/EDR + LE capture, spectrum view, and packet log.
 
 ## Install
 
@@ -31,11 +31,11 @@ supertooth          # CLI
 supertooth-desktop  # GUI
 ```
 
-The package bundles dependencies like Qt 6.8 and the radio libraries to make use of newer features than offered by the apt sources. As such, binaries are placed in /opt/supertooth and are symlinked into bin.
+The package bundles dependencies such as Qt 6.8 and the radio libraries to make use of newer features than those offered by the apt sources. As such, binaries are placed in `/opt/supertooth` and are symlinked into `bin`.
 
 ### macOS (Apple Silicon)
 
-Download the latest `supertooth_macos_arm64.dmg` from the [releases page](https://github.com/daltoncox/supertooth/releases), open it, and drag `Supertooth.app` to `/Applications`. 
+Download the latest `supertooth_macos_arm64.dmg` from the [releases page](https://github.com/daltoncox/supertooth/releases), open it, and drag `Supertooth.app` to `/Applications`.
 
 The CLI ships inside the bundle alongside the GUI:
 
@@ -44,7 +44,7 @@ The CLI ships inside the bundle alongside the GUI:
 /Applications/Supertooth.app/Contents/MacOS/supertooth-desktop
 ```
 
-> **Gatekeeper note:** MacOS will likely refuse to open the app on first launch. To resolve this, open Settings -> Privacy & Security, scroll to the bottom, and under Security, click `Open Anyway`.
+> **Gatekeeper note:** macOS will likely refuse to open the app on first launch. To resolve this, open Settings -> Privacy & Security, scroll to the bottom, and under Security, click `Open Anyway`.
 
 ## Building from source
 
@@ -76,13 +76,13 @@ macOS (Homebrew):
 brew install cmake pkg-config hackrf
 ```
 
-> **WARNING**: As of September 2026, liquid-dsp's brew install has a major preformance issue caused by hot path logging. It is highly recommneded to build and install liquid-dsp from source, which is why it is not listed in the above command. 
+> **WARNING**: As of September 2026, liquid-dsp's Homebrew installation has a major performance issue caused by hot-path logging. It is highly recommended to build and install liquid-dsp from source, which is why it is not listed in the above command.
 
 ### GUI Dependency (needs Qt 6.8+)
 
-The GUI requires **Qt 6.8+** with Quick, QuickLayouts, and Graphs. On certain distros, like Ubuntu Noble (24.04) and prior, it is not available through `apt` and must be installed elsewhere. This could affect other applications that use Qt if you are not careful, so discretion is advised. 
+The GUI requires **Qt 6.8+** with Quick, QuickLayouts, and Graphs. On certain distros, such as Ubuntu Noble (24.04) and earlier, it is not available through `apt` and must be installed from elsewhere. This could affect other applications that use Qt if you are not careful, so discretion is advised.
 
-Mac users can use the homebrew package:
+macOS users can use the Homebrew package:
 
 ```bash
 brew install qt@6
@@ -98,7 +98,7 @@ cmake ..
 make
 ```
 
-To enable certain features, pass their corresponding arguments from the above table to cmake. For example, `cmake -DENABLE_BLADERF=ON ..`.
+To enable certain features, pass their corresponding arguments from the above table to CMake. For example, `cmake -DENABLE_BLADERF=ON ..`.
 
 
 
@@ -106,7 +106,7 @@ Output binaries are in `build/src/apps/cli/supertooth` (CLI) and `build/src/apps
 
 ## Run
 
-All binaries require a HackRF or BladeRF by default:
+All binaries require a HackRF or bladeRF by default:
 
 ```bash
 ./build/src/apps/cli/supertooth le
@@ -124,7 +124,7 @@ apply to it (`BREDR Options`, `LE Options`):
 ```
 
 CLI output defaults to `--view summary`. All decode modes also accept
-`--view full|summary|devices`:
+`--view full|summary|devices`.
 
 ## Architecture
 
@@ -145,4 +145,7 @@ src/
       bredr/       BR/EDR bitstream decoder, codec, registry, clock recovery, display utilities
 ```
 
-## Refrences
+## References
+- [Ubertooth One](https://greatscottgadgets.com/ubertoothone/) - The primary inspiration for this project (hence the name).
+- [libbtbb](https://github.com/greatscottgadgets/libbtbb) - Reference for many of the algorithms.
+- [Liquid DSP](https://liquidsdr.org/) - A fantastic DSP library.
