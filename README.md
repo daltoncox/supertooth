@@ -10,12 +10,14 @@
 
 Supertooth is a C-based software-defined radio (SDR) project for receiving and decoding Bluetooth traffic with a HackRF.
 
-It includes four runtime binaries:
+It includes two runtime binaries:
 
-1. `supertooth`: Qt GUI application with live BR/EDR + BLE capture, spectrum view, and packet log.
-2. `supertooth-bredr`: BR/EDR multichannel receiver with piconet tracking.
-3. `supertooth-ble`: BLE advertising capture/decoder over a window of LE RF channels (37/38/39), channelized from a wideband capture.
-4. `supertooth-hybrid`: simultaneous BR/EDR multichannel + BLE advertising processing from a shared stream.
+1. `supertooth-desktop`: Qt GUI application with live BR/EDR + BLE capture, spectrum view, and packet log.
+2. `supertooth`: multiplexed CLI with one subcommand per operating mode:
+   - `supertooth hybrid`: simultaneous BR/EDR multichannel + BLE advertising processing from a shared stream.
+   - `supertooth ble`: BLE advertising capture/decoder over a window of LE RF channels (37/38/39), channelized from a wideband capture.
+   - `supertooth bredr`: BR/EDR multichannel receiver with piconet tracking.
+   - `supertooth record`: record raw IQ to a WAV file (no decoding).
 
 ## Install
 
@@ -25,22 +27,23 @@ Pre-built `.deb` packages are available on the [releases page](https://github.co
 
 ```bash
 sudo apt install ./supertooth_*.deb
-supertooth          # GUI
-supertooth-bredr --help    # CLI
+supertooth-desktop  # GUI
+supertooth -h       # CLI mode list
 ```
 
-The package bundles Qt 6.8, radio libs, and QML modules — no extra runtime dependencies beyond glibc/libstdc++. The GUI binary lives at `/opt/supertooth/bin/supertooth-bin`; `/usr/bin/supertooth` is a thin wrapper that exec's it directly (plugin/QML paths come from `qt.conf` next to the binary, libraries via RPATH). CLI tools (`supertooth-bredr`, `supertooth-ble`, `supertooth-hybrid`) are symlinks into `/opt/supertooth/bin/`. Desktop entry and icons install under `/usr/share/applications` and `/usr/share/icons/`.
+The package bundles Qt 6.8, radio libs, and QML modules — no extra runtime dependencies beyond glibc/libstdc++. Both binaries live in `/opt/supertooth/bin/` and are symlinked into `/usr/bin/` (`supertooth` is the multiplexed CLI, `supertooth-desktop` the GUI; plugin/QML paths come from `qt.conf` next to the GUI binary, libraries via RPATH). Desktop entry and icons install under `/usr/share/applications` and `/usr/share/icons/`.
 
 ### macOS (Apple Silicon)
 
 Download the latest `supertooth_macos_arm64.dmg` from the [releases page](https://github.com/daltoncox/supertooth/releases), open it, and drag `Supertooth.app` to `/Applications`. The disk image is self-contained: Qt frameworks, QML imports, and the radio libraries (`hackrf`, `liquid-dsp` and their transitive dependencies) are all bundled inside the `.app` — no Homebrew packages required at runtime. Requires macOS 14+ on `arm64`.
 
-The three CLI tools ship inside the bundle alongside the GUI:
+The multiplexed CLI ships inside the bundle alongside the GUI:
 
 ```bash
-/Applications/Supertooth.app/Contents/MacOS/supertooth-bredr --help
-/Applications/Supertooth.app/Contents/MacOS/supertooth-ble --help
-/Applications/Supertooth.app/Contents/MacOS/supertooth-hybrid --help
+/Applications/Supertooth.app/Contents/MacOS/supertooth -h
+/Applications/Supertooth.app/Contents/MacOS/supertooth hybrid -h
+/Applications/Supertooth.app/Contents/MacOS/supertooth ble -h
+/Applications/Supertooth.app/Contents/MacOS/supertooth bredr -h
 ```
 
 > **Gatekeeper note:** release builds are ad-hoc signed but not notarized, so macOS may refuse to open the app on first launch. Right-click `Supertooth.app` → Open, or run `xattr -d com.apple.quarantine /Applications/Supertooth.app`.
@@ -158,7 +161,7 @@ Enable bladeRF (requires `libbladeRF` installed, see Prerequisites):
 cmake .. -DENABLE_BLADERF=ON
 ```
 
-Probe for it: `supertooth-ble -d` lists one `bladerf:<serial>` line per
+Probe for it: `supertooth ble -d` lists one `bladerf:<serial>` line per
 connected device (serials are also shown by `bladeRF-cli -p`); select one
 with `-d bladerf:<serial>`. The bladeRF 2.0 Micro sustains 61.44 Msps, so
 BR/EDR defaults to 60 channels on bladeRF (20 on HackRF). A single
@@ -167,7 +170,7 @@ BR/EDR defaults to 60 channels on bladeRF (20 on HackRF). A single
 gain in dB (e.g. `-g 30`, default 30 dB, manual gain control). A malformed
 or out-of-range value prints that radio's gain help.
 
-Output binaries are in `build/src/apps/cli/` (CLI) and `build/src/apps/gui/` (GUI).
+Output binaries are in `build/src/apps/cli/supertooth` (CLI) and `build/src/apps/gui/supertooth-desktop` (GUI, plus `Supertooth.app` on macOS).
 
 ## Run
 
@@ -175,23 +178,34 @@ All binaries require a HackRF by default (or a bladeRF with
 `-DENABLE_BLADERF=ON` builds):
 
 ```bash
-./build/src/apps/cli/supertooth-ble
-./build/src/apps/cli/supertooth-bredr
-./build/src/apps/cli/supertooth-hybrid
-./build/src/apps/gui/supertooth
+./build/src/apps/cli/supertooth ble
+./build/src/apps/cli/supertooth bredr
+./build/src/apps/cli/supertooth hybrid
+./build/src/apps/cli/supertooth record
+./build/src/apps/gui/supertooth-desktop
 ```
 
-CLI output defaults to `--view summary`. All three CLIs also accept
-`--view full|summary|devices` (use `--help` for the full flag list):
+Running `supertooth` with no arguments (or `-h`) prints the mode list.
+Each mode has its own help with `General Options` plus the sections that
+apply to it (`BREDR Options`, `LE Options`):
 
-- `supertooth-bredr` / `supertooth-hybrid`: `--ac-errors N` sets the max
+```bash
+./build/src/apps/cli/supertooth hybrid -h
+```
+
+CLI output defaults to `--view summary`. All decode modes also accept
+`--view full|summary|devices`:
+
+- `supertooth bredr` / `supertooth hybrid`: `--ac-errors N` sets the max
   BR/EDR access-code bit errors (default: 0, strict).
-- `supertooth-ble` / `supertooth-hybrid`: `--enforce-crc on|off` drops BLE
+- `supertooth ble` / `supertooth hybrid`: `--enforce-crc on|off` drops BLE
   frames with bad CRC (default: on); `-c/-b` select the LE channel window.
-- All three: `--debug` prints a Debug Summary with per-stage drop breakdown
+- All decode modes: `--debug` prints a Debug Summary with per-stage drop breakdown
   (rf / sub / out with per-lane detail) plus BLE/BR-EDR frame counters.
 
-`supertooth-bredr`, `supertooth-ble`, and `supertooth-hybrid` accept `--help` for runtime flags.  The GUI needs a Wayland or X11 display.
+`supertooth record` captures raw IQ straight to a WAV file in the current
+directory (no decoding); it takes the BR/EDR-style `-c/-b` window plus
+`-d/-g`. The GUI needs a Wayland or X11 display.
 
 ## Architecture
 
@@ -199,7 +213,7 @@ CLI output defaults to `--view summary`. All three CLIs also accept
 
 ```text
 src/
-  apps/cli/        CLI binaries (supertooth-bredr, -ble, -hybrid) + shared app_common, app_summary_view, app_device_view
+  apps/cli/        Multiplexed `supertooth` CLI (hybrid, ble, bredr, record modes) + shared app_common, app_summary_view, app_device_view
   apps/gui/        Qt GUI application
   core/
     dsp/           Shared DSP utilities (channelizer_bank, rssi_measurements)

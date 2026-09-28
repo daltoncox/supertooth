@@ -28,7 +28,6 @@ enum
     APP_OPT_DEBUG = 0x100,
     APP_OPT_ENFORCE_CRC,
     APP_OPT_AC_ERRORS,
-    APP_OPT_RECORD,
     APP_OPT_EXHAUSTIVE,
     APP_OPT_GAIN,
 };
@@ -94,9 +93,34 @@ int app_require_default_device(const char *argv0);
 void app_print_device_usage_line(void);
 
 /**
- * Print the `--record` usage line for `print_usage` blocks.
+ * Print the `--exhaustive` usage line for `print_usage` blocks.
  */
-void app_print_record_usage_line(void);
+void app_print_exhaustive_usage_line(void);
+
+/**
+ * Print the `-V/--version` usage line for `print_usage` blocks.
+ */
+void app_print_version_usage_line(void);
+
+/**
+ * Print the `--debug` usage line for `print_usage` blocks.
+ */
+void app_print_debug_usage_line(void);
+
+/**
+ * Print the `-h/--help` usage line for `print_usage` blocks.
+ */
+void app_print_help_usage_line(void);
+
+/**
+ * Print the `--ac-errors` usage line (BREDR Options section).
+ */
+void app_print_ac_errors_usage_line(void);
+
+/**
+ * Print the `--enforce-crc` usage line (LE Options section).
+ */
+void app_print_enforce_crc_usage_line(void);
 
 /**
  * Print the `-g/--gain` usage line for `print_usage` blocks.
@@ -125,11 +149,6 @@ void app_print_gain_summary(radio_device_type_t type,
  */
 int app_resolve_gain_spec(const char *argv0, radio_device_type_t type,
                           const char *raw, radio_gain_spec_t *out);
-
-/**
- * Print the `--exhaustive` usage line for `print_usage` blocks.
- */
-void app_print_exhaustive_usage_line(void);
 
 /**
  * Print a per-stage breakdown of dropped blocks from a session summary

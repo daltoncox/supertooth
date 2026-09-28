@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Supertooth
-Exec=supertooth
+Exec=supertooth-desktop
 Icon=supertooth-app
 Terminal=false
 Categories=Utility;

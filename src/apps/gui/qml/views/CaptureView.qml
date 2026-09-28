@@ -40,7 +40,7 @@ Rectangle {
     // per channel), numChannels*2 for the BLE grid (2 MHz per channel).
     readonly property real windowMhz: bleLocked ? numChannels * 2
                                                 : numChannels
-    // Sample rate mirrors supertooth-bredr.c: 4 Msps for a 2 MHz window,
+    // Sample rate mirrors run_bredr.c: 4 Msps for a 2 MHz window,
     // else window MHz * 1 Msps.
     readonly property real sampleRateHz: windowMhz === 2 ? 4e6 : windowMhz * 1e6
     // LO sits at the center of the capture window — a half-MHz frequency
@@ -102,7 +102,7 @@ Rectangle {
         return 0
     }
 
-    // ---- Window clamping (mirrors supertooth-bredr.c validation) --------------
+    // ---- Window clamping (mirrors run_bredr.c validation) --------------
     function clampCount(c) {
         if (bleLocked) {
             c = Math.round(c)

@@ -9,8 +9,8 @@
 
 #include "app_common.h"
 #include "app_device_view.h"
-#include "app_record.h"
 #include "app_summary_view.h"
+#include "cli_modes.h"
 #include "file.h"
 #include "version.h"
 #include "ble_display.h"
@@ -157,24 +157,26 @@ static void print_usage(const char *argv0)
     fprintf(stderr,
             "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
              "[-d|--device [<type>:<id>]] [-g|--gain SPEC] [--ac-errors N] [--debug] [--enforce-crc on|off] "
-            "[--record]\n",
+            "\n",
             argv0);
+    fprintf(stderr, "General Options:\n");
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-78, 79/\"all\" = full band, default: %u)\n",
             "-c, --channels N",
-            BREDR_SESSION_MAX_CHANNELS, g_num_bredr_channels);
+            BREDR_SESSION_MAX_CHANNELS);
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
             "-b, --bottom-channel CH",
             BREDR_MAX_CHANNEL);
-    fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n", "--ac-errors N");
     app_print_device_usage_line();
     app_print_gain_usage_line();
-    fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
-    fprintf(stderr, "  %-30s Print block-drop diagnostics\n", "--debug");
-    fprintf(stderr, "  %-30s Drop BLE frames whose CRC fails (default: on)\n",
-            "--enforce-crc on|off");
-    app_print_record_usage_line();
+    app_print_debug_usage_line();
     app_print_exhaustive_usage_line();
+    app_print_version_usage_line();
+    app_print_help_usage_line();
+    fprintf(stderr, "BREDR Options:\n");
+    app_print_ac_errors_usage_line();
+    fprintf(stderr, "LE Options:\n");
+    app_print_enforce_crc_usage_line();
 }
 
 static void handle_hybrid_bredr_packet(const bredr_event_t *event,
@@ -223,8 +225,9 @@ static void handle_hybrid_ble_packet(const ble_event_t *event,
     app_output_unlock();
 }
 
-int main(int argc, char *argv[])
+int hybrid_main(int argc, char *argv[])
 {
+    argv[0] = (char *)"supertooth hybrid";
     static const struct option long_opts[] = {
         {"view", required_argument, NULL, 'v'},
         {"channels", required_argument, NULL, 'c'},
@@ -232,7 +235,6 @@ int main(int argc, char *argv[])
         {"device", optional_argument, NULL, 'd'},
         {"gain", required_argument, NULL, 'g'},
         {"ac-errors", required_argument, NULL, APP_OPT_AC_ERRORS},
-        {"record", no_argument, NULL, APP_OPT_RECORD},
         {"exhaustive", no_argument, NULL, APP_OPT_EXHAUSTIVE},
         {"version", no_argument, NULL, 'V'},
         {"debug", no_argument, NULL, APP_OPT_DEBUG},
@@ -243,7 +245,6 @@ int main(int argc, char *argv[])
 
     int g_list_devices = 0;
     const char *g_device_spec = NULL;
-    int g_record = 0;
     int g_exhaustive = 0;
     app_device_spec_t g_device_spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
     int g_device_selected = 0;
@@ -305,9 +306,6 @@ int main(int argc, char *argv[])
         case 'g':
             g_gain_raw = optarg;
             break;
-        case APP_OPT_RECORD:
-            g_record = 1;
-            break;
         case APP_OPT_EXHAUSTIVE:
             g_exhaustive = 1;
             break;
@@ -341,7 +339,7 @@ int main(int argc, char *argv[])
             break;
         }
         case 'V':
-            printf("supertooth-hybrid %s\n", supertooth_get_version());
+            printf("supertooth hybrid %s\n", supertooth_get_version());
             return EXIT_SUCCESS;
         case 'h':
             print_usage(argv[0]);
@@ -413,7 +411,7 @@ int main(int argc, char *argv[])
     }
 
     /* The session owns layout validity: device bandwidth ceiling plus the
-     * lane-split table (mirrors supertooth-bredr). */
+     * lane-split table (mirrors run_bredr). */
     {
         radio_device_type_t dtype =
             g_device_selected ? g_device_spec_parsed.type : app_default_device_type();
@@ -463,33 +461,10 @@ int main(int argc, char *argv[])
     int is_file_input = g_device_selected &&
                         g_device_spec_parsed.type == RADIO_DEVICE_FILE;
 
-    if (g_record && is_file_input)
-    {
-        fprintf(stderr, "--record cannot be used with file replay input.\n");
-        return EXIT_FAILURE;
-    }
     if (g_exhaustive && !is_file_input)
     {
         fprintf(stderr, "--exhaustive is only meaningful with file replay input (-d file:...).\n");
         return EXIT_FAILURE;
-    }
-    if (g_record)
-    {
-        radio_device_type_t rdtype =
-            g_device_selected ? g_device_spec_parsed.type : app_default_device_type();
-        if (app_resolve_gain_spec(argv[0], rdtype, g_gain_raw,
-                                  &g_gain_spec) != 0)
-            return EXIT_FAILURE;
-        app_record_config_t rcfg = {
-            .device_type = g_device_spec_parsed.type,
-            .device_id = g_device_selected ? g_device_spec_parsed.id : NULL,
-            .lo_freq_hz = (uint32_t)tune_lo_hz,
-            .sample_rate_hz = sample_rate,
-            .gain = g_gain_spec,
-            .debug = g_debug,
-        };
-        return app_record_run(&rcfg) == 0 ? EXIT_SUCCESS
-                                          : EXIT_FAILURE;
     }
 
     uint64_t file_center_hz = 0u;

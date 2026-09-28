@@ -933,7 +933,7 @@ int backend_session_run_bredr(backend_session_t *session,
 
     radio_device_type_t dev_type = backend_device_for_input(input_type);
 
-    /* Defensive clamping, mirroring supertooth-bredr validation. The on-air
+    /* Defensive clamping, mirroring run_bredr validation. The on-air
      * band is channels 0..78. Counts snap down to the nearest supported
      * lane split (backend devices are HackRF-class: <= 20 channels). */
     channel_count &= ~1u;

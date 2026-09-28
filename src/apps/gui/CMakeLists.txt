@@ -56,14 +56,8 @@ qt_add_qml_module(appSupertooth
         qml/views/ChannelSpectrum.qml
 )
 
-if(APPLE)
-    set(_supertooth_output_name Supertooth)
-else()
-    set(_supertooth_output_name supertooth)
-endif()
-
 set_target_properties(appSupertooth PROPERTIES
-    OUTPUT_NAME ${_supertooth_output_name}
+    OUTPUT_NAME supertooth-desktop
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_BUNDLE_NAME "Supertooth"
     MACOSX_BUNDLE_BUNDLE_VERSION "${SUPERTOOTH_VERSION}"

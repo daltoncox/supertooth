@@ -10,10 +10,8 @@
 #   /Supertooth.app                 Qt GUI (macdeployqt vendors Qt frameworks,
 #                                   plugins and QML imports)
 #   /Supertooth.app/Contents/MacOS/
-#     Supertooth                    GUI executable
-#     supertooth-bredr              CLI: BR/EDR multichannel receiver
-#     supertooth-ble                CLI: BLE advertising scanner
-#     supertooth-hybrid             CLI: simultaneous BR/EDR + BLE receiver
+#     supertooth-desktop          GUI executable
+#     supertooth                  multiplexed CLI (hybrid, ble, bredr, record)
 #   /Supertooth.app/Contents/Frameworks/
 #     *.dylib                       Homebrew radio libs (hackrf, liquid-dsp)
 #                                   plus transitive deps (libusb, fftw), with
@@ -91,9 +89,9 @@ fi
 # Strip 'v' prefix (tags look like v1.2.3).
 VERSION="${VERSION#v}"
 
-APP_SRC="$BUILD_DIR/src/apps/gui/Supertooth.app"
+APP_SRC="$BUILD_DIR/src/apps/gui/supertooth-desktop.app"
 CLI_DIR="$BUILD_DIR/src/apps/cli"
-CLIS=(supertooth-bredr supertooth-ble supertooth-hybrid)
+CLIS=(supertooth)
 
 if [[ ! -d "$APP_SRC" ]]; then
     echo "Error: GUI bundle not found at $APP_SRC."
@@ -128,6 +126,10 @@ STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
 
 echo "=== Staging Supertooth.app ==="
+# The product keeps the Supertooth.app bundle name; only the GUI executable
+# inside (Contents/MacOS/supertooth-desktop) was renamed. Copying the built
+# bundle to the product name here keeps the internal Info.plist/executable
+# pairing intact (only the outer directory is renamed).
 APP="$STAGING/Supertooth.app"
 cp -a "$APP_SRC" "$APP"
 chmod -R u+w "$APP"

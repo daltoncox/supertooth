@@ -184,12 +184,31 @@ void app_print_device_usage_line(void)
             "-d, --device [<type>:<id>]");
 }
 
-void app_print_record_usage_line(void)
+void app_print_version_usage_line(void)
 {
-    fprintf(stderr, "  %-30s Record raw IQ to a WAV file in the current directory (record-only, no decode)\n",
-            "--record");
-    fprintf(stderr, "  %-30s Replay a capture: -d file:/path/to/cap.wav\n",
-            "");
+    fprintf(stderr, "  %-30s Print version and exit\n", "-V, --version");
+}
+
+void app_print_debug_usage_line(void)
+{
+    fprintf(stderr, "  %-30s Print block-drop diagnostics\n", "--debug");
+}
+
+void app_print_help_usage_line(void)
+{
+    fprintf(stderr, "  %-30s Print this help and exit\n", "-h, --help");
+}
+
+void app_print_ac_errors_usage_line(void)
+{
+    fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n",
+            "--ac-errors N");
+}
+
+void app_print_enforce_crc_usage_line(void)
+{
+    fprintf(stderr, "  %-30s Drop BLE frames whose CRC fails (default: on)\n",
+            "--enforce-crc on|off");
 }
 
 void app_print_exhaustive_usage_line(void)
