@@ -12,12 +12,14 @@ Supertooth is a C-based software-defined radio (SDR) project for receiving and d
 
 It includes two runtime binaries:
 
-1. `supertooth-desktop`: Qt GUI application with live BR/EDR + BLE capture, spectrum view, and packet log.
+1. `supertooth-desktop`: Qt GUI application with live BR/EDR + LE capture, spectrum view, and packet log.
 2. `supertooth`: multiplexed CLI with one subcommand per operating mode:
-   - `supertooth hybrid`: simultaneous BR/EDR multichannel + BLE advertising processing from a shared stream.
-   - `supertooth ble`: BLE advertising capture/decoder over a window of LE RF channels (37/38/39), channelized from a wideband capture.
+   - `supertooth hybrid`: simultaneous BR/EDR multichannel + LE advertising processing from a shared stream.
+   - `supertooth le`: LE advertising capture/decoder over a window of LE RF channels (37/38/39), channelized from a wideband capture.
    - `supertooth bredr`: BR/EDR multichannel receiver with piconet tracking.
    - `supertooth record`: record raw IQ to a WAV file (no decoding).
+
+   `ble` is accepted as a hidden alias for `le`, and `classic` as a hidden alias for `bredr`; neither alias is listed in help output.
 
 ## Install
 
@@ -42,7 +44,7 @@ The multiplexed CLI ships inside the bundle alongside the GUI:
 ```bash
 /Applications/Supertooth.app/Contents/MacOS/supertooth -h
 /Applications/Supertooth.app/Contents/MacOS/supertooth hybrid -h
-/Applications/Supertooth.app/Contents/MacOS/supertooth ble -h
+/Applications/Supertooth.app/Contents/MacOS/supertooth le -h
 /Applications/Supertooth.app/Contents/MacOS/supertooth bredr -h
 ```
 
@@ -161,7 +163,7 @@ Enable bladeRF (requires `libbladeRF` installed, see Prerequisites):
 cmake .. -DENABLE_BLADERF=ON
 ```
 
-Probe for it: `supertooth ble -d` lists one `bladerf:<serial>` line per
+Probe for it: `supertooth le -d` lists one `bladerf:<serial>` line per
 connected device (serials are also shown by `bladeRF-cli -p`); select one
 with `-d bladerf:<serial>`. The bladeRF 2.0 Micro sustains 61.44 Msps, so
 BR/EDR defaults to 60 channels on bladeRF (20 on HackRF). A single
@@ -178,7 +180,7 @@ All binaries require a HackRF by default (or a bladeRF with
 `-DENABLE_BLADERF=ON` builds):
 
 ```bash
-./build/src/apps/cli/supertooth ble
+./build/src/apps/cli/supertooth le
 ./build/src/apps/cli/supertooth bredr
 ./build/src/apps/cli/supertooth hybrid
 ./build/src/apps/cli/supertooth record
@@ -198,10 +200,10 @@ CLI output defaults to `--view summary`. All decode modes also accept
 
 - `supertooth bredr` / `supertooth hybrid`: `--ac-errors N` sets the max
   BR/EDR access-code bit errors (default: 0, strict).
-- `supertooth ble` / `supertooth hybrid`: `--enforce-crc on|off` drops BLE
+- `supertooth le` / `supertooth hybrid`: `--enforce-crc on|off` drops LE
   frames with bad CRC (default: on); `-c/-b` select the LE channel window.
 - All decode modes: `--debug` prints a Debug Summary with per-stage drop breakdown
-  (rf / sub / out with per-lane detail) plus BLE/BR-EDR frame counters.
+  (rf / sub / out with per-lane detail) plus LE/BR-EDR frame counters.
 
 `supertooth record` captures raw IQ straight to a WAV file in the current
 directory (no decoding); it takes the BR/EDR-style `-c/-b` window plus
@@ -213,7 +215,7 @@ directory (no decoding); it takes the BR/EDR-style `-c/-b` window plus
 
 ```text
 src/
-  apps/cli/        Multiplexed `supertooth` CLI (hybrid, ble, bredr, record modes) + shared app_common, app_summary_view, app_device_view
+  apps/cli/        Multiplexed `supertooth` CLI (hybrid, le, bredr, record modes) + shared app_common, app_summary_view, app_device_view
   apps/gui/        Qt GUI application
   core/
     dsp/           Shared DSP utilities (channelizer_bank, rssi_measurements)

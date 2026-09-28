@@ -19,7 +19,7 @@
  *        bridges decoded frames from the C worker thread into Qt signals.
  *
  * start() spawns a std::thread running the blocking backend_session_run_*
- * function selected by @p sessionType (hybrid / BLE / BR/EDR). The C
+ * function selected by @p sessionType (hybrid / LE / BR/EDR). The C
  * trampoline calls handleRow() on the worker thread; emitting frameDecoded()
  * from a non-Qt thread is delivered to Qt slots via a queued connection (the
  * controller lives in the main thread).
@@ -46,17 +46,17 @@ public:
      * @param inputType   BACKEND_INPUT_HACKRF (0) or BACKEND_INPUT_FILE (1).
      * @param deviceId    HackRF identifier, or empty for default device.
      * @param sessionType BACKEND_SESSION_HYBRID (0), _BLE (1) or _BREDR (2).
-     * @param enforceCrc  true to drop BLE frames whose CRC fails (applies to
-     *                   BLE and hybrid sessions; ignored for BR/EDR-only).
+     * @param enforceCrc  true to drop LE frames whose CRC fails (applies to
+     *                   LE and hybrid sessions; ignored for BR/EDR-only).
      * @param channelCount  Channel processors covering the capture window:
      *                   BR/EDR channels for BR/EDR/hybrid sessions (even
-     *                   2..20), LE RF channels for BLE sessions (1..10).
+     *                   2..20), LE RF channels for LE sessions (1..10).
      *                   Ignored units aside, always >= 1.
      * @param bottomChannel Lowest channel of the window: BR/EDR channel
-     *                   0..78 for BR/EDR/hybrid, LE RF channel 0..39 for BLE.
+     *                   0..78 for BR/EDR/hybrid, LE RF channel 0..39 for LE.
      * @param bleChannel  Advertising channel 37/38/39, or 0 = none inside
-     *                   the window (hybrid BLE worker idles). Hybrid only;
-     *                   BLE sessions decode whichever advertising channels
+     *                   the window (hybrid LE worker idles). Hybrid only;
+     *                   LE sessions decode whichever advertising channels
      *                   fall inside their LE window.
      * @param acErrors   Maximum BR/EDR access-code bit errors tolerated by the
      *                   bitstream decoder (0 = strict, byte-perfect match).

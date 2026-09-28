@@ -69,7 +69,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
 onPlayPauseToggled: {
                 // Channel params are passed in the session's native grid:
-                // LE RF units for BLE sessions, BR/EDR units otherwise.
+                // LE RF units for LE sessions, BR/EDR units otherwise.
                 var isBle = captureView.sessionTypeIndex === 1
                 var count = isBle ? captureView.backendLeChannelCount
                                   : captureView.backendChannelCount

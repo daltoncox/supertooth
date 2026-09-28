@@ -126,6 +126,12 @@ void app_print_debug_usage_line(void);
 void app_print_help_usage_line(void);
 
 /**
+ * Print the standardized "Other Options" section (version + help lines)
+ * for `print_usage` blocks, preceded by a blank line.
+ */
+void app_print_other_usage_lines(void);
+
+/**
  * Print the `--ac-errors` usage line (BREDR Options section).
  */
 void app_print_ac_errors_usage_line(void);

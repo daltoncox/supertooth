@@ -345,7 +345,7 @@ int app_pick_default_device(const char *argv0, app_device_spec_t *out)
 void app_print_device_usage_line(void)
 {
     fprintf(stderr, "  %-30s List available devices, or select one by number, type, or <type>:<id>\n",
-            "-d, --device [<n>|<type>|<type>:<id>]");
+            "-d, --device <selection>");
 }
 
 void app_print_version_usage_line(void)
@@ -363,6 +363,13 @@ void app_print_help_usage_line(void)
     fprintf(stderr, "  %-30s Print this help and exit\n", "-h, --help");
 }
 
+void app_print_other_usage_lines(void)
+{
+    fprintf(stderr, "\nOther Options:\n");
+    app_print_version_usage_line();
+    app_print_help_usage_line();
+}
+
 void app_print_ac_errors_usage_line(void)
 {
     fprintf(stderr, "  %-30s Max access-code bit errors (default: 0, strict)\n",
@@ -371,7 +378,7 @@ void app_print_ac_errors_usage_line(void)
 
 void app_print_enforce_crc_usage_line(void)
 {
-    fprintf(stderr, "  %-30s Drop BLE frames whose CRC fails (default: on)\n",
+    fprintf(stderr, "  %-30s Drop LE frames whose CRC fails (default: on)\n",
             "--enforce-crc on|off");
 }
 

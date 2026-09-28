@@ -5,9 +5,9 @@ import QtQuick.Layouts
 Rectangle {
     id: root
 
-    // 0 = Hybrid (default), 1 = BLE, 2 = BR/EDR. Mirrors BACKEND_SESSION_*.
+    // 0 = Hybrid (default), 1 = LE, 2 = BR/EDR. Mirrors BACKEND_SESSION_*.
     property int sessionTypeIndex: 0
-    // Drop BLE frames whose CRC fails. Applies to BLE and hybrid sessions.
+    // Drop LE frames whose CRC fails. Applies to LE and hybrid sessions.
     // Default on, matching the CLI's --enforce-crc default.
     property bool enforceCrc: true
     // Maximum BR/EDR access-code bit errors tolerated by the bitstream decoder.
@@ -18,14 +18,14 @@ Rectangle {
     // Channel layout. Hybrid and BR/EDR-only sessions always capture on
     // the BR/EDR grid: numChannels = BR/EDR channels (even, 2..maxChannels),
     // window = numChannels MHz, LO at a half-MHz frequency (e.g. 2411.5).
-    // BLE-only sessions capture on the BLE grid: numChannels = BLE channels
+    // LE-only sessions capture on the LE grid: numChannels = LE channels
     // to capture (2..maxBleChannels) from bottomLeIndex, window =
     // numChannels*2 MHz, LO at a whole-MHz frequency.
     // CaptureView is the single source of truth — all writes (SpinBoxes,
     // spectrum drags) go through setWindowBredr/setWindowBle so clamping
     // is applied uniformly.
     property int bottomChannel: 0       // BR/EDR channel index (hybrid/BR/EDR)
-    property int bottomLeIndex: 0       // LE RF channel index (BLE-only)
+    property int bottomLeIndex: 0       // LE RF channel index (LE-only)
     property int numChannels: 20
     readonly property int maxChannels: 20        // RECEIVER_BREDR_MAX_CHANNELS
     readonly property int maxBleChannels: 10     // BLE_SESSION_MAX_CHANNELS
@@ -37,25 +37,25 @@ Rectangle {
     readonly property real windowLeftMhz: bleLocked ? 2401 + 2 * bottomLeIndex
                                                     : 2401.5 + bottomChannel
     // Capture-window width in MHz: numChannels for the BR/EDR grid (1 MHz
-    // per channel), numChannels*2 for the BLE grid (2 MHz per channel).
+    // per channel), numChannels*2 for the LE grid (2 MHz per channel).
     readonly property real windowMhz: bleLocked ? numChannels * 2
                                                 : numChannels
     // Sample rate mirrors run_bredr.c: 4 Msps for a 2 MHz window,
     // else window MHz * 1 Msps.
     readonly property real sampleRateHz: windowMhz === 2 ? 4e6 : windowMhz * 1e6
     // LO sits at the center of the capture window — a half-MHz frequency
-    // when BR/EDR-locked, a whole-MHz frequency when BLE-locked.
+    // when BR/EDR-locked, a whole-MHz frequency when LE-locked.
     readonly property real loFreqHz: (windowLeftMhz + windowMhz / 2.0) * 1e6
 
     // ---- Channel ranges covered by the window ------------------------------
-    // LE: when BLE-locked the window is exactly numChannels LE channels
+    // LE: when LE-locked the window is exactly numChannels LE channels
     // wide from bottomLeIndex; when BR/EDR-locked the edges never land on
     // LE centers so the window spans numChannels/2 LE channels.
     readonly property int leFirstRf: bleLocked ? bottomLeIndex
                                                : Math.max(0, Math.ceil((bottomChannel - 0.5) / 2))
     readonly property int leLastRf: bleLocked ? bottomLeIndex + numChannels - 1
                                               : leFirstRf + numChannels / 2 - 1
-    // BR/EDR: native range when BR/EDR-locked; when BLE-locked, the
+    // BR/EDR: native range when BR/EDR-locked; when LE-locked, the
     // channels whose centers fall strictly inside the window (channels
     // centered exactly on an edge are half out of band).
     readonly property int brFirstCh: bleLocked ? Math.min(78, bottomLeIndex * 2)
@@ -85,14 +85,14 @@ Rectangle {
 
     // ---- Backend-ready values ---------------------------------------------
     // Hybrid and BR/EDR sessions take numChannels BR/EDR processors and a
-    // numChannels-MHz window at a half-MHz LO. BLE fans out inside the
+    // numChannels-MHz window at a half-MHz LO. LE fans out inside the
     // window from the shared channelizer.
     // bleAdvChannel is the advertising channel whose center lies inside the
     // window (at most one fits a <=20 MHz window), or 0 = none — the hybrid
-    // BLE worker idles and BLE-only sessions fall back to ch37.
+    // LE worker idles and LE-only sessions fall back to ch37.
     readonly property int backendChannelCount: numChannels
     readonly property int backendBottomChannel: bottomChannel
-    // BLE-only sessions take their window in LE RF units (numChannels
+    // LE-only sessions take their window in LE RF units (numChannels
     // channels from bottomLeIndex).
     readonly property int backendLeChannelCount: numChannels
     readonly property int backendBleAdvChannel: {
@@ -150,7 +150,7 @@ Rectangle {
         // Tuner / spectrum strip. Full 2402-2480 MHz band: LE channels on
         // top (advertising 37/38/39 highlighted), BR/EDR channels below,
         // with a draggable capture window. The zone split follows the
-        // session type: hybrid 50/50, BLE all-LE, BR/EDR all-BR/EDR.
+        // session type: hybrid 50/50, LE all-LE, BR/EDR all-BR/EDR.
         ChannelSpectrum {
             id: spectrum
             Layout.fillWidth: true
@@ -346,7 +346,7 @@ Rectangle {
         Label {
             text: root.running
                   ? qsTr("Stop the running session to change the channel layout.")
-                  : qsTr("Drag the highlighted window to retune; drag either edge to resize. Hybrid always captures the BR/EDR grid (1 MHz steps, half-MHz LO) with BLE fanning out inside the window.")
+                  : qsTr("Drag the highlighted window to retune; drag either edge to resize. Hybrid always captures the BR/EDR grid (1 MHz steps, half-MHz LO) with LE fanning out inside the window.")
             color: "#858585"
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
@@ -370,7 +370,7 @@ Rectangle {
         ComboBox {
             id: sessionTypeSelector
             enabled: !root.running
-            model: ["Hybrid", "BLE", "BR/EDR"]
+            model: ["Hybrid", "LE", "BR/EDR"]
             currentIndex: root.sessionTypeIndex
 
             onActivated: function (index) {
@@ -381,7 +381,7 @@ Rectangle {
         Label {
             text: root.running
                   ? qsTr("Stop the running session to change protocol.")
-                  : qsTr("Select which receiver pipeline to run. Hybrid captures BR/EDR + BLE from one stream.")
+                  : qsTr("Select which receiver pipeline to run. Hybrid captures BR/EDR + LE from one stream.")
             color: "#858585"
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
@@ -398,13 +398,13 @@ Rectangle {
             id: enforceCrcSwitch
             enabled: !root.running
             checked: root.enforceCrc
-            text: checked ? qsTr("On — drop BLE frames that fail CRC") : qsTr("Off — show all BLE frames")
+            text: checked ? qsTr("On — drop LE frames that fail CRC") : qsTr("Off — show all LE frames")
 
             onToggled: root.enforceCrc = checked
         }
 
         Label {
-            text: qsTr("When on, BLE frames whose CRC doesn't pass are dropped before display. Applies to BLE and hybrid sessions. Helps suppress spurious devices from bit errors.")
+            text: qsTr("When on, LE frames whose CRC doesn't pass are dropped before display. Applies to LE and hybrid sessions. Helps suppress spurious devices from bit errors.")
             color: "#858585"
             Layout.fillWidth: true
             wrapMode: Text.WordWrap

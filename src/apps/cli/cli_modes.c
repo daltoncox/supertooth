@@ -2,7 +2,7 @@
  *
  * Only one mode runs per process, so decode modes share plain globals
  * (output mode, debug flag, packet counter, CRC/AC tolerances, the
- * BR/EDR window and the heap session). BLE keeps its own stack session
+ * BR/EDR window and the heap session). LE keeps its own stack session
  * and LE window; BR/EDR keeps its LAP filter. Shared option parsing,
  * device setup, tune validation and banner/debug helpers live in the
  * "Shared helpers" section; per-mode getopt/session flows stay explicit
@@ -10,9 +10,11 @@
  * its sole caller is record_main) sits at the end of the shared part.
  *
  * Entry points (declared extern in supertooth.c, which strips the mode
- * word before dispatching):
- *   int ble_main(int argc, char *argv[]);
- *   int bredr_main(int argc, char *argv[]);
+ * word before dispatching). The canonical mode names are `le` and
+ * `bredr`; `ble` and `classic` are hidden aliases handled by the
+ * dispatcher and intentionally omitted from help output:
+ *   int ble_main(int argc, char *argv[]);     // runs as `supertooth le`
+ *   int bredr_main(int argc, char *argv[]);   // also runs as `supertooth classic`
  *   int hybrid_main(int argc, char *argv[]);
  *   int record_main(int argc, char *argv[]);
  */
@@ -290,7 +292,7 @@ static int resolve_bredr_window(const char *prog, int device_selected,
             g_bottom_bredr_channel != 0u)
         {
             fprintf(stderr,
-                    "Invalid --bottom-channel %u for --channels all: "
+                    "Invalid --bottom %u for --channels all: "
                     "full-band capture always starts at 0.\n",
                     g_bottom_bredr_channel);
             return -1;
@@ -301,7 +303,7 @@ static int resolve_bredr_window(const char *prog, int device_selected,
             if (g_bottom_bredr_channel > max_bottom_channel)
             {
                 fprintf(stderr,
-                        "Invalid --bottom-channel %u for --channels %u: out of BR/EDR band (0-%u).\n"
+                        "Invalid --bottom %u for --channels %u: out of BR/EDR band (0-%u).\n"
                         "For %u channels, the highest bottom channel would be %u.\n",
                         g_bottom_bredr_channel, g_num_bredr_channels, BREDR_MAX_CHANNEL,
                         g_num_bredr_channels, max_bottom_channel);
@@ -808,33 +810,30 @@ static void ble_handle_sigint(int sig)
 
 static void ble_print_usage(const char *argv0)
 {
-    fprintf(stderr, "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
-             "[-d|--device [<n>|<type>|<type>:<id>]] [-g|--gain SPEC] [--debug] "
-            "[--enforce-crc on|off]\n", argv0);
-    fprintf(stderr, "General Options:\n");
+    fprintf(stderr, "Usage: %s [options]\n", argv0);
+    fprintf(stderr, "\nGeneral Options:\n");
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of consecutive LE RF channels (1-%u, default: %u)\n",
             "-c, --channels N",
             BLE_SESSION_MAX_CHANNELS, ble_num_le_channels);
     fprintf(stderr, "  %-30s Bottom LE channel of the window (0-39, default: 37)\n",
-            "-b, --bottom-channel CH");
+            "-b, --bottom CH");
     app_print_device_usage_line();
     app_print_gain_usage_line();
     app_print_debug_usage_line();
     app_print_exhaustive_usage_line();
-    app_print_version_usage_line();
-    app_print_help_usage_line();
-    fprintf(stderr, "LE Options:\n");
+    fprintf(stderr, "\nLE Options:\n");
     app_print_enforce_crc_usage_line();
+    app_print_other_usage_lines();
 }
 
 int ble_main(int argc, char *argv[])
 {
-    argv[0] = (char *)"supertooth ble";
+    argv[0] = (char *)"supertooth le";
     static const struct option long_opts[] = {
         {"view", required_argument, NULL, 'v'},
         {"channels", required_argument, NULL, 'c'},
-        {"bottom-channel", required_argument, NULL, 'b'},
+        {"bottom", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
         {"gain", required_argument, NULL, 'g'},
         {"version", no_argument, NULL, 'V'},
@@ -897,7 +896,7 @@ int ble_main(int argc, char *argv[])
         case 'b':
             if (parse_le_bottom_channel(optarg, &ble_bottom_le_channel) != 0)
             {
-                fprintf(stderr, "Invalid --bottom-channel value: %s (expected 0-39)\n",
+                fprintf(stderr, "Invalid --bottom value: %s (expected 0-39)\n",
                         optarg);
                 ble_print_usage(argv[0]);
                 return EXIT_FAILURE;
@@ -925,7 +924,7 @@ int ble_main(int argc, char *argv[])
             }
             break;
         case 'V':
-            printf("supertooth ble %s\n", supertooth_get_version());
+            printf("supertooth le %s\n", supertooth_get_version());
             return EXIT_SUCCESS;
         case 'h':
             ble_print_usage(argv[0]);
@@ -1022,7 +1021,7 @@ int ble_main(int argc, char *argv[])
                      gain_raw, &gain_spec) != 0)
         return EXIT_FAILURE;
 
-    printf("Supertooth BLE\n");
+    printf("Supertooth LE\n");
     printf("==============\n");
     printf("Window      : %u LE channel%s from ch%u (RF %u-%u):",
            ble_num_le_channels, ble_num_le_channels == 1u ? "" : "s",
@@ -1098,7 +1097,7 @@ int ble_main(int argc, char *argv[])
 
     if (result != 0)
     {
-        fprintf(stderr, "BLE receiver failed.\n");
+        fprintf(stderr, "LE receiver failed.\n");
         return EXIT_FAILURE;
     }
 
@@ -1193,28 +1192,23 @@ static packet_formatter_fn output_mode_formatter(app_output_mode_t mode)
  * On success sets *out_type and *out_id (pointing into @p spec). */
 static void bredr_print_usage(const char *argv0)
 {
-    fprintf(stderr,
-            "Usage: %s [-v|--view full|summary|devices] [-l|--lap LAP] "
-            "[-c|--channels N] [-b|--bottom-channel CH] "
-             "[-d|--device [<type>:<id>]] [-g|--gain SPEC] [--ac-errors N] [--debug] "
-            "\n", argv0);
-    fprintf(stderr, "General Options:\n");
+    fprintf(stderr, "Usage: %s [options]\n", argv0);
+    fprintf(stderr, "\nGeneral Options:\n");
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-78, 79/\"all\" = full band, default: %u)\n",
             "-c, --channels N",
             g_num_bredr_channels);
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
-            "-b, --bottom-channel CH",
+            "-b, --bottom CH",
             BREDR_MAX_CHANNEL);
     app_print_device_usage_line();
     app_print_gain_usage_line();
     app_print_debug_usage_line();
     app_print_exhaustive_usage_line();
-    app_print_version_usage_line();
-    app_print_help_usage_line();
-    fprintf(stderr, "BREDR Options:\n");
+    fprintf(stderr, "\nBREDR Options:\n");
     fprintf(stderr, "  %-30s Only track/report this LAP (e.g. 0x1FC475)\n", "-l, --lap LAP");
     app_print_ac_errors_usage_line();
+    app_print_other_usage_lines();
 }
 
 static void handle_bredr_packet(const bredr_event_t *event,
@@ -1240,7 +1234,7 @@ int bredr_main(int argc, char *argv[])
         {"view",           required_argument, NULL, 'v'},
         {"lap",            required_argument, NULL, 'l'},
         {"channels",       required_argument, NULL, 'c'},
-        {"bottom-channel", required_argument, NULL, 'b'},
+        {"bottom", required_argument, NULL, 'b'},
         {"device",         optional_argument, NULL, 'd'},
         {"gain",           required_argument, NULL, 'g'},
         {"ac-errors",      required_argument, NULL, APP_OPT_AC_ERRORS},
@@ -1309,7 +1303,7 @@ int bredr_main(int argc, char *argv[])
             case 'b':
                 if (parse_bredr_bottom_channel(optarg, &g_bottom_bredr_channel) != 0)
                 {
-                    fprintf(stderr, "Invalid --bottom-channel value: %s (expected 0-%u)\n",
+                    fprintf(stderr, "Invalid --bottom value: %s (expected 0-%u)\n",
                             optarg, BREDR_MAX_CHANNEL);
                     bredr_print_usage(argv[0]);
                     return EXIT_FAILURE;
@@ -1501,29 +1495,24 @@ static unsigned int ble_channels_in_window(uint64_t lo_hz, uint32_t sample_rate,
 
 static void hybrid_print_usage(const char *argv0)
 {
-    fprintf(stderr,
-            "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
-             "[-d|--device [<type>:<id>]] [-g|--gain SPEC] [--ac-errors N] [--debug] [--enforce-crc on|off] "
-            "\n",
-            argv0);
-    fprintf(stderr, "General Options:\n");
+    fprintf(stderr, "Usage: %s [options]\n", argv0);
+    fprintf(stderr, "\nGeneral Options:\n");
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-78, 79/\"all\" = full band, default: %u)\n",
             "-c, --channels N",
             BREDR_SESSION_MAX_CHANNELS);
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
-            "-b, --bottom-channel CH",
+            "-b, --bottom CH",
             BREDR_MAX_CHANNEL);
     app_print_device_usage_line();
     app_print_gain_usage_line();
     app_print_debug_usage_line();
     app_print_exhaustive_usage_line();
-    app_print_version_usage_line();
-    app_print_help_usage_line();
-    fprintf(stderr, "BREDR Options:\n");
+    fprintf(stderr, "\nBREDR Options:\n");
     app_print_ac_errors_usage_line();
-    fprintf(stderr, "LE Options:\n");
+    fprintf(stderr, "\nLE Options:\n");
     app_print_enforce_crc_usage_line();
+    app_print_other_usage_lines();
 }
 
 static void handle_hybrid_bredr_packet(const bredr_event_t *event,
@@ -1551,7 +1540,7 @@ int hybrid_main(int argc, char *argv[])
     static const struct option long_opts[] = {
         {"view", required_argument, NULL, 'v'},
         {"channels", required_argument, NULL, 'c'},
-        {"bottom-channel", required_argument, NULL, 'b'},
+        {"bottom", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
         {"gain", required_argument, NULL, 'g'},
         {"ac-errors", required_argument, NULL, APP_OPT_AC_ERRORS},
@@ -1707,7 +1696,7 @@ int hybrid_main(int argc, char *argv[])
     printf("Channels    : %u (%u..%u)\n", g_num_bredr_channels,
            g_bottom_bredr_channel,
            g_bottom_bredr_channel + g_num_bredr_channels - 1u);
-    printf("BLE fan-out : up to %u BLE channels in window\n", ble_count);
+    printf("LE fan-out : up to %u LE channels in window\n", ble_count);
     printf("View mode   : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
@@ -1798,21 +1787,17 @@ int hybrid_main(int argc, char *argv[])
 
 static void record_print_usage(const char *argv0)
 {
-    fprintf(stderr,
-            "Usage: %s [-c|--channels N] [-b|--bottom-channel CH] "
-            "[-d|--device [<type>:<id>]] [-g|--gain SPEC] [--debug]\n",
-            argv0);
-    fprintf(stderr, "General Options:\n");
+    fprintf(stderr, "Usage: %s [options]\n", argv0);
+    fprintf(stderr, "\nGeneral Options:\n");
     fprintf(stderr, "  %-30s Number of BR/EDR channels from bottom (even 2-78, 79/\"all\" = full band, default: device-dependent)\n",
             "-c, --channels N");
     fprintf(stderr, "  %-30s Lowest BR/EDR channel to process (0-%u, default: 0)\n",
-            "-b, --bottom-channel CH",
+            "-b, --bottom CH",
             BREDR_MAX_CHANNEL);
     app_print_device_usage_line();
     app_print_gain_usage_line();
     app_print_debug_usage_line();
-    app_print_version_usage_line();
-    app_print_help_usage_line();
+    app_print_other_usage_lines();
 }
 
 int record_main(int argc, char *argv[])
@@ -1820,7 +1805,7 @@ int record_main(int argc, char *argv[])
     argv[0] = (char *)"supertooth record";
     static const struct option long_opts[] = {
         {"channels", required_argument, NULL, 'c'},
-        {"bottom-channel", required_argument, NULL, 'b'},
+        {"bottom", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
         {"gain", required_argument, NULL, 'g'},
         {"version", no_argument, NULL, 'V'},
