@@ -89,7 +89,7 @@ fi
 # Strip 'v' prefix (tags look like v1.2.3).
 VERSION="${VERSION#v}"
 
-APP_SRC="$BUILD_DIR/src/apps/gui/supertooth-desktop.app"
+APP_SRC="$BUILD_DIR/src/apps/gui/Supertooth.app"
 CLI_DIR="$BUILD_DIR/src/apps/cli"
 CLIS=(supertooth)
 
@@ -126,10 +126,9 @@ STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
 
 echo "=== Staging Supertooth.app ==="
-# The product keeps the Supertooth.app bundle name; only the GUI executable
-# inside (Contents/MacOS/supertooth-desktop) was renamed. Copying the built
-# bundle to the product name here keeps the internal Info.plist/executable
-# pairing intact (only the outer directory is renamed).
+# The build already produces Supertooth.app whose Info.plist points at the
+# GUI executable Contents/MacOS/supertooth-desktop (see src/apps/gui/
+# CMakeLists.txt). Copying to the staging dir keeps the build tree clean.
 APP="$STAGING/Supertooth.app"
 cp -a "$APP_SRC" "$APP"
 chmod -R u+w "$APP"
