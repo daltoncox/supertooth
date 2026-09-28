@@ -228,8 +228,9 @@ static void consume_device_arg(const char *optarg, int argc, char *argv[],
         *device_spec = argv[optind++];
 }
 
-/* Shared `-d` handling: bare `-d` lists devices, `-d <type>:<id>` selects
- * one, otherwise a default live device is required.
+/* Shared `-d` handling: bare `-d` lists devices, `-d <n>|<type>|<type>:<id>`
+ * selects one, and no `-d` auto-selects the default device (so the session
+ * always opens hardware that is actually present).
  * Returns 0 to continue into capture setup, 1 if the mode is done (the
  * caller returns EXIT_SUCCESS), -1 on error (caller returns EXIT_FAILURE).
  */
@@ -241,15 +242,11 @@ static int resolve_device(const char *prog, int list_devices, const char *device
     {
         if (device_spec)
         {
-            if (app_parse_device_spec(device_spec, parsed) != 0)
+            if (app_resolve_device_arg(prog, device_spec, parsed) != 0)
             {
-                fprintf(stderr, "Invalid device spec: %s (expected <type>:<id>)\n",
-                        device_spec);
                 print_usage(prog);
                 return -1;
             }
-            if (app_validate_device_spec(prog, parsed) != 0)
-                return -1;
             *selected = 1;
         }
         else
@@ -260,8 +257,9 @@ static int resolve_device(const char *prog, int list_devices, const char *device
 
     if (!*selected)
     {
-        if (app_require_default_device(prog) != 0)
+        if (app_pick_default_device(prog, parsed) != 0)
             return -1;
+        *selected = 1;
     }
     return 0;
 }
@@ -400,6 +398,8 @@ static void print_device_and_gain(int device_selected,
                                   const char *device_id,
                                   const radio_gain_spec_t *gain)
 {
+    /* Device selection is always resolved by now (explicit -d or default
+     * pick), so the banner names the hardware that will be opened. */
     if (device_selected)
         printf("Device      : %s:%s\n",
                session_device_type_name(selected_type),
@@ -795,6 +795,7 @@ done:
 
 static unsigned int ble_num_le_channels = BLE_SESSION_MAX_CHANNELS;
 static unsigned int ble_bottom_le_channel = BLE_CH37_INDEX;
+static int ble_channels_explicit = 0;
 static session_t ble_session;
 static int ble_session_initialized = 0;
 
@@ -808,13 +809,13 @@ static void ble_handle_sigint(int sig)
 static void ble_print_usage(const char *argv0)
 {
     fprintf(stderr, "Usage: %s [-v|--view full|summary|devices] [-c|--channels N] [-b|--bottom-channel CH] "
-             "[-d|--device [<type>:<id>]] [-g|--gain SPEC] [--debug] "
+             "[-d|--device [<n>|<type>|<type>:<id>]] [-g|--gain SPEC] [--debug] "
             "[--enforce-crc on|off]\n", argv0);
     fprintf(stderr, "General Options:\n");
     fprintf(stderr, "  %-30s Packet view style (default: summary)\n", "-v, --view");
     fprintf(stderr, "  %-30s Number of consecutive LE RF channels (1-%u, default: %u)\n",
             "-c, --channels N",
-            BLE_SESSION_MAX_CHANNELS, BLE_SESSION_MAX_CHANNELS);
+            BLE_SESSION_MAX_CHANNELS, ble_num_le_channels);
     fprintf(stderr, "  %-30s Bottom LE channel of the window (0-39, default: 37)\n",
             "-b, --bottom-channel CH");
     app_print_device_usage_line();
@@ -869,6 +870,12 @@ int ble_main(int argc, char *argv[])
     int result;
 
     spec_parsed.type = app_default_device_type();
+
+    /* Default the LE window to what the radio can sustain (HackRF -> 10;
+     * bladeRF -> 30; 80 Msps file replay -> 40). Re-resolved below when
+     * the user did not pass -c and a different device was selected. */
+    ble_num_le_channels = session_default_ble_count(spec_parsed.type);
+
     while ((opt = getopt_long(argc, argv, "v:c:b:d::g:Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
@@ -885,6 +892,7 @@ int ble_main(int argc, char *argv[])
                 ble_print_usage(argv[0]);
                 return EXIT_FAILURE;
             }
+            ble_channels_explicit = 1;
             break;
         case 'b':
             if (parse_le_bottom_channel(optarg, &ble_bottom_le_channel) != 0)
@@ -935,6 +943,15 @@ int ble_main(int argc, char *argv[])
         return EXIT_SUCCESS;
     if (resolve_rc < 0)
         return EXIT_FAILURE;
+
+    /* When the user did not pass -c, default to what the *selected* radio
+     * can sustain (the pre-parse default assumed the build default). */
+    if (!ble_channels_explicit)
+    {
+        radio_device_type_t dtype =
+            device_selected ? spec_parsed.type : app_default_device_type();
+        ble_num_le_channels = session_default_ble_count(dtype);
+    }
 
     bottom_rf = ble_rf_for_channel_number(ble_bottom_le_channel);
     if (bottom_rf >= BLE_RF_CHANNEL_COUNT ||
@@ -1005,8 +1022,8 @@ int ble_main(int argc, char *argv[])
                      gain_raw, &gain_spec) != 0)
         return EXIT_FAILURE;
 
-    printf("BLE Packet Detector\n");
-    printf("=====================\n");
+    printf("Supertooth BLE\n");
+    printf("==============\n");
     printf("Window      : %u LE channel%s from ch%u (RF %u-%u):",
            ble_num_le_channels, ble_num_le_channels == 1u ? "" : "s",
            ble_bottom_le_channel, bottom_rf, bottom_rf + ble_num_le_channels - 1u);
@@ -1026,17 +1043,17 @@ int ble_main(int argc, char *argv[])
     if (!adv_found)
         printf(" (none in window)");
     printf("\n");
-    printf("LO          : %.1f MHz, %u Msps (channelized)\n", lo_mhz, rate_mhz);
     printf("View mode   : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
+    printf("Enforce CRC : %s\n", g_enforce_crc ? "on" : "off");
     print_device_and_gain(device_selected, spec_parsed.type, spec_parsed.id,
                           &gain_spec);
     if (is_file_input)
         print_replay_banner(exhaustive, file_rate_hz, file_center_hz,
                             tune_lo_hz, lo_mhz);
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
-    printf("Enforce CRC : %s\n", g_enforce_crc ? "on" : "off");
+    printf("Press Ctrl+C to stop.\n\n");
     signal(SIGINT, ble_handle_sigint);
 
     config.device_type = spec_parsed.type;
@@ -1062,11 +1079,6 @@ int ble_main(int argc, char *argv[])
         ble_session_initialized = 0;
         return EXIT_FAILURE;
     }
-
-    printf("Monitoring %u LE channel%s from ch%u...\n",
-           ble_num_le_channels, ble_num_le_channels == 1u ? "" : "s",
-           ble_bottom_le_channel);
-    printf("Press Ctrl+C to exit\n\n");
 
     if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
         app_summary_view_print_header();
@@ -1094,12 +1106,12 @@ int ble_main(int argc, char *argv[])
     printf("  Output mode    : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
-    printf("  Debug mode     : %s\n", g_debug ? "enabled" : "disabled");
     printf("  Window         : %u LE channel%s from ch%u (RF %u-%u)\n",
            ble_num_le_channels, ble_num_le_channels == 1u ? "" : "s",
            ble_bottom_le_channel, bottom_rf, bottom_rf + ble_num_le_channels - 1u);
     printf("  Enforce CRC    : %s\n", g_enforce_crc ? "on" : "off");
     printf("  Total packets  : %lu\n", g_packet_count);
+    printf("  Debug mode     : %s\n", g_debug ? "enabled" : "disabled");
 
     if (g_debug)
         print_debug_summary(&ble_session, 1, 1, 0);
@@ -1129,17 +1141,6 @@ static int connection_lap_cmp(const void *a, const void *b)
     if (la > lb)
         return 1;
     return 0;
-}
-
-static void print_session_connections(void)
-{
-    bredr_connection_snapshot_t snapshots[BREDR_SESSION_MAX_CHANNELS * 2u];
-    size_t count = session_get_bredr_connections(
-        g_session, snapshots, sizeof(snapshots) / sizeof(snapshots[0]));
-    printf("=== BR/EDR Connections (%zu connection%s) ===\n",
-           count, count == 1u ? "" : "s");
-    for (size_t i = 0; i < count; i++)
-        bredr_print_connection_snapshot(&snapshots[i]);
 }
 
 static unsigned int current_master_clock_mhz(void)
@@ -1264,7 +1265,6 @@ int bredr_main(int argc, char *argv[])
     int is_file_input;
     uint64_t file_center_hz = 0u;
     uint32_t file_rate_hz = 0u;
-    unsigned int decim_factor;
     session_config_t config;
     session_bredr_config_t bredr_cfg;
     int result;
@@ -1386,12 +1386,8 @@ int bredr_main(int argc, char *argv[])
     if (resolve_gain(argv[0], device_selected, spec_parsed.type,
                      gain_raw, &gain_spec) != 0)
         return EXIT_FAILURE;
-    decim_factor = sample_rate / 2000000u;
-    printf("Supertooth RX (BR/EDR)\n");
-    printf("======================\n");
-    printf("Sample rate : %u Msps\n", sample_rate / 1000000u);
-    printf("Decimation  : /%u -> %u Msps demod input\n",
-           decim_factor, 2u);
+    printf("Supertooth BR/EDR\n");
+    printf("=================\n");
     printf("Channels    : %u (%u..%u)\n", g_num_bredr_channels,
            g_bottom_bredr_channel, g_bottom_bredr_channel + g_num_bredr_channels - 1u);
     printf("View mode   : %s\n", mode_name);
@@ -1399,6 +1395,7 @@ int bredr_main(int argc, char *argv[])
         printf("LAP filter  : %06" PRIX32 "\n", bredr_lap_filter);
     else
         printf("LAP filter  : (none)\n");
+    printf("AC errors   : %u\n", g_ac_errors);
     print_device_and_gain(device_selected, spec_parsed.type, spec_parsed.id,
                           &gain_spec);
     if (is_file_input)
@@ -1444,8 +1441,6 @@ int bredr_main(int argc, char *argv[])
      * The bitstream decoder is the sole access-code acceptance gate. */
     bredr_bitstream_decoder_set_global_max_ac_errors((uint8_t)g_ac_errors);
 
-    printf("AC errors   : %u\n", g_ac_errors);
-
     if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
         app_summary_view_print_header();
 
@@ -1453,6 +1448,9 @@ int bredr_main(int argc, char *argv[])
         g_device_view = app_device_view_start(g_session);
 
     result = session_run(g_session);
+
+    if (result != 0)
+        fprintf(stderr, "BR/EDR receiver failed.\n");
 
     if (g_device_view)
     {
@@ -1462,14 +1460,16 @@ int bredr_main(int argc, char *argv[])
 
     printf("\n\n=== Session Summary ===\n");
     printf("  Output mode    : %s\n", mode_name);
+    printf("  Channels       : %u (%u..%u)\n", g_num_bredr_channels,
+           g_bottom_bredr_channel, g_bottom_bredr_channel + g_num_bredr_channels - 1u);
     if (bredr_lap_filter_enabled)
         printf("  LAP filter     : %06" PRIX32 "\n", bredr_lap_filter);
     else
         printf("  LAP filter     : (none)\n");
+    printf("  Total packets  : %lu\n", g_packet_count);
+    printf("  Debug mode     : %s\n", g_debug ? "enabled" : "disabled");
     if (g_debug)
         print_debug_summary(g_session, 0, 0, 1);
-    printf("\n");
-    print_session_connections();
     session_destroy(g_session);
     free(g_session);
     g_session = NULL;
@@ -1702,21 +1702,24 @@ int hybrid_main(int argc, char *argv[])
     ble_count =
         ble_channels_in_window((uint64_t)(lo_mhz * 1e6), sample_rate, ble_adv);
 
-    printf("Supertooth Hybrid (BR/EDR window + BLE fan-out, shared channelizer)\n");
-    printf("  BR/EDR ch%u-%u + BLE fan-out (up to %u BLE channels in window)\n",
+    printf("Supertooth Hybrid\n");
+    printf("=================\n");
+    printf("Channels    : %u (%u..%u)\n", g_num_bredr_channels,
            g_bottom_bredr_channel,
-           g_bottom_bredr_channel + g_num_bredr_channels - 1u, ble_count);
-    printf("  LO: %.1f MHz, %u MHz bandwidth\n", lo_mhz, sample_rate / 1000000u);
+           g_bottom_bredr_channel + g_num_bredr_channels - 1u);
+    printf("BLE fan-out : up to %u BLE channels in window\n", ble_count);
     printf("View mode   : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
+    printf("Enforce CRC : %s\n", g_enforce_crc ? "on" : "off");
+    printf("AC errors   : %u\n", g_ac_errors);
     print_device_and_gain(device_selected, spec_parsed.type, spec_parsed.id,
                           &gain_spec);
     if (is_file_input)
         print_replay_banner(exhaustive, file_rate_hz, file_center_hz,
                             tune_lo_hz, lo_mhz);
     printf("Debug       : %s\n", g_debug ? "enabled" : "disabled");
-    printf("Enforce CRC : %s\n", g_enforce_crc ? "on" : "off");
+    printf("Press Ctrl+C to stop.\n\n");
 
     config.device_type = spec_parsed.type;
     config.device_id = device_selected ? spec_parsed.id : NULL;
@@ -1754,9 +1757,6 @@ int hybrid_main(int argc, char *argv[])
      * The bitstream decoder is the sole access-code acceptance gate. */
     bredr_bitstream_decoder_set_global_max_ac_errors((uint8_t)g_ac_errors);
 
-    printf("AC errors   : %u\n", g_ac_errors);
-    printf("Receiving... Press Ctrl+C to stop.\n");
-
     if (g_output_mode == APP_OUTPUT_MODE_SUMMARY)
         app_summary_view_print_header();
 
@@ -1764,6 +1764,9 @@ int hybrid_main(int argc, char *argv[])
         g_device_view = app_device_view_start(g_session);
 
     result = session_run(g_session);
+
+    if (result != 0)
+        fprintf(stderr, "Hybrid receiver failed.\n");
 
     if (g_device_view)
     {
@@ -1775,8 +1778,11 @@ int hybrid_main(int argc, char *argv[])
     printf("  Output mode    : %s\n",
            app_output_mode_name(g_output_mode, s_output_modes,
                                 sizeof(s_output_modes) / sizeof(s_output_modes[0])));
-    printf("  Debug mode     : %s\n", g_debug ? "enabled" : "disabled");
+    printf("  Channels       : %u (%u..%u)\n", g_num_bredr_channels,
+           g_bottom_bredr_channel, g_bottom_bredr_channel + g_num_bredr_channels - 1u);
     printf("  Enforce CRC    : %s\n", g_enforce_crc ? "on" : "off");
+    printf("  Total packets  : %lu\n", g_packet_count);
+    printf("  Debug mode     : %s\n", g_debug ? "enabled" : "disabled");
     if (g_debug)
         print_debug_summary(g_session, 1, 1, 1);
 

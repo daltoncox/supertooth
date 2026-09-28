@@ -233,10 +233,11 @@ session_layout_status_t session_validate_layout(
 
 /* Thin wrappers so apps never touch the lane planner or radio ceilings
  * directly: snap a BR/EDR count down to the nearest supported lane split,
- * the default BR/EDR count for a device, and a device's max sample rate
- * (for user-facing diagnostics). */
+ * the default BR/EDR or BLE count for a device, and a device's max sample
+ * rate (for user-facing diagnostics). */
 unsigned int session_snap_bredr_count(unsigned int count);
 unsigned int session_default_bredr_count(radio_device_type_t device_type);
+unsigned int session_default_ble_count(radio_device_type_t device_type);
 uint32_t session_device_max_rate_hz(radio_device_type_t device_type);
 /* Printable device-type name for diagnostics (e.g. "hackrf"). */
 const char *session_device_type_name(radio_device_type_t device_type);

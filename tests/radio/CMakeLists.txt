@@ -15,6 +15,16 @@ target_link_libraries(test_radio_list_devices
 
 add_test(NAME test_radio_list_devices COMMAND test_radio_list_devices)
 
+add_executable(test_radio_enumerate_devices
+    test_radio_enumerate_devices.c
+)
+
+target_link_libraries(test_radio_enumerate_devices
+    supertooth_core
+)
+
+add_test(NAME test_radio_enumerate_devices COMMAND test_radio_enumerate_devices)
+
 add_executable(test_wav_io
     test_wav_io.c
 )

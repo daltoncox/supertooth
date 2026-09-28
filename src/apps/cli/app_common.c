@@ -108,35 +108,24 @@ int app_parse_device_spec(const char *spec, app_device_spec_t *out)
 
 int app_print_available_devices(const char *argv0)
 {
-    int enumerated = 0;
+    radio_device_entry_t *entries = NULL;
+    size_t count = 0u;
 
-    printf("Found Available Devices:\n");
-    for (int type = 0; type < (int)RADIO_DEVICE_TYPE_COUNT; type++)
+    if (radio_enumerate_devices(&entries, &count) != RADIO_SUCCESS)
     {
-        const char *type_name = radio_device_type_name((radio_device_type_t)type);
-        if (!type_name)
-            continue;
-
-        char **identifiers = NULL;
-        size_t count = 0u;
-        int result = radio_list_devices((radio_device_type_t)type,
-                                        &identifiers, &count);
-        if (result != RADIO_SUCCESS || count == 0u)
-        {
-            radio_free_device_list(&identifiers, count);
-            continue;
-        }
-
-        for (size_t i = 0u; i < count; i++)
-            printf("%s:%s\n", type_name, identifiers[i] ? identifiers[i] : "");
-
-        radio_free_device_list(&identifiers, count);
-        enumerated += (int)count;
+        fprintf(stderr, "Device listing failed.\n");
+        return EXIT_FAILURE;
     }
 
-    if (enumerated == 0)
+    printf("Found available devices:\n");
+    for (size_t i = 0u; i < count; i++)
+        printf("%zu. %s:%s\n", i + 1u,
+               radio_device_type_name(entries[i].type), entries[i].id);
+
+    if (count == 0u)
         printf("(no devices found)\n");
 
+    radio_free_device_entries(&entries, count);
     (void)argv0;
     return EXIT_SUCCESS;
 }
@@ -166,22 +155,197 @@ int app_validate_device_spec(const char *argv0, const app_device_spec_t *spec)
     return -1;
 }
 
-int app_require_default_device(const char *argv0)
+static void app_print_list_hint(const char *argv0)
 {
-    if (session_get_default_device(NULL, NULL, 0u) == RADIO_SUCCESS)
-        return 0;
-
-    fprintf(stderr,
-            "No devices found. Run the following to list detected devices:\n\n"
-            "%s -d\n",
+    fprintf(stderr, "Run the following to list detected devices:\n\n%s -d\n",
             argv0 ? argv0 : "supertooth");
+}
+
+/* Look up a live device type by name ("hackrf"); case-sensitive, matching
+ * app_parse_device_spec(). FILE is a replay path, not a device. */
+static int app_find_live_type(const char *name, radio_device_type_t *out)
+{
+    size_t len;
+
+    if (!name || !out)
+        return -1;
+    len = strlen(name);
+    if (len == 0u)
+        return -1;
+    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT; t++)
+    {
+        radio_device_type_t type = (radio_device_type_t)t;
+        const char *type_name;
+        if (!radio_device_type_is_live(type))
+            continue;
+        type_name = radio_device_type_name(type);
+        if (type_name && strcmp(type_name, name) == 0)
+        {
+            *out = type;
+            return 0;
+        }
+    }
     return -1;
+}
+
+/* Adopt an inventory entry into @p out with a process-lifetime id copy. */
+static int app_adopt_entry(const radio_device_entry_t *entry,
+                           app_device_spec_t *out)
+{
+    size_t len;
+
+    if (!entry || !entry->id || !out)
+        return -1;
+    len = strlen(entry->id);
+    out->id = (const char *)malloc(len + 1u);
+    if (!out->id)
+        return -1;
+    memcpy((char *)out->id, entry->id, len + 1u);
+    out->type = entry->type;
+    return 0;
+}
+
+int app_resolve_device_arg(const char *argv0, const char *arg,
+                           app_device_spec_t *out)
+{
+    radio_device_entry_t *entries = NULL;
+    size_t count = 0u;
+    app_device_spec_t picked = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
+    int result = -1;
+
+    if (!arg || !arg[0] || !out)
+    {
+        fprintf(stderr, "Invalid device selection.\n");
+        app_print_list_hint(argv0);
+        return -1;
+    }
+
+    /* Pure type:id specs (file replay included) keep the existing path. */
+    if (strchr(arg, ':') != NULL)
+    {
+        if (app_parse_device_spec(arg, out) != 0)
+        {
+            fprintf(stderr, "Invalid device spec: %s (expected <n>, <type> or <type>:<id>)\n",
+                    arg);
+            app_print_list_hint(argv0);
+            return -1;
+        }
+        return app_validate_device_spec(argv0, out);
+    }
+
+    if (radio_enumerate_devices(&entries, &count) != RADIO_SUCCESS)
+    {
+        fprintf(stderr, "Device listing failed.\n");
+        return -1;
+    }
+
+    /* All-digits: 1-based index into the numbered listing. */
+    {
+        char *end = NULL;
+        unsigned long index = strtoul(arg, &end, 10);
+        if (end != arg && *end == '\0')
+        {
+            if (index < 1ul || index > (unsigned long)count)
+            {
+                fprintf(stderr, "Invalid device index: %s (expected 1-%lu).\n",
+                        arg, (unsigned long)count);
+                radio_free_device_entries(&entries, count);
+                app_print_list_hint(argv0);
+                return -1;
+            }
+            picked.type = entries[index - 1ul].type;
+            if (app_adopt_entry(&entries[index - 1ul], &picked) != 0)
+            {
+                radio_free_device_entries(&entries, count);
+                return -1;
+            }
+            radio_free_device_entries(&entries, count);
+            if (app_validate_device_spec(argv0, &picked) != 0)
+            {
+                free((void *)picked.id);
+                return -1;
+            }
+            *out = picked;
+            return 0;
+        }
+    }
+
+    /* Otherwise a device type name: first device of that type. */
+    {
+        radio_device_type_t type;
+        if (app_find_live_type(arg, &type) != 0)
+        {
+            if (strcmp(arg, "file") == 0)
+                fprintf(stderr, "No file devices to select: replay a capture with -d file:<path>.\n");
+            else
+                fprintf(stderr, "Unknown device type: %s.\n", arg);
+            radio_free_device_entries(&entries, count);
+            app_print_list_hint(argv0);
+            return -1;
+        }
+        for (size_t i = 0u; i < count; i++)
+        {
+            if (entries[i].type == type)
+            {
+                if (app_adopt_entry(&entries[i], &picked) != 0)
+                {
+                    radio_free_device_entries(&entries, count);
+                    return -1;
+                }
+                result = 0;
+                break;
+            }
+        }
+        if (result != 0)
+        {
+            fprintf(stderr, "No %s devices found.\n", arg);
+            radio_free_device_entries(&entries, count);
+            app_print_list_hint(argv0);
+            return -1;
+        }
+        radio_free_device_entries(&entries, count);
+        if (app_validate_device_spec(argv0, &picked) != 0)
+        {
+            free((void *)picked.id);
+            return -1;
+        }
+        *out = picked;
+        return 0;
+    }
+}
+
+int app_pick_default_device(const char *argv0, app_device_spec_t *out)
+{
+    radio_device_entry_t *entries = NULL;
+    size_t count = 0u;
+
+    if (!out)
+        return -1;
+    if (radio_enumerate_devices(&entries, &count) != RADIO_SUCCESS)
+    {
+        fprintf(stderr, "Device listing failed.\n");
+        return -1;
+    }
+    if (count == 0u)
+    {
+        radio_free_device_entries(&entries, count);
+        fprintf(stderr, "No devices found. ");
+        app_print_list_hint(argv0);
+        return -1;
+    }
+    if (app_adopt_entry(&entries[0], out) != 0)
+    {
+        radio_free_device_entries(&entries, count);
+        return -1;
+    }
+    radio_free_device_entries(&entries, count);
+    return app_validate_device_spec(argv0, out);
 }
 
 void app_print_device_usage_line(void)
 {
-    fprintf(stderr, "  %-30s List available devices, or open a specific one\n",
-            "-d, --device [<type>:<id>]");
+    fprintf(stderr, "  %-30s List available devices, or select one by number, type, or <type>:<id>\n",
+            "-d, --device [<n>|<type>|<type>:<id>]");
 }
 
 void app_print_version_usage_line(void)

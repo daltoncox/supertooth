@@ -175,6 +175,42 @@ int radio_list_devices(radio_device_type_t device_type,
 void radio_free_device_list(char ***identifiers, size_t count);
 
 /**
+ * One enumerated live device: its type plus a heap-owned identifier
+ * (matching radio_list_devices() for that type). File replay is not a
+ * live device and never appears here.
+ */
+typedef struct
+{
+    radio_device_type_t type;
+    char *id;
+} radio_device_entry_t;
+
+/**
+ * Enumerate every live device across all compiled-in backends.
+ *
+ * On success, `*out_entries` points to a newly allocated array of
+ * `*out_count` entries with heap-owned ids, sorted by "type:id" so the
+ * order is stable regardless of backend enumeration order. A type whose
+ * listing fails is skipped, never fatal; zero devices is success with
+ * `*out_count == 0` (and `*out_entries` left NULL). The caller owns the
+ * array and must release it with radio_free_device_entries().
+ *
+ * Shared by the CLI (-d listing/selection, default pick) and any future
+ * frontend device picker (e.g. the GUI).
+ *
+ * @return RADIO_SUCCESS on success, a negative value on bad arguments
+ *         or allocation failure.
+ */
+int radio_enumerate_devices(radio_device_entry_t **out_entries,
+                            size_t *out_count);
+
+/**
+ * Free an entry array previously returned by radio_enumerate_devices().
+ * Frees each id and the array itself, and sets the pointer to NULL.
+ */
+void radio_free_device_entries(radio_device_entry_t **entries, size_t count);
+
+/**
  * Check whether a device with the given id is currently present for the
  * given device type.
  *

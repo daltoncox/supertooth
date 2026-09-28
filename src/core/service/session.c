@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "ble_codec.h"
+#include "ble_channel_processor.h"
 #include "bt_assigned_numbers.h"
 #include "channelizer_bank.h"
 #include "radio_common.h"
@@ -283,6 +284,25 @@ unsigned int session_default_bredr_count(radio_device_type_t device_type)
     if (max_rate_hz < 1000000u)
         return 2u;
     return channelizer_service_snap_bredr_count(max_rate_hz / 1000000u);
+}
+
+/* Default LE window for a device: as many 2 MHz RF channels as the radio
+ * can sustain (HackRF -> 10, bladeRF -> 30, 80 Msps file replay -> 40),
+ * snapped down until the lane planner accepts the span. */
+unsigned int session_default_ble_count(radio_device_type_t device_type)
+{
+    uint32_t max_rate_hz = session_device_max_rate_hz(device_type);
+    unsigned int count = max_rate_hz / 2000000u;
+
+    if (count < 1u)
+        count = 1u;
+    if (count > BLE_SESSION_MAX_CHANNELS)
+        count = BLE_SESSION_MAX_CHANNELS;
+    while (count > 1u &&
+           session_validate_layout(device_type, 1, 0, SESSION_REF_BLE,
+                                   0u, count) != SESSION_LAYOUT_OK)
+        count--;
+    return count;
 }
 
 uint32_t session_device_max_rate_hz(radio_device_type_t device_type)

@@ -471,6 +471,106 @@ void radio_free_device_list(char ***identifiers, size_t count)
     *identifiers = NULL;
 }
 
+static int device_entry_cmp(const void *a, const void *b)
+{
+    const radio_device_entry_t *ea = (const radio_device_entry_t *)a;
+    const radio_device_entry_t *eb = (const radio_device_entry_t *)b;
+    const char *na = radio_device_type_name(ea->type);
+    const char *nb = radio_device_type_name(eb->type);
+    int name_cmp = strcmp(na ? na : "", nb ? nb : "");
+    if (name_cmp != 0)
+        return name_cmp;
+    return strcmp(ea->id ? ea->id : "", eb->id ? eb->id : "");
+}
+
+int radio_enumerate_devices(radio_device_entry_t **out_entries,
+                            size_t *out_count)
+{
+    radio_device_entry_t *entries = NULL;
+    size_t count = 0u;
+    size_t capacity = 0u;
+
+    if (!out_entries || !out_count)
+        return -1;
+
+    *out_entries = NULL;
+    *out_count = 0u;
+
+    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT; t++)
+    {
+        radio_device_type_t type = (radio_device_type_t)t;
+        char **identifiers = NULL;
+        size_t n = 0u;
+
+        if (!radio_device_type_is_live(type) || !radio_device_type_name(type))
+            continue;
+        if (radio_list_devices(type, &identifiers, &n) != RADIO_SUCCESS)
+        {
+            radio_free_device_list(&identifiers, n);
+            continue;
+        }
+
+        for (size_t i = 0u; i < n; i++)
+        {
+            char *id;
+            if (!identifiers[i] || identifiers[i][0] == '\0')
+                continue;
+            if (count == capacity)
+            {
+                size_t grown = capacity == 0u ? 8u : capacity * 2u;
+                radio_device_entry_t *resized =
+                    (radio_device_entry_t *)realloc(entries,
+                                                    grown * sizeof(*resized));
+                if (!resized)
+                {
+                    radio_free_device_list(&identifiers, n);
+                    goto fail;
+                }
+                entries = resized;
+                capacity = grown;
+            }
+            id = (char *)malloc(strlen(identifiers[i]) + 1u);
+            if (!id)
+            {
+                radio_free_device_list(&identifiers, n);
+                goto fail;
+            }
+            strcpy(id, identifiers[i]);
+            entries[count].type = type;
+            entries[count].id = id;
+            count++;
+        }
+        radio_free_device_list(&identifiers, n);
+    }
+
+    if (count > 1u)
+        qsort(entries, count, sizeof(*entries), device_entry_cmp);
+
+    *out_entries = entries;
+    *out_count = count;
+    return RADIO_SUCCESS;
+
+fail:
+    for (size_t i = 0u; i < count; i++)
+        free(entries[i].id);
+    free(entries);
+    return -1;
+}
+
+void radio_free_device_entries(radio_device_entry_t **entries, size_t count)
+{
+    radio_device_entry_t *list;
+
+    if (!entries || !*entries)
+        return;
+
+    list = *entries;
+    for (size_t i = 0u; i < count; i++)
+        free(list[i].id);
+    free(list);
+    *entries = NULL;
+}
+
 int radio_device_exists(radio_device_type_t device_type, const char *device_id)
 {
     /* For file replay "existence" is just path readability. */

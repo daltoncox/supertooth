@@ -63,8 +63,9 @@ void app_install_sigint_handler(session_t *session_slot);
 int app_parse_device_spec(const char *spec, app_device_spec_t *out);
 
 /**
- * Print one "<type>:<id>" line per connected radio of every known device
- * type, then return. Used by the bare `-d` / `--device` form.
+ * Print the numbered device list (see radio_enumerate_devices()) for the
+ * bare `-d` / `--device` form, then return. Numbers are the `-d <n>`
+ * selection indices.
  * @return EXIT_SUCCESS on completion, EXIT_FAILURE on enumeration error.
  */
 int app_print_available_devices(const char *argv0);
@@ -78,14 +79,26 @@ int app_print_available_devices(const char *argv0);
 int app_validate_device_spec(const char *argv0, const app_device_spec_t *spec);
 
 /**
- * Verify a default live device exists (for runs without an explicit
- * `-d <type>:<id>`). Uses session_get_default_device() so any live type
- * is accepted; file replay is not probed here (explicit specs are already
- * validated by app_validate_device_spec()).
- * On success returns 0. On no-device prints the friendly "No devices
- * found" message (which references @p argv0) and returns non-zero.
+ * Resolve a `-d` argument to a live device. Accepted forms:
+ *   <n>          1-based index into the numbered `-d` listing,
+ *   <type>       first device of that type (e.g. "hackrf"),
+ *   <type>:<id> explicit device (e.g. "hackrf:b25062dc22113a0b").
+ * Every form is re-validated against current hardware, so a device that
+ * vanished since the listing still fails cleanly. On success @p out is
+ * populated with a process-lifetime id and 0 is returned. On failure a
+ * diagnostic (referencing @p argv0) is printed and non-zero returned.
  */
-int app_require_default_device(const char *argv0);
+int app_resolve_device_arg(const char *argv0, const char *arg,
+                           app_device_spec_t *out);
+
+/**
+ * Pick the default live device (runs without an explicit `-d`): entry #1
+ * of the sorted inventory. On success @p out is populated with a
+ * process-lifetime id and 0 is returned. On no-device the friendly "No
+ * devices found" message (referencing @p argv0) is printed and non-zero
+ * returned.
+ */
+int app_pick_default_device(const char *argv0, app_device_spec_t *out);
 
 /**
  * Print the `--device` usage line for `print_usage` blocks.
