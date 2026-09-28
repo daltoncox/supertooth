@@ -2,8 +2,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "cli_modes.h"
 #include "version.h"
+
+/* Mode entry points (cli_modes.c). Each mode owns argv[1..] after the
+ * dispatcher strips the mode word. */
+int ble_main(int argc, char *argv[]);
+int bredr_main(int argc, char *argv[]);
+int hybrid_main(int argc, char *argv[]);
+int record_main(int argc, char *argv[]);
 
 static void print_top_level_help(const char *prog)
 {
