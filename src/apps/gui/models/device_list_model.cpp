@@ -91,6 +91,13 @@ void DeviceListModel::setRows(const QVariantList &rows)
         r.addrType = m.value(QStringLiteral("addrType")).toString();
         r.displayName = m.value(QStringLiteral("displayName")).toString();
         r.manufacturer = m.value(QStringLiteral("manufacturer")).toString();
+        r.services = m.value(QStringLiteral("services")).toString();
+        r.appearance = m.value(QStringLiteral("appearance")).toString();
+        r.flags = m.value(QStringLiteral("flags")).toString();
+        r.deviceClass = m.value(QStringLiteral("deviceClass")).toString();
+        const QVariant txp = m.value(QStringLiteral("txPower"));
+        r.txPowerValid = txp.isValid() ? 1 : 0;
+        r.txPower = txp.isValid() ? txp.toInt() : 0;
         r.rssiValid = m.value(QStringLiteral("rssiValid")).toBool() ? 1 : 0;
         r.rssiDb = r.rssiValid
                        ? m.value(QStringLiteral("rssiDb")).toDouble()
@@ -102,13 +109,20 @@ void DeviceListModel::setRows(const QVariantList &rows)
             m.value(QStringLiteral("packetsSeen")).toULongLong();
         const qulonglong prev = m_prevPackets.value(r.id, pk);
         const qulonglong delta = (pk >= prev) ? (pk - prev) : 0;
-        r.lastRate = (int)qMin(delta * 4ULL, 100000ULL);
+        r.lastRate = (int)qMin(delta, 100000ULL);
         m_prevPackets[r.id] = pk;
         r.packetsSeen = pk;
 
         r.crcInit = (uint32_t)m.value(QStringLiteral("crcInit")).toUInt();
         r.crcInitConfirmed = m.value(QStringLiteral("crcInitConfirmed")).toBool() ? 1 : 0;
         r.crcInitCandidates = m.value(QStringLiteral("crcInitCandidates")).toInt();
+
+        r.groupId = m.value(QStringLiteral("groupId")).toULongLong();
+        r.ltSlot = m.contains(QStringLiteral("ltSlot"))
+                       ? m.value(QStringLiteral("ltSlot")).toInt()
+                       : -2;
+        r.isLastChild = 0;
+        r.hasChildren = 0;
 
         QVector<QPointF> series = oldSeries.value(r.id);
         if (r.rssiValid)
@@ -130,15 +144,16 @@ void DeviceListModel::setRows(const QVariantList &rows)
     if (!m_sortRoleName.isEmpty() && next.size() >= 2)
         std::stable_sort(next.begin(), next.end(),
                          [this](const Row &a, const Row &b) { return lessThan(a, b); });
+    assignTreeFlags(next);
 
     /* Decide how much of the model changed and emit the lightest signal that
      * is correct:
      *   - same ids, same order  -> dataChanged      (delegates untouched)
      *   - same ids, new order   -> layoutChanged     (delegates reused, reordered)
-     *   - ids added/removed     -> full reset        (rare)
+     *   - ids added/removed     -> incremental insert/remove (see below)
      * beginResetModel()/endResetModel() must be avoided for the common
      * data-refresh case: it destroys and recreates every delegate on the GUI
-     * thread 4x/second and starves input handling during a live capture. */
+     * thread every poll and starves input handling during a live capture. */
     bool sameSet = (next.size() == m_rows.size());
     if (sameSet && next.size() > 0)
     {
@@ -171,7 +186,11 @@ void DeviceListModel::setRows(const QVariantList &rows)
         if (sameOrder)
         {
             if (!m_rows.isEmpty())
-                emit dataChanged(index(0, 0), index(m_rows.size() - 1, 0));
+                emit dataChanged(index(0, 0), index(m_rows.size() - 1, 0),
+                                 {RssiRole, ProtoRole, TypeRole, AddrRole,
+                                  DeviceRole, IdentifierRole, FirstSeenRole,
+                                  LastSeenRole, PacketsSeenRole, PacketRateRole,
+                                  DeviceIdRole});
         }
         else
         {
@@ -181,11 +200,110 @@ void DeviceListModel::setRows(const QVariantList &rows)
     }
     else
     {
-        beginResetModel();
-        m_rows = next;
+        /* Membership changed (devices joined/left): update incrementally so
+         * delegates are reused instead of destroyed. beginResetModel() would
+         * recreate every delegate and stall input for the whole table; the
+         * sequence below costs O(delta). */
+        const int oldSize = m_rows.size();
+
+        QSet<int> newIds;
+        newIds.reserve(next.size());
+        for (const Row &r : next)
+            newIds.insert(r.id);
+
+        // Drop rate history for departed ids so m_prevPackets can't grow
+        // without bound across long captures with heavy device churn.
+        for (auto it = m_prevPackets.begin(); it != m_prevPackets.end();)
+        {
+            if (!newIds.contains(it.key()))
+                it = m_prevPackets.erase(it);
+            else
+                ++it;
+        }
+
+        // Step 1: precise removals, descending so indexes stay valid.
+        for (int i = m_rows.size() - 1; i >= 0; --i)
+        {
+            if (!newIds.contains(m_rows.at(i).id))
+            {
+                beginRemoveRows(QModelIndex(), i, i);
+                m_rows.removeAt(i);
+                endRemoveRows();
+            }
+        }
         rebuildLookup();
-        endResetModel();
-        emit countChanged();
+
+        // Step 2: refresh survivor payloads in place (by stable id).
+        QHash<int, Row> freshById;
+        freshById.reserve(next.size());
+        for (const Row &r : next)
+            freshById.insert(r.id, r);
+        for (int i = 0; i < m_rows.size(); ++i)
+        {
+            const int id = m_rows.at(i).id;
+            auto it = freshById.find(id);
+            if (it != freshById.end())
+                m_rows[i] = it.value();
+        }
+
+        // Step 3: do survivors sit in final relative order already?
+        // Walk `next`, skipping ids that are new arrivals; the remaining
+        // sequence must match m_rows exactly for pure inserts to be valid.
+        bool survivorsOrdered = true;
+        {
+            int cur = 0;
+            for (const Row &r : next)
+            {
+                if (!m_rowById.contains(r.id))
+                    continue; // new arrival, handled by the insert below
+                if (cur >= m_rows.size() || m_rows.at(cur).id != r.id)
+                {
+                    survivorsOrdered = false;
+                    break;
+                }
+                ++cur;
+            }
+            if (cur != m_rows.size())
+                survivorsOrdered = false;
+        }
+
+        if (survivorsOrdered)
+        {
+            // Step 4a: pure inserts at final sorted positions.
+            int pos = 0;
+            for (const Row &r : next)
+            {
+                if (pos < m_rows.size() && m_rows.at(pos).id == r.id)
+                {
+                    ++pos;
+                    continue;
+                }
+                beginInsertRows(QModelIndex(), pos, pos);
+                m_rows.insert(pos, r);
+                endInsertRows();
+                ++pos;
+            }
+            rebuildLookup();
+            if (!m_rows.isEmpty())
+                emit dataChanged(index(0, 0), index(m_rows.size() - 1, 0),
+                                 {RssiRole, ProtoRole, TypeRole, AddrRole,
+                                  DeviceRole, IdentifierRole, FirstSeenRole,
+                                  LastSeenRole, PacketsSeenRole, PacketRateRole,
+                                  DeviceIdRole});
+        }
+        else
+        {
+            // Step 4b: survivors reordered as well — assign the pre-sorted
+            // `next` wholesale and reuse delegates via layoutChanged (still
+            // no reset, so no delegate destruction).
+            m_rows = next;
+            rebuildLookup();
+            emit layoutAboutToBeChanged();
+            emit layoutChanged();
+        }
+
+        if (m_rows.size() != oldSize)
+            emit countChanged();
     }
 }
 
@@ -219,11 +337,24 @@ QVariantList DeviceListModel::detailFor(int index) const
 
     add(QStringLiteral("Protocol"), r.proto);
     add(QStringLiteral("Address"), r.addr);
+    if (isPiconetMember(r))
+        add(QStringLiteral("Piconet"), r.addr);
     add(QStringLiteral("Device"), r.device);
     if (!r.displayName.isEmpty())
         add(QStringLiteral("Device Name"), r.displayName);
     if (!r.manufacturer.isEmpty())
         add(QStringLiteral("Manufacturer"), r.manufacturer);
+    if (!r.services.isEmpty())
+        add(QStringLiteral("Services"), r.services);
+    if (!r.appearance.isEmpty())
+        add(QStringLiteral("Appearance"), r.appearance);
+    if (!r.flags.isEmpty())
+        add(QStringLiteral("Flags"), r.flags);
+    if (!r.deviceClass.isEmpty())
+        add(QStringLiteral("Class of Device"), r.deviceClass);
+    if (r.txPowerValid)
+        add(QStringLiteral("Tx Power"),
+            QString::number(r.txPower) + QStringLiteral(" dBm"));
     add(QStringLiteral("RSSI (1s avg)"),
         r.rssiValid ? QString::number(r.rssiDb, 'f', 1) + QStringLiteral(" dBm")
                     : QStringLiteral("--"));
@@ -276,6 +407,13 @@ int DeviceListModel::rowForDeviceId(int id) const
     return m_rowById.value(id, -1);
 }
 
+int DeviceListModel::deviceIdAt(int row) const
+{
+    if (row < 0 || row >= m_rows.size())
+        return 0;
+    return m_rows.at(row).id;
+}
+
 void DeviceListModel::setSortRoleName(const QString &name)
 {
     if (m_sortRoleName == name)
@@ -321,7 +459,7 @@ QString DeviceListModel::typeLabelFor(const QString &proto, const QString &devic
     }
     if (proto == QStringLiteral("BR/EDR"))
     {
-        if (device == QStringLiteral("piconet"))
+        if (device == QStringLiteral("connection"))
             return QStringLiteral("CONN");
         if (device == QStringLiteral("INQUIRY"))
             return QStringLiteral("INQUIRY");
@@ -330,13 +468,82 @@ QString DeviceListModel::typeLabelFor(const QString &proto, const QString &devic
     return QStringLiteral("--");
 }
 
+bool DeviceListModel::isPiconetConnection(const Row &r)
+{
+    return r.proto == QStringLiteral("BR/EDR") &&
+           r.device == QStringLiteral("connection") && r.ltSlot == -1;
+}
+
+bool DeviceListModel::isPiconetMember(const Row &r)
+{
+    return r.proto == QStringLiteral("BR/EDR") && r.groupId != 0u &&
+           r.ltSlot >= 0;
+}
+
+int DeviceListModel::treeRank(const Row &r)
+{
+    if (isPiconetConnection(r))
+        return 0;
+    if (r.ltSlot == 255)
+        return 1;
+    return 2;
+}
+
+void DeviceListModel::assignTreeFlags(QVector<Row> &rows)
+{
+    // Rows are in display order: within each piconet group the connection
+    // comes first, then members. The last member of each group gets └─
+    // (other members get ├─).
+    QHash<qulonglong, int> lastMemberIdx;
+    QSet<qulonglong> groupsWithMembers;
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        rows[i].isLastChild = 0;
+        rows[i].hasChildren = 0;
+        if (!isPiconetMember(rows[i]))
+            continue;
+        const qulonglong key = rows[i].groupId;
+        groupsWithMembers.insert(key);
+        auto it = lastMemberIdx.find(key);
+        if (it != lastMemberIdx.end())
+            rows[it.value()].isLastChild = 0;
+        rows[i].isLastChild = 1;
+        if (it != lastMemberIdx.end())
+            it.value() = i;
+        else
+            lastMemberIdx.insert(key, i);
+    }
+    // Connections render as a plain address. Members whose parent
+    // connection hasn't been polled yet still group by groupId and get
+    // └─/├─ among themselves.
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        if (!isPiconetConnection(rows[i]))
+            continue;
+        if (groupsWithMembers.contains(rows[i].groupId) ||
+            groupsWithMembers.contains((qulonglong)rows[i].id))
+            rows[i].hasChildren = 1;
+    }
+    Q_UNUSED(lastMemberIdx);
+}
+
 QString DeviceListModel::identifierLabelFor(const Row &r)
 {
     if (r.proto == QStringLiteral("BR/EDR"))
     {
-        if (r.device == QStringLiteral("piconet") ||
-            r.device == QStringLiteral("INQUIRY"))
+        if (r.device == QStringLiteral("INQUIRY"))
             return r.addr;
+        if (isPiconetConnection(r))
+            return r.addr;
+        if (isPiconetMember(r))
+        {
+            const QString prefix = r.isLastChild
+                                       ? QStringLiteral("└─ ")
+                                       : QStringLiteral("├─ ");
+            if (r.device == QStringLiteral("Central"))
+                return prefix + QStringLiteral("Central");
+            return prefix + r.device;
+        }
         QString suffix;
         if (r.device == QStringLiteral("Central"))
             suffix = QStringLiteral("C");
@@ -389,6 +596,55 @@ bool DeviceListModel::lessThan(const Row &a, const Row &b) const
     {
         if (a.proto != b.proto)
             return cmpStr(a.proto, b.proto);
+        // BR/EDR piconets stay contiguous: the connection renders expanded
+        // with its members directly below (connection, Central, LT_ADDR N).
+        // Grouped rows sort before ungrouped BR/EDR singletons (INQUIRY /
+        // standalone) so a group is never split.
+        if (a.proto == QStringLiteral("BR/EDR"))
+        {
+            const bool ag = isPiconetConnection(a) || isPiconetMember(a);
+            const bool bg = isPiconetConnection(b) || isPiconetMember(b);
+            if (ag && bg)
+            {
+                // Group identity is the stable piconet linkage, not the
+                // address string: member rows force the UAP to known while
+                // the connection shows 0x?? until UAP recovery, so addr
+                // strings can disagree within one piconet. Piconets order
+                // by LAP (addr suffix: the UAP prefix may disagree); the
+                // numeric groupId only breaks LAP ties.
+                if (a.groupId != b.groupId)
+                {
+                    const QString al = a.addr.length() >= 6
+                                           ? a.addr.right(6)
+                                           : a.addr;
+                    const QString bl = b.addr.length() >= 6
+                                           ? b.addr.right(6)
+                                           : b.addr;
+                    if (al != bl)
+                        return cmpStr(al, bl);
+                    if (asc)
+                        return a.groupId < b.groupId;
+                    return a.groupId > b.groupId;
+                }
+                // Parent always first; members Central then LT_ADDR numeric,
+                // regardless of sort direction. Only piconet-to-piconet
+                // order follows asc/desc.
+                const int ra = treeRank(a);
+                const int rb = treeRank(b);
+                if (ra != rb)
+                    return ra < rb;
+                if (a.ltSlot != b.ltSlot)
+                    return a.ltSlot < b.ltSlot;
+                // Raw fields only: identifierLabelFor() embeds the ├─/└─
+                // prefixes, which are assigned after sorting and would feed
+                // stale flags back into the comparator.
+                if (a.addr != b.addr)
+                    return cmpStr(a.addr, b.addr);
+                return cmpStr(a.device, b.device);
+            }
+            if (ag != bg)
+                return ag ? true : false;
+        }
         const QString ta = typeLabelFor(a.proto, a.device, a.addrType);
         const QString tb = typeLabelFor(b.proto, b.device, b.addrType);
         if (ta != tb)
@@ -442,6 +698,7 @@ void DeviceListModel::maybeResort()
 
     std::stable_sort(m_rows.begin(), m_rows.end(),
                      [this](const Row &a, const Row &b) { return lessThan(a, b); });
+    assignTreeFlags(m_rows);
 
     for (int i = 0; i < m_rows.size(); ++i)
     {

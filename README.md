@@ -8,14 +8,16 @@
   </picture>
 </div>
 
-Supertooth is a C-based software-defined radio (SDR) project for receiving and decoding Bluetooth traffic with a HackRF.
+Supertooth is a C-based software-defined radio (SDR) project for observing Bluetooth traffic. It offers:
 
-It includes four runtime binaries:
+- Passive, wideband multi-channel monitoring for BR/EDR + LE
+- Packet decoding for active Bluetooth connections as an outside party
+- Pure host-side processing for using a HackRF or bladeRF off-the-shelf
 
-1. `supertooth`: Qt GUI application with live BR/EDR + BLE capture, spectrum view, and packet log.
-2. `supertooth-bredr`: BR/EDR multichannel receiver with piconet tracking.
-3. `supertooth-ble`: BLE advertising capture/decoder over a window of LE RF channels (37/38/39), channelized from a wideband capture.
-4. `supertooth-hybrid`: simultaneous BR/EDR multichannel + BLE advertising processing from a shared stream.
+It includes two runtime binaries:
+
+1. `supertooth`: CLI with various modes (bredr, le, and hybrid)
+2. `supertooth-desktop`: Qt GUI application with live BR/EDR + LE capture, spectrum view, and packet log.
 
 ## Install
 
@@ -25,42 +27,39 @@ Pre-built `.deb` packages are available on the [releases page](https://github.co
 
 ```bash
 sudo apt install ./supertooth_*.deb
-supertooth          # GUI
-supertooth-bredr --help    # CLI
+supertooth          # CLI
+supertooth-desktop  # GUI
 ```
 
-The package bundles Qt 6.8, radio libs, and QML modules — no extra runtime dependencies beyond glibc/libstdc++. The GUI binary lives at `/opt/supertooth/bin/supertooth-bin`; `/usr/bin/supertooth` is a thin wrapper that exec's it directly (plugin/QML paths come from `qt.conf` next to the binary, libraries via RPATH). CLI tools (`supertooth-bredr`, `supertooth-ble`, `supertooth-hybrid`) are symlinks into `/opt/supertooth/bin/`. Desktop entry and icons install under `/usr/share/applications` and `/usr/share/icons/`.
+The package bundles dependencies such as Qt 6.8 and the radio libraries to make use of newer features than those offered by the apt sources. As such, binaries are placed in `/opt/supertooth` and are symlinked into `bin`.
 
 ### macOS (Apple Silicon)
 
-Download the latest `supertooth_macos_arm64.dmg` from the [releases page](https://github.com/daltoncox/supertooth/releases), open it, and drag `Supertooth.app` to `/Applications`. The disk image is self-contained: Qt frameworks, QML imports, and the radio libraries (`hackrf`, `liquid-dsp` and their transitive dependencies) are all bundled inside the `.app` — no Homebrew packages required at runtime. Requires macOS 14+ on `arm64`.
+Download the latest `supertooth_macos_arm64.dmg` from the [releases page](https://github.com/daltoncox/supertooth/releases), open it, and drag `Supertooth.app` to `/Applications`.
 
-The three CLI tools ship inside the bundle alongside the GUI:
+The CLI ships inside the bundle alongside the GUI:
 
 ```bash
-/Applications/Supertooth.app/Contents/MacOS/supertooth-bredr --help
-/Applications/Supertooth.app/Contents/MacOS/supertooth-ble --help
-/Applications/Supertooth.app/Contents/MacOS/supertooth-hybrid --help
+/Applications/Supertooth.app/Contents/MacOS/supertooth -h
+/Applications/Supertooth.app/Contents/MacOS/supertooth-desktop
 ```
 
-> **Gatekeeper note:** release builds are ad-hoc signed but not notarized, so macOS may refuse to open the app on first launch. Right-click `Supertooth.app` → Open, or run `xattr -d com.apple.quarantine /Applications/Supertooth.app`.
+> **Gatekeeper note:** macOS will likely refuse to open the app on first launch. To resolve this, open Settings -> Privacy & Security, scroll to the bottom, and under Security, click `Open Anyway`.
 
 ## Building from source
 
-### Prerequisites
+### Dependencies and Build Options
 
-| Dependency | Purpose |
-|---|---|
-| `libhackrf` | HackRF device API |
-| `liquid-dsp` | Channelization, filtering, NCO mixing, GFSK/CPFSK demodulation |
+| Dependency | CMake Option | Build Default | In Release |
+|---|---|---|---|
+| `liquid-dsp` | Required (None) | - | - | 
+| `libhackrf` | ENABLE_HACKRF | ON | yes |
+| `libbladerf` | ENABLE_BLADERF | OFF | yes |
+| `Qt 6.8+` | BUILD_GUI | OFF | yes |
+| - | BUILD_TESTS | OFF | no |
 
-BR/EDR UAP and CLK1-6 recovery is implemented in-tree (no external
-dependency); see `src/core/protocol/bredr/bredr_clock_recovery.c`,
-`src/core/protocol/bredr/bredr_tracker.c`,
-`src/core/protocol/ble/ble_tracker.c`, and the shared helpers in
-`src/core/models/rssi_tracker.c` and `src/core/service/collector.c`.
 
-### CLI-only build (no GUI)
+### Minimal Dependency Install (no GUI, only HackRF)
 
 Linux (Debian-based):
 
@@ -68,31 +67,22 @@ Linux (Debian-based):
 sudo apt update
 sudo apt install -y \
   build-essential cmake pkg-config \
-  hackrf libhackrf-dev libliquid-dev
+  libhackrf-dev libliquid-dev
 ```
 
 macOS (Homebrew):
 
 ```bash
-brew install cmake pkg-config hackrf liquid-dsp
+brew install cmake pkg-config hackrf
 ```
 
-### GUI build (adds Qt 6.8)
+> **WARNING**: As of September 2026, liquid-dsp's Homebrew installation has a major performance issue caused by hot-path logging. It is highly recommended to build and install liquid-dsp from source, which is why it is not listed in the above command.
 
-The GUI requires **Qt 6.8+** with Quick, QuickLayouts, and Graphs.  Because most distro Qt packages are too old, either use the **official Qt Installer** (gui installer or `aqtinstall`) or the project's convenience download helper:
+### GUI Dependency (needs Qt 6.8+)
 
-```bash
-python3 -m venv /tmp/qt-venv
-/tmp/qt-venv/bin/pip install requests py7zr
-sudo /tmp/qt-venv/bin/python packaging/install-qt.py \
-  --version 6.8.0 \
-  --modules qtgraphs qtquick3d qtshadertools \
-  --output /opt/Qt/6.8.0/gcc_64
-```
+The GUI requires **Qt 6.8+** with Quick, QuickLayouts, and Graphs. On certain distros, such as Ubuntu Noble (24.04) and earlier, it is not available through `apt` and must be installed from elsewhere. This could affect other applications that use Qt if you are not careful, so discretion is advised.
 
-The helper fetches prebuilt Qt archives from `download.qt.io` and is meant for CI/quick-setup — run it with `sudo` if writing to a system path like `/opt`.
-
-macOS users can install Qt via Homebrew (6.8+):
+macOS users can use the Homebrew package:
 
 ```bash
 brew install qt@6
@@ -106,44 +96,35 @@ mkdir build
 cd build
 cmake ..
 make
-
-# With GUI (point CMAKE_PREFIX_PATH at the Qt installation)
-cmake .. \
-  -DCMAKE_PREFIX_PATH=/opt/Qt/6.8.0/gcc_64 \
-  -DBUILD_GUI=ON
-make
 ```
 
-Optional: `-DBUILD_TESTS=ON` enables the unit/integration suite (`make tests`,
-then `ctest --output-on-failure`). Version strings come from
-`-DSUPERTOOTH_VERSION=<ver>` or `git describe` at configure time. The
-differential `libbtbb` oracle tests additionally need a `libbtbb/` checkout at
-the repo root (it is gitignored); without it those oracle tests are skipped.
+To enable certain features, pass their corresponding arguments from the above table to CMake. For example, `cmake -DENABLE_BLADERF=ON ..`.
 
-Output binaries are in `build/src/apps/cli/` (CLI) and `build/src/apps/gui/` (GUI).
+
+
+Output binaries are in `build/src/apps/cli/supertooth` (CLI) and `build/src/apps/gui/supertooth-desktop` (GUI, plus `Supertooth.app` on macOS).
 
 ## Run
 
-All binaries require a HackRF:
+All binaries require a HackRF or bladeRF by default:
 
 ```bash
-./build/src/apps/cli/supertooth-ble
-./build/src/apps/cli/supertooth-bredr
-./build/src/apps/cli/supertooth-hybrid
-./build/src/apps/gui/supertooth
+./build/src/apps/cli/supertooth le
+./build/src/apps/cli/supertooth bredr
+./build/src/apps/cli/supertooth hybrid
+./build/src/apps/gui/supertooth-desktop
 ```
 
-CLI output defaults to `--view summary`. All three CLIs also accept
-`--view full|summary|devices` (use `--help` for the full flag list):
+Running `supertooth` with no arguments (or `-h`) prints the mode list.
+Each mode has its own help with `General Options` plus the sections that
+apply to it (`BREDR Options`, `LE Options`):
 
-- `supertooth-bredr` / `supertooth-hybrid`: `--ac-errors N` sets the max
-  BR/EDR access-code bit errors (default: 0, strict).
-- `supertooth-ble` / `supertooth-hybrid`: `--enforce-crc on|off` drops BLE
-  frames with bad CRC (default: on); `-c/-b` select the LE channel window.
-- All three: `--debug` prints a Debug Summary with per-pool drop breakdown
-  plus BLE/BR-EDR frame counters.
+```bash
+./build/src/apps/cli/supertooth hybrid -h
+```
 
-`supertooth-bredr`, `supertooth-ble`, and `supertooth-hybrid` accept `--help` for runtime flags.  The GUI needs a Wayland or X11 display.
+CLI output defaults to `--view summary`. All decode modes also accept
+`--view full|summary|devices`.
 
 ## Architecture
 
@@ -151,22 +132,20 @@ CLI output defaults to `--view summary`. All three CLIs also accept
 
 ```text
 src/
-  apps/cli/        CLI binaries (supertooth-bredr, -ble, -hybrid) + shared app_common, app_summary_view, app_device_view
-  apps/gui/        Qt GUI application
+  apps/
+    cli/        CLI application code for various modes and views
+    gui/        Qt GUI application
   core/
-    dsp/           Shared DSP utilities (channelizer_bank, rssi_measurements)
-    models/        Shared packet and receive metadata types (device_models, receive_event_models, phy, rssi_tracker)
-    radio/         HackRF integration (hackrf, radio_common) and sample dispatcher
-    service/       Session API, channel processors, channelizer_thread, event collector
+    dsp/           Shared DSP utilities 
+    models/        Shared packet and receive metadata types
+    radio/         Radio integration and sample dispatcher
+    service/       Session API, channel processors, channelizer_service
     protocol/
-      ble/         BLE bitstream decoder, codec, piconet + tracker, display utilities, BT assigned numbers
-      bredr/       BR/EDR bitstream decoder, codec, piconet + piconet store + tracker, clock recovery, display utilities
+      ble/         BLE bitstream decoder, codec, registry, display utilities, BT assigned numbers
+      bredr/       BR/EDR bitstream decoder, codec, registry, clock recovery, display utilities
 ```
 
-### Key design points
-
-- **Core library** (`libsupertooth_core.a`): all DSP, radio I/O, protocol decoding, and session logic live here.  CLI apps and the GUI link against this library — no code duplication.
-- **Decoder state machines**: per-channel/thread processor owns its decoder context.  Caller pulls decoded packets immediately after push-status signals readiness.
-- **Frame-vs-packet split**: bitstream decoders emit raw frames (`ble_frame_t` / `bredr_frame_t`); codec layer decodes into clean semantic packet models.  Service callbacks carry the frame (not the decoded packet), keeping layers decoupled.
-- **BR/EDR channel layout** avoids DC by centering LO at `-(N/2 - 0.5) × channel_bw`.
-- **Piconet tracking** is centralized through `bredr_piconet_store_add_packet()` — runtime binaries never duplicate UAP/clock logic.
+## References
+- [Ubertooth One](https://greatscottgadgets.com/ubertoothone/) - The primary inspiration for this project (hence the name).
+- [libbtbb](https://github.com/greatscottgadgets/libbtbb) - Reference for many of the algorithms.
+- [Liquid DSP](https://liquidsdr.org/) - A fantastic DSP library.

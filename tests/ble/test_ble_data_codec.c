@@ -182,6 +182,164 @@ static void test_connect_ind_frame_roundtrip(void)
     TEST_ASSERT(p.hop_increment == 7u);
 }
 
+static void test_decode_frame_guards(void)
+{
+    ble_packet_t pkt;
+    ble_frame_t frame;
+    memset(&frame, 0, sizeof(frame));
+
+    TEST_ASSERT(ble_decode_frame(NULL, 0u, &pkt) != 0);
+
+    /* Too short (< 2 header + 3 CRC bytes). */
+    frame.raw_pdu_bytes = 4u;
+    TEST_ASSERT(ble_decode_frame(&frame, 0u, &pkt) != 0);
+
+    /* Too long (> 258 + 3). */
+    frame.raw_pdu_bytes = (uint16_t)(BLE_PDU_MAX_BYTES + BLE_CRC_BYTES + 1u);
+    TEST_ASSERT(ble_decode_frame(&frame, 0u, &pkt) != 0);
+
+    TEST_ASSERT(ble_decode_frame(&frame, 0u, NULL) != 0);
+
+    /* Length byte passes through (0xFF = 255); the 256-byte clamp in
+     * ble_payload_length_from_header only binds synthetic oversize values. */
+    const uint8_t hdr[2] = {0x02u, 0xFFu};
+    TEST_ASSERT(ble_payload_length_from_header(hdr) == 255u);
+
+    /* CRC verification helper. */
+    TEST_ASSERT(ble_verify_crc(NULL) == 0);
+    memset(&pkt, 0, sizeof(pkt));
+    TEST_ASSERT(ble_verify_crc(&pkt) == 0);
+    pkt.crc_ok = 1u;
+    TEST_ASSERT(ble_verify_crc(&pkt) == 1);
+}
+
+static void test_scan_req_and_direct_ind(void)
+{
+    const uint8_t ch = 37u;
+    const uint32_t aa = BLE_ADVERTISING_AA;
+
+    /* SCAN_REQ: ScanA(6) + AdvA(6), no advertising data. */
+    const uint8_t scan_req[14] = {
+        0x03u, 0x0Cu,
+        0x11u, 0x22u, 0x33u, 0x44u, 0x55u, 0x66u,
+        0xAAu, 0xBBu, 0xCCu, 0xDDu, 0xEEu, 0xFFu,
+    };
+    ble_frame_t frame;
+    make_frame(&frame, BLE_FRAME_ADVERTISING, aa, scan_req, sizeof(scan_req),
+               ch, BLE_CRC_INIT_ADV, 0u);
+    ble_packet_t pkt;
+    TEST_ASSERT(ble_decode_frame(&frame, ch, &pkt) == 0);
+    TEST_ASSERT(pkt.pdu.adv.pdu_type == BLE_PDU_SCAN_REQ);
+    TEST_ASSERT(pkt.pdu.adv.payload_len == 12u);
+    TEST_ASSERT(memcmp(pkt.pdu.adv.payload.scan_req.scanner_addr.addr,
+                       &scan_req[2], BLE_ADDR_LEN) == 0);
+    TEST_ASSERT(memcmp(pkt.pdu.adv.payload.scan_req.adv_addr.addr,
+                       &scan_req[8], BLE_ADDR_LEN) == 0);
+    /* SCAN_REQ carries no advertising data. */
+    unsigned int dlen = 0xDEADu;
+    TEST_ASSERT(ble_adv_data_bytes(&pkt.pdu.adv, &dlen) == NULL);
+    TEST_ASSERT(dlen == 0u);
+    TEST_ASSERT(ble_adv_addr_bytes(&pkt.pdu.adv) ==
+                pkt.pdu.adv.payload.scan_req.adv_addr.addr);
+
+    /* ADV_DIRECT_IND: AdvA(6) + TargetA(6), no advertising data. */
+    const uint8_t direct[14] = {
+        0x01u, 0x0Cu,
+        0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u,
+        0x0Au, 0x0Bu, 0x0Cu, 0x0Du, 0x0Eu, 0x0Fu,
+    };
+    make_frame(&frame, BLE_FRAME_ADVERTISING, aa, direct, sizeof(direct),
+               ch, BLE_CRC_INIT_ADV, 0u);
+    TEST_ASSERT(ble_decode_frame(&frame, ch, &pkt) == 0);
+    TEST_ASSERT(pkt.pdu.adv.pdu_type == BLE_PDU_ADV_DIRECT_IND);
+    TEST_ASSERT(memcmp(pkt.pdu.adv.payload.adv_direct_ind.target_addr.addr,
+                       &direct[8], BLE_ADDR_LEN) == 0);
+    TEST_ASSERT(ble_adv_data_bytes(&pkt.pdu.adv, &dlen) == NULL);
+    TEST_ASSERT(dlen == 0u);
+}
+
+static void test_reserved_pdu_type(void)
+{
+    const uint8_t ch = 37u;
+    /* Reserved type 0x07 with a 3-byte payload. */
+    const uint8_t pdu[5] = {0x07u, 0x03u, 0xAAu, 0xBBu, 0xCCu};
+    ble_frame_t frame;
+    make_frame(&frame, BLE_FRAME_ADVERTISING, BLE_ADVERTISING_AA,
+               pdu, sizeof(pdu), ch, BLE_CRC_INIT_ADV, 0u);
+    ble_packet_t pkt;
+    TEST_ASSERT(ble_decode_frame(&frame, ch, &pkt) == 0);
+    TEST_ASSERT(pkt.pdu.adv.pdu_type == 0x07u);
+    TEST_ASSERT(pkt.pdu.adv.payload_len == 3u);
+    TEST_ASSERT(pkt.pdu.adv.payload.unknown.payload_len == 3u);
+    TEST_ASSERT(memcmp(pkt.pdu.adv.payload.unknown.payload,
+                       &pdu[2], 3u) == 0);
+    /* Reserved types expose no advertiser address. */
+    TEST_ASSERT(ble_adv_addr_bytes(&pkt.pdu.adv) == NULL);
+    TEST_ASSERT(ble_adv_addr_bytes(NULL) == NULL);
+    TEST_ASSERT(ble_adv_data_bytes(NULL, NULL) == NULL);
+}
+
+static void test_data_crc_stamp_trusted(void)
+{
+    /* Data frames are CRC-gated by the framer: the codec trusts the
+     * frame's crc_ok stamp and never recomputes. A corrupted air CRC
+     * with a set stamp still decodes crc_ok=1; a clear stamp stays 0. */
+    const uint8_t ch = 17u;
+    const uint32_t aa = 0x12345678u;
+    const uint32_t init = 0x2C4A6Eu;
+    const uint8_t pdu[6] = {0x1Eu, 0x04u, 0xDEu, 0xADu, 0xBEu, 0xEFu};
+
+    ble_frame_t frame;
+    make_frame(&frame, BLE_FRAME_DATA, aa, pdu, sizeof(pdu), ch, init, 1u);
+    frame.raw_pdu[frame.raw_pdu_bytes - 1u] ^= 0x01u; /* corrupt air CRC */
+
+    ble_packet_t pkt;
+    TEST_ASSERT(ble_decode_frame(&frame, ch, &pkt) == 0);
+    TEST_ASSERT(pkt.crc_ok == 1u);
+    TEST_ASSERT(ble_verify_crc(&pkt) == 1);
+
+    make_frame(&frame, BLE_FRAME_DATA, aa, pdu, sizeof(pdu), ch, init, 0u);
+    TEST_ASSERT(ble_decode_frame(&frame, ch, &pkt) == 0);
+    TEST_ASSERT(pkt.crc_ok == 0u);
+    TEST_ASSERT(ble_verify_crc(&pkt) == 0);
+}
+
+static void test_addr_and_channel_helpers(void)
+{
+    const uint8_t a[BLE_ADDR_LEN] = {0x01u, 0x02u, 0x03u, 0x04u, 0x05u, 0x06u};
+    uint64_t key = 0u;
+    ble_addr_bytes_to_u64(a, &key);
+    TEST_ASSERT(key == 0x060504030201u);
+
+    TEST_ASSERT(ble_rf_to_le_channel(0u) == 37u);
+    TEST_ASSERT(ble_rf_to_le_channel(12u) == 38u);
+    TEST_ASSERT(ble_rf_to_le_channel(39u) == 39u);
+    TEST_ASSERT(ble_rf_to_le_channel(1u) == 0u);
+    TEST_ASSERT(ble_rf_to_le_channel(11u) == 10u);
+    TEST_ASSERT(ble_rf_to_le_channel(13u) == 11u);
+    TEST_ASSERT(ble_rf_to_le_channel(38u) == 36u);
+}
+
+static void test_name_manuf_parse(void)
+{
+    /* Complete name "AB" (0x09) + manufacturer Apple 0x004C (0xFF). */
+    const uint8_t adv[] = {
+        0x03, 0x09, 'A', 'B',
+        0x05, 0xFF, 0x4Cu, 0x00u, 0x01u, 0x02u,
+    };
+    char name[16], manuf[32];
+    ble_adv_parse_name_manuf(adv, sizeof(adv), name, sizeof(name),
+                             manuf, sizeof(manuf));
+    TEST_ASSERT(strcmp(name, "AB") == 0);
+    TEST_ASSERT(strstr(manuf, "Apple") != NULL);
+
+    /* NULL / empty input leaves outputs empty without crashing. */
+    ble_adv_parse_name_manuf(NULL, 0u, name, sizeof(name), manuf, sizeof(manuf));
+    TEST_ASSERT(name[0] == '\0' && manuf[0] == '\0');
+    ble_adv_parse_name_manuf(adv, 0u, name, sizeof(name), manuf, sizeof(manuf));
+    TEST_ASSERT(name[0] == '\0' && manuf[0] == '\0');
+}
+
 int main(void)
 {
     test_data_pdu_decode();
@@ -189,6 +347,12 @@ int main(void)
     test_adv_pdu_regression();
     test_connect_ind_parse();
     test_connect_ind_frame_roundtrip();
+    test_decode_frame_guards();
+    test_scan_req_and_direct_ind();
+    test_reserved_pdu_type();
+    test_data_crc_stamp_trusted();
+    test_addr_and_channel_helpers();
+    test_name_manuf_parse();
 
     if (g_failures)
     {

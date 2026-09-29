@@ -7,6 +7,9 @@
 FrameListModel::FrameListModel(QObject *parent)
     : QAbstractListModel(parent)
 {
+    m_flushTimer.setInterval(s_flushIntervalMs);
+    m_flushTimer.setSingleShot(true);
+    connect(&m_flushTimer, &QTimer::timeout, this, &FrameListModel::flushPending);
 }
 
 int FrameListModel::rowCount(const QModelIndex &parent) const
@@ -79,20 +82,41 @@ void FrameListModel::appendRow(const QVariantMap &row)
     r.raw = row.value(QStringLiteral("rawBytes")).toByteArray();
     r.detail = row.value(QStringLiteral("detail")).toList();
 
-    if (m_rows.size() >= s_capacity)
+    // Enqueue only; flushPending() moves rows into the model in batches.
+    // Bound the queue so a sustained burst can't grow memory unboundedly.
+    if (m_pending.size() >= s_pendingCap)
+        m_pending.removeFirst();
+    m_pending.append(std::move(r));
+    if (!m_flushTimer.isActive())
+        m_flushTimer.start();
+}
+
+void FrameListModel::flushPending()
+{
+    if (m_pending.isEmpty())
+        return;
+
+    const int evict = qMax(0, m_rows.size() + m_pending.size() - s_capacity);
+    if (evict > 0)
     {
-        beginRemoveRows(QModelIndex(), 0, 0);
-        m_rows.removeFirst();
+        beginRemoveRows(QModelIndex(), 0, evict - 1);
+        m_rows.erase(m_rows.begin(), m_rows.begin() + evict);
         endRemoveRows();
     }
-    beginInsertRows(QModelIndex(), m_rows.size(), m_rows.size());
-    m_rows.append(std::move(r));
+    const int first = m_rows.size();
+    const int last = first + m_pending.size() - 1;
+    beginInsertRows(QModelIndex(), first, last);
+    for (Row &r : m_pending)
+        m_rows.append(std::move(r));
+    m_pending.clear();
     endInsertRows();
     emit countChanged();
 }
 
 void FrameListModel::clear()
 {
+    m_flushTimer.stop();
+    m_pending.clear();
     if (m_rows.isEmpty())
         return;
     beginResetModel();

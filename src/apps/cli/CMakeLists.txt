@@ -15,6 +15,7 @@ add_library(cli_common STATIC
     app_device_view.h
     app_summary_view.c
     app_summary_view.h
+    cli_modes.c
 )
 
 target_link_libraries(cli_common
@@ -25,34 +26,17 @@ target_include_directories(cli_common PUBLIC
     ${CLI_INCLUDE_DIRS}
 )
 
-add_executable(supertooth-bredr
-    supertooth-bredr.c
+# Multiplexed CLI: `supertooth <hybrid|le|bredr|devices|record> [options]`.
+add_executable(supertooth
+    supertooth.c
 )
 
-target_link_libraries(supertooth-bredr
-    cli_common
-    supertooth_core
-)
-
-add_executable(supertooth-ble
-    supertooth-ble.c
-)
-
-target_link_libraries(supertooth-ble
-    cli_common
-    supertooth_core
-)
-
-add_executable(supertooth-hybrid
-    supertooth-hybrid.c
-)
-
-target_link_libraries(supertooth-hybrid
+target_link_libraries(supertooth
     cli_common
     supertooth_core
 )
 
 include(GNUInstallDirs)
 
-install(TARGETS supertooth-bredr supertooth-ble supertooth-hybrid
+install(TARGETS supertooth
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

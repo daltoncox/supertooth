@@ -14,3 +14,63 @@ target_link_libraries(test_radio_list_devices
 )
 
 add_test(NAME test_radio_list_devices COMMAND test_radio_list_devices)
+
+add_executable(test_radio_enumerate_devices
+    test_radio_enumerate_devices.c
+)
+
+target_link_libraries(test_radio_enumerate_devices
+    supertooth_core
+)
+
+add_test(NAME test_radio_enumerate_devices COMMAND test_radio_enumerate_devices)
+
+add_executable(test_wav_io
+    test_wav_io.c
+)
+
+target_link_libraries(test_wav_io
+    supertooth_core
+)
+
+add_test(NAME test_wav_io COMMAND test_wav_io)
+
+add_executable(test_file_device
+    test_file_device.c
+)
+
+target_link_libraries(test_file_device
+    supertooth_core
+)
+
+add_test(NAME test_file_device COMMAND test_file_device)
+
+add_executable(test_gain_spec
+    test_gain_spec.c
+)
+
+target_link_libraries(test_gain_spec
+    supertooth_core
+)
+
+add_test(NAME test_gain_spec COMMAND test_gain_spec)
+
+add_executable(test_dispatcher_backpressure
+    test_dispatcher_backpressure.c
+)
+
+target_link_libraries(test_dispatcher_backpressure
+    supertooth_core
+)
+
+add_test(NAME test_dispatcher_backpressure COMMAND test_dispatcher_backpressure)
+
+add_executable(test_reader_view
+    test_reader_view.c
+)
+
+target_link_libraries(test_reader_view
+    supertooth_core
+)
+
+add_test(NAME test_reader_view COMMAND test_reader_view)

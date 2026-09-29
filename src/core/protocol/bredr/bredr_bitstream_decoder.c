@@ -240,9 +240,9 @@ bredr_status_t bredr_bitstream_decoder_push_bit(bredr_bitstream_decoder_t *proc,
         proc->detected_packet_start_bit = proc->total_bits_seen - 68u;
         /* GIAC/LIAC inquiry packets are always ID packets: a shortened access
          * code with no trailer, no header, and no payload.  FHS responses from
-         * slaves use the slave's own Device Access Code, not the GIAC/LIAC, so
-         * we will never see a full packet body on these LAPs.  Skip the trailer
-         * phase entirely and report immediately. */
+         * peripherals use the peripheral's own Device Access Code, not the
+         * GIAC/LIAC, so we will never see a full packet body on these LAPs.
+         * Skip the trailer phase entirely and report immediately. */
         if (lap == BREDR_LAP_GIAC || lap == BREDR_LAP_LIAC)
         {
             memset(&proc->last_frame, 0, sizeof(proc->last_frame));

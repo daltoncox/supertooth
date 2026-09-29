@@ -1,17 +1,65 @@
 #include "session.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#include "ble_piconet.h"
-#include "bredr_piconet.h"
 #include "ble_codec.h"
+#include "ble_channel_processor.h"
 #include "bt_assigned_numbers.h"
 #include "channelizer_bank.h"
 #include "radio_common.h"
 #include "collector.h"
+
+/* Allocate + init one sample dispatcher (pool + reader table). */
+static int alloc_dispatcher(sample_dispatcher_t **out)
+{
+    *out = (sample_dispatcher_t *)calloc(1, sizeof(**out));
+    if (!*out)
+        return -1;
+    if (sample_dispatcher_init(*out) != 0)
+    {
+        free(*out);
+        *out = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+/* Tear down + free one dispatcher; NULL-safe. */
+static void free_dispatcher(sample_dispatcher_t **dispatcher)
+{
+    if (!dispatcher || !*dispatcher)
+        return;
+    sample_dispatcher_destroy(*dispatcher);
+    free(*dispatcher);
+    *dispatcher = NULL;
+}
+
+/* A missing dispatcher is idle by definition. Service dispatchers are
+ * never NULL once the service is up, but the helper keeps drain checks
+ * total (e.g. pre-init service with K == 0). */
+static int dispatcher_idle_or_absent(const sample_dispatcher_t *dispatcher)
+{
+    return !dispatcher || sample_dispatcher_all_free(dispatcher);
+}
+
+/* Every service-owned dispatcher is idle (quiescence probe for drain). */
+static int service_idle_or_absent(const channelizer_service_t *svc)
+{
+    if (!svc || svc->K == 0u)
+        return 1;
+    size_t n = channelizer_service_dispatcher_count(svc);
+    for (size_t i = 0u; i < n; i++)
+    {
+        if (!dispatcher_idle_or_absent(
+                channelizer_service_dispatcher_at(svc, i)))
+            return 0;
+    }
+    return 1;
+}
 
 static void session_signal_readers(session_t *session)
 {
@@ -20,10 +68,8 @@ static void session_signal_readers(session_t *session)
         sample_reader_signal(&session->ble_channels[w].reader);
     for (size_t w = 0u; w < session->bredr_channel_count; w++)
         sample_reader_signal(&session->bredr_channels[w].reader);
-    if (session->ble_channelizer_running)
-        sample_reader_signal(&session->ble_channelizer.rf_reader);
-    if (session->bredr_channelizer_running)
-        sample_reader_signal(&session->bredr_channelizer.rf_reader);
+    if (session->chan_svc_running)
+        channelizer_service_signal(&session->chan_svc);
 }
 
 int session_init(session_t *session, const session_config_t *cfg)
@@ -38,39 +84,14 @@ int session_init(session_t *session, const session_config_t *cfg)
     session->stopped_user = NULL;
     atomic_store_explicit(&session->shutdown_requested, 0u, memory_order_release);
 
-    session->dispatcher = (sample_dispatcher_t *)calloc(1, sizeof(*session->dispatcher));
-    if (!session->dispatcher) return -1;
-    if (sample_dispatcher_init(session->dispatcher) != 0)
-    {
-        free(session->dispatcher);
-        session->dispatcher = NULL;
+    session->dispatcher = NULL;
+    if (alloc_dispatcher(&session->dispatcher) != 0)
         return -1;
-    }
+    memset(&session->chan_svc, 0, sizeof(session->chan_svc));
+    session->chan_svc_running = 0;
 
-    session->bredr_chan_dispatcher = (sample_dispatcher_t *)calloc(1, sizeof(*session->bredr_chan_dispatcher));
-    if (!session->bredr_chan_dispatcher) return -1;
-    if (sample_dispatcher_init(session->bredr_chan_dispatcher) != 0)
-    {
-        free(session->bredr_chan_dispatcher);
-        session->bredr_chan_dispatcher = NULL;
-        return -1;
-    }
-    memset(&session->bredr_channelizer, 0, sizeof(session->bredr_channelizer));
-    session->bredr_channelizer_running = 0;
-
-    session->ble_chan_dispatcher = (sample_dispatcher_t *)calloc(1, sizeof(*session->ble_chan_dispatcher));
-    if (!session->ble_chan_dispatcher) return -1;
-    if (sample_dispatcher_init(session->ble_chan_dispatcher) != 0)
-    {
-        free(session->ble_chan_dispatcher);
-        session->ble_chan_dispatcher = NULL;
-        return -1;
-    }
-    memset(&session->ble_channelizer, 0, sizeof(session->ble_channelizer));
-    session->ble_channelizer_running = 0;
-
-    ble_tracker_init(&session->ble_tracker);
-    bredr_tracker_init(&session->bredr_tracker);
+    ble_registry_init(&session->ble_registry, NULL);
+    bredr_registry_init(&session->bredr_registry, NULL);
 
     /* Collector queues: drained by dedicated per-protocol threads spawned in
      * session_run(). Bounded at 4096 events; overwrite-oldest on overflow keeps
@@ -94,8 +115,8 @@ void session_enable_ble(session_t *session,
 {
     if (!session) return;
     if (cfg) session->ble_cfg = *cfg;
-    ble_tracker_set_enforce_crc(&session->ble_tracker,
-                                cfg ? (int)cfg->enforce_crc : 0);
+    ble_registry_set_enforce_crc(&session->ble_registry,
+                                 cfg ? (int)cfg->enforce_crc : 0);
     session->ble_cb   = cb;
     session->ble_user = user;
     session->ble_enabled = 1;
@@ -120,210 +141,357 @@ void session_set_stopped_callback(session_t *session,
     session->stopped_user = user;
 }
 
-int session_tune(session_t *session,
-                 session_protocol_ref_t ref,
-                 unsigned int bottom_channel,
-                 unsigned int channel_count)
-{
-    if (!session || channel_count == 0u) return -1;
+/* Shared layout core behind session_tune() and session_validate_layout()
+ * so validation can never drift from tuning. Computes the LO/rate first
+ * (band, range and ref checks), then checks the rate against the lane
+ * planner and the device ceiling. */
 
-    double lo_mhz, bredr_span_mhz, ble_span_mhz;
-    unsigned int bredr_rate_mhz;
+/* LO + rate math with band/range/ref checks. rate_mhz is unclamped;
+ * callers apply the 4 MHz floor identically (see below). */
+static session_layout_status_t session_layout_rate(
+    session_protocol_ref_t ref,
+    unsigned int bottom_channel,
+    unsigned int channel_count,
+    int ble_enabled, int bredr_enabled,
+    double *lo_mhz, unsigned int *rate_mhz)
+{
+    if (channel_count == 0u)
+        return SESSION_LAYOUT_BAD_RANGE;
+
+    /* Hybrid sessions (BLE + BR/EDR) run a single shared 1 MHz channelizer
+     * anchored to the BR/EDR grid: BLE workers are fed center-bin slices of
+     * the same bank, so a BLE-grid tune has no meaning anymore. BLE-only
+     * sessions keep SESSION_REF_BLE. Fail loudly so stale callers (e.g. an
+     * old --tune-ref ble invocation) cannot silently mis-tune. */
+    if (ble_enabled && bredr_enabled && ref != SESSION_REF_BREDR)
+        return SESSION_LAYOUT_BAD_RANGE;
 
     if (ref == SESSION_REF_BLE)
     {
         if (channel_count > BLE_RF_CHANNEL_COUNT ||
             bottom_channel + channel_count > BLE_RF_CHANNEL_COUNT)
-            return -1;
-        lo_mhz        = 2401.0 + 2.0 * (double)bottom_channel + (double)channel_count;
+            return SESSION_LAYOUT_BAD_RANGE;
+        *lo_mhz =
+            2401.0 + 2.0 * (double)bottom_channel + (double)channel_count;
         /* BLE channels are 2 MHz apart, so an N-channel BLE window needs a
          * 2*N MHz span; the LO is already a whole-MHz frequency. */
-        ble_span_mhz  = 2.0 * (double)channel_count;
-        bredr_span_mhz = ble_span_mhz;
-        bredr_rate_mhz = (unsigned int)bredr_span_mhz;
-        if (bredr_rate_mhz < 4u) bredr_rate_mhz = 4u;
+        *rate_mhz = 2u * channel_count;
     }
     else
     {
         if (channel_count > BREDR_SESSION_MAX_CHANNELS ||
             bottom_channel + channel_count > BREDR_SESSION_MAX_CHANNELS)
-            return -1;
-        lo_mhz         = 2402.0 + (double)bottom_channel + ((double)channel_count - 1.0) / 2.0;
-        bredr_span_mhz = (double)channel_count;
-        bredr_rate_mhz = (unsigned int)bredr_span_mhz;
-        if (bredr_rate_mhz < 4u) bredr_rate_mhz = 4u;
-        ble_span_mhz   = bredr_span_mhz;
+            return SESSION_LAYOUT_BAD_RANGE;
+        /* "all" mode: c == 79 always means the full 0..78 band. It needs an
+         * 80 Msps input with the LO on the exact band centre (2441 MHz, on
+         * the 1 MHz raster, so no half-channel grid premix), not a 79 MHz
+         * window. Any nonzero bottom with 79 channels is out of band. */
+        if (channel_count == BREDR_SESSION_MAX_CHANNELS)
+        {
+            if (bottom_channel != 0u)
+                return SESSION_LAYOUT_BAD_RANGE;
+            *lo_mhz   = 2441.0;
+            *rate_mhz = 80u;
+            return SESSION_LAYOUT_OK;
+        }
+        *lo_mhz   = 2402.0 + (double)bottom_channel +
+                    ((double)channel_count - 1.0) / 2.0;
+        *rate_mhz = channel_count;
     }
+    return SESSION_LAYOUT_OK;
+}
 
-    session->tune_ref        = ref;
-    session->tune_bottom     = bottom_channel;
-    session->tune_count      = channel_count;
+/* Lane-split + device-ceiling checks for a (possibly clamped) rate. */
+static session_layout_status_t session_layout_check(
+    radio_device_type_t device_type,
+    session_protocol_ref_t ref,
+    unsigned int sample_rate_hz)
+{
+    /* Reject capture windows no stage can channelize (e.g. counts with no
+     * even <=20 MHz lane split: 22, 26, 30, ...). The lane planner encodes
+     * the supported set; the grid here mirrors the service that
+     * session_create_channels will build (2 MHz desired for BLE-only). */
+    uint32_t grid = (ref == SESSION_REF_BLE)
+        ? CHANNELIZER_BANK_GRID_BLE_HZ
+        : CHANNELIZER_BANK_GRID_BR_EDR_HZ;
+    if (!channelizer_service_valid_sample_rate(sample_rate_hz, grid))
+        return SESSION_LAYOUT_NO_LANE_SPLIT;
+
+    /* Reject capture windows the selected device cannot sustain. The generic
+     * ceiling covers file replay up to 80 Msps; live radios report their own
+     * (HackRF stays at 20 Msps). */
+    if (sample_rate_hz > session_device_max_rate_hz(device_type))
+        return SESSION_LAYOUT_RATE_EXCEEDED;
+    return SESSION_LAYOUT_OK;
+}
+
+int session_tune(session_t *session,
+                 session_protocol_ref_t ref,
+                 unsigned int bottom_channel,
+                 unsigned int channel_count)
+{
+    double lo_mhz;
+    unsigned int rate_mhz;
+
+    if (!session)
+        return -1;
+    if (session_layout_rate(ref, bottom_channel, channel_count,
+                            session->ble_enabled, session->bredr_enabled,
+                            &lo_mhz, &rate_mhz) != SESSION_LAYOUT_OK)
+        return -1;
+    if (rate_mhz < 4u)
+        rate_mhz = 4u;
+
     session->lo_frequency_hz = (uint32_t)((uint64_t)(lo_mhz * 1e6));
-    session->sample_rate_hz  = bredr_rate_mhz * 1000000u;
-    session->decimation      = session->sample_rate_hz / 2000000u;
-    if (session->decimation < 1u) session->decimation = 1u;
+    session->sample_rate_hz  = rate_mhz * 1000000u;
 
-    (void)ble_span_mhz;
-
-    /* Reject capture windows the radio cannot sustain (e.g. >20 BR/EDR channels
-     * at 1 MHz each would request >20 Msps, beyond the HackRF ceiling). */
-    if (session->sample_rate_hz > RADIO_MAX_SAMPLE_RATE_HZ)
+    if (session_layout_check(session->config.device_type, ref,
+                             session->sample_rate_hz) != SESSION_LAYOUT_OK)
         return -1;
 
     return 0;
 }
 
+session_layout_status_t session_validate_layout(
+    radio_device_type_t device_type,
+    int ble_enabled, int bredr_enabled,
+    session_protocol_ref_t ref,
+    unsigned int bottom_channel,
+    unsigned int channel_count)
+{
+    double lo_mhz;
+    unsigned int rate_mhz;
+    session_layout_status_t st;
+
+    st = session_layout_rate(ref, bottom_channel, channel_count,
+                             ble_enabled, bredr_enabled, &lo_mhz, &rate_mhz);
+    if (st != SESSION_LAYOUT_OK)
+        return st;
+    if (rate_mhz < 4u)
+        rate_mhz = 4u;
+    return session_layout_check(device_type, ref, rate_mhz * 1000000u);
+}
+
+unsigned int session_snap_bredr_count(unsigned int count)
+{
+    return channelizer_service_snap_bredr_count(count);
+}
+
+unsigned int session_default_bredr_count(radio_device_type_t device_type)
+{
+    uint32_t max_rate_hz = session_device_max_rate_hz(device_type);
+
+    if (max_rate_hz < 1000000u)
+        return 2u;
+    return channelizer_service_snap_bredr_count(max_rate_hz / 1000000u);
+}
+
+/* Default LE window for a device: as many 2 MHz RF channels as the radio
+ * can sustain (HackRF -> 10, bladeRF -> 30, 80 Msps file replay -> 40),
+ * snapped down until the lane planner accepts the span. */
+unsigned int session_default_ble_count(radio_device_type_t device_type)
+{
+    uint32_t max_rate_hz = session_device_max_rate_hz(device_type);
+    unsigned int count = max_rate_hz / 2000000u;
+
+    if (count < 1u)
+        count = 1u;
+    if (count > BLE_SESSION_MAX_CHANNELS)
+        count = BLE_SESSION_MAX_CHANNELS;
+    while (count > 1u &&
+           session_validate_layout(device_type, 1, 0, SESSION_REF_BLE,
+                                   0u, count) != SESSION_LAYOUT_OK)
+        count--;
+    return count;
+}
+
+uint32_t session_device_max_rate_hz(radio_device_type_t device_type)
+{
+    uint32_t max_rate_hz = RADIO_MAX_SAMPLE_RATE_HZ;
+
+    if (radio_get_max_sample_rate_for_type(device_type,
+                                           &max_rate_hz) == RADIO_SUCCESS)
+        return max_rate_hz;
+    return RADIO_MAX_SAMPLE_RATE_HZ;
+}
+
+const char *session_device_type_name(radio_device_type_t device_type)
+{
+    return radio_device_type_name(device_type);
+}
+
+int session_get_default_device(radio_device_type_t *out_type,
+                               char *out_id, size_t out_id_len)
+{
+    if (out_id && out_id_len == 0u)
+        return -1;
+
+    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT; t++)
+    {
+        radio_device_type_t type = (radio_device_type_t)t;
+        if (type == RADIO_DEVICE_FILE)
+            continue;
+
+        char **identifiers = NULL;
+        size_t count = 0u;
+        if (radio_list_devices(type, &identifiers, &count) != RADIO_SUCCESS)
+            continue;
+        if (count == 0u || !identifiers || !identifiers[0] ||
+            identifiers[0][0] == '\0')
+        {
+            radio_free_device_list(&identifiers, count);
+            continue;
+        }
+
+        if (out_type)
+            *out_type = type;
+        if (out_id)
+            snprintf(out_id, out_id_len, "%s", identifiers[0]);
+        radio_free_device_list(&identifiers, count);
+        return RADIO_SUCCESS;
+    }
+
+    return RADIO_DEVICE_NOT_FOUND;
+}
+
 static int session_create_channels(session_t *session)
 {
     int debug = session->config.debug;
-    size_t total = 0u;
+    /* One service for every mode. BLE-only requests the 2 MHz grid (one bin
+     * per BLE channel, stride 2); the service transparently falls back to
+     * 1 MHz when 2 MHz would yield an odd bin count. Hybrid and BR/EDR
+     * sessions share a single 1 MHz service (BLE fans out over the same
+     * lanes with stride 1). */
+    int ble_only = session->ble_enabled && !session->bredr_enabled;
+    uint32_t grid = ble_only ? CHANNELIZER_BANK_GRID_BLE_HZ
+                             : CHANNELIZER_BANK_GRID_BR_EDR_HZ;
 
-    if (session->ble_enabled)
+    channelizer_service_config_t svc_cfg;
+    memset(&svc_cfg, 0, sizeof(svc_cfg));
+    svc_cfg.sample_rate_hz = session->sample_rate_hz;
+    svc_cfg.lo_hz          = session->lo_frequency_hz;
+    svc_cfg.grid_hz        = grid;
+    svc_cfg.debug          = debug;
+    svc_cfg.exhaustive     = session->config.file_exhaustive;
+    svc_cfg.shutdown       = &session->shutdown_requested;
+
+    if (channelizer_service_init(&session->chan_svc, session->dispatcher,
+                                  &svc_cfg) != 0)
     {
-        session->ble_channel_count = 0u;
-        session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT, sizeof(ble_channel_processor_t));
-        if (!session->ble_channels) return -1;
-
-        /* Prefer the 2 MHz BLE raster (one bin per BLE channel => efficient),
-         * but firpfbch2 needs an even bin count, so fall back to the 1 MHz
-         * raster when 2 MHz would yield an odd M (e.g. a 10 MHz window). */
-        uint32_t ble_grid = CHANNELIZER_BANK_GRID_BLE_HZ;
-        if (channelizer_bank_bins_for_rate(session->sample_rate_hz, ble_grid) == 0u)
-            ble_grid = CHANNELIZER_BANK_GRID_BR_EDR_HZ;
-        unsigned int ble_frame_stride = ble_grid / 1000000u;
-
-        if (channelizer_init(&session->ble_channelizer,
-                              session->dispatcher,
-                              session->ble_chan_dispatcher,
-                              session->sample_rate_hz,
-                              session->lo_frequency_hz,
-                              ble_grid,
-                              debug) != 0)
-        {
-            if (debug)
-                fprintf(stderr, "[session] BLE channelizer init failed\n");
-            return -1;
-        }
-
-        for (unsigned int rf = 0u; rf < BLE_RF_CHANNEL_COUNT; rf++)
-        {
-            uint32_t center = ble_rf_channel_freq_hz(rf);
-            int32_t offset  = (int32_t)center - (int32_t)session->lo_frequency_hz;
-            if (labs((long)offset) >= (int32_t)(session->sample_rate_hz / 2u))
-                continue;
-
-            ble_channel_processor_t *proc = &session->ble_channels[session->ble_channel_count];
-            int bin = (ble_grid == CHANNELIZER_BANK_GRID_BLE_HZ)
-                ? channelizer_bank_bin_for_center_ble(
-                      session->ble_channelizer.bank.M,
-                      session->ble_channelizer.bank.lo_eff_hz, center)
-                : (int)channelizer_bank_bin_for_center(
-                      session->ble_channelizer.bank.M,
-                      session->ble_channelizer.bank.lo_eff_hz,
-                      center, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
-            if (bin < 0)
-                continue;
-
-            /* The decoder is a pure framing stage; the per-session tracker's
-             * piconet store owns CRC gating and CRCInit recovery. */
-            int ok = ble_channel_processor_init(
-                proc, session->ble_chan_dispatcher, rf, center,
-                session->sample_rate_hz, (unsigned int)bin,
-                session->ble_channelizer.bank.M,
-                session->ble_channelizer.bank.M2,
-                ble_frame_stride,
-                CHANNELIZER_BANK_RSSI_CAL_DB);
-
-            if (ok != 0)
-                continue;
-            proc->session = session;
-            session->ble_channel_count++;
-        }
-
-        if (session->ble_channel_count == 0u)
-        {
-            channelizer_destroy(&session->ble_channelizer);
-            return -1;
-        }
-        session->ble_channelizer.active = 1;
+        if (debug)
+            fprintf(stderr, "[session] channelizer service init failed\n");
+        return -1;
     }
 
+    /* BR/EDR processors: the service configures each reader in place
+     * (lane dispatcher + channel view); init only wires demod/decoder. */
     if (session->bredr_enabled)
     {
-        session->bredr_channel_count = 0u;
-        session->bredr_channels = calloc(BREDR_SESSION_MAX_CHANNELS, sizeof(bredr_channel_processor_t));
-        if (!session->bredr_channels) return -1;
+        size_t n = channelizer_service_get_bredr_count(&session->chan_svc);
 
-        if (channelizer_init(&session->bredr_channelizer,
-                              session->dispatcher,
-                              session->bredr_chan_dispatcher,
-                              session->sample_rate_hz,
-                              session->lo_frequency_hz,
-                              CHANNELIZER_BANK_GRID_BR_EDR_HZ,
-                              debug) != 0)
+        session->bredr_channel_count = 0u;
+        session->bredr_channels = calloc(BREDR_SESSION_MAX_CHANNELS,
+                                         sizeof(bredr_channel_processor_t));
+        if (!session->bredr_channels)
         {
-            if (debug)
-                fprintf(stderr, "[session] channelizer init failed\n");
+            channelizer_service_destroy(&session->chan_svc);
             return -1;
         }
-
-        for (unsigned int c = 0u; c < BREDR_SESSION_MAX_CHANNELS; c++)
+        for (size_t i = 0u; i < n; i++)
         {
-            uint32_t center = (uint32_t)(2402000000ull + (uint64_t)c * 1000000ull);
-            int32_t offset  = (int32_t)center - (int32_t)session->lo_frequency_hz;
-            if (labs((long)offset) >= (int32_t)(session->sample_rate_hz / 2u))
+            bredr_channel_processor_t *proc =
+                &session->bredr_channels[session->bredr_channel_count];
+            /* Descriptor order follows the band; recover the RF index
+             * from the centre. */
+            uint32_t center =
+                channelizer_service_bredr_center(&session->chan_svc, i);
+            uint16_t c = (uint16_t)((center - 2402000000u) / 1000000u);
+            if (channelizer_service_bredr_reader_init(&session->chan_svc, i,
+                                                      &proc->reader) != 0)
                 continue;
-
-            bredr_channel_processor_t *proc = &session->bredr_channels[session->bredr_channel_count];
-            int bin = channelizer_bank_bin_for_center(
-                session->bredr_channelizer.bank.M,
-                session->bredr_channelizer.bank.lo_eff_hz,
-                center, CHANNELIZER_BANK_GRID_BR_EDR_HZ);
-            if (bin < 0)
+            if (bredr_channel_processor_init(proc, c) != 0)
+            {
+                sample_reader_destroy(&proc->reader);
                 continue;
-            
-            int ok = bredr_channel_processor_init(
-                proc, session->bredr_chan_dispatcher, (uint16_t)c, center,
-                session->sample_rate_hz, (unsigned int)bin,
-                session->bredr_channelizer.bank.M,
-                session->bredr_channelizer.bank.M2,
-                CHANNELIZER_BANK_RSSI_CAL_DB);
-            
-            if (ok != 0)
-                continue;
+            }
             proc->session = session;
             session->bredr_channel_count++;
         }
-
         if (session->bredr_channel_count == 0u)
         {
-            channelizer_destroy(&session->bredr_channelizer);
+            channelizer_service_destroy(&session->chan_svc);
             return -1;
         }
-        session->bredr_channelizer.active = 1;
     }
 
-    total = session->ble_channel_count + session->bredr_channel_count +
-            (session->bredr_channelizer.active ? 1u : 0u);
+    /* BLE processors from configured readers (shared 1 MHz lanes in
+     * hybrid mode, dedicated 2 MHz lanes when BLE-only). */
+    if (session->ble_enabled)
+    {
+        size_t n = channelizer_service_get_ble_count(&session->chan_svc);
+
+        session->ble_channel_count = 0u;
+        session->ble_channels = calloc(BLE_RF_CHANNEL_COUNT,
+                                       sizeof(ble_channel_processor_t));
+        if (!session->ble_channels)
+        {
+            channelizer_service_destroy(&session->chan_svc);
+            return -1;
+        }
+        for (size_t i = 0u; i < n; i++)
+        {
+            ble_channel_processor_t *proc =
+                &session->ble_channels[session->ble_channel_count];
+            uint32_t center =
+                channelizer_service_ble_center(&session->chan_svc, i);
+            uint16_t rf = (uint16_t)((center - 2402000000u) / 2000000u);
+            if (channelizer_service_ble_reader_init(&session->chan_svc, i,
+                                                    &proc->reader) != 0)
+                continue;
+            if (ble_channel_processor_init(proc, rf) != 0)
+            {
+                sample_reader_destroy(&proc->reader);
+                continue;
+            }
+            proc->session = session;
+            session->ble_channel_count++;
+        }
+        if (session->ble_channel_count == 0u)
+        {
+            channelizer_service_destroy(&session->chan_svc);
+            return -1;
+        }
+    }
+
+    if (session->ble_channel_count == 0u && session->bredr_channel_count == 0u)
+    {
+        channelizer_service_destroy(&session->chan_svc);
+        return -1;
+    }
     if (debug)
     {
         fprintf(stderr,
-                "[session] lo=%u Hz rate=%u Hz decim=%u : %zu BLE + %zu BR/EDR processors\n",
-                session->lo_frequency_hz, session->sample_rate_hz, session->decimation,
+                "[session] lo=%u Hz rate=%u Hz K=%u grid=%u : "
+                "%zu BLE + %zu BR/EDR processors\n",
+                session->lo_frequency_hz, session->sample_rate_hz,
+                session->chan_svc.K, session->chan_svc.grid_actual_hz,
                 session->ble_channel_count, session->bredr_channel_count);
     }
-    if (total == 0u) return -1;
     return 0;
 }
 
-static void *session_ble_worker_shim(void *arg)
+/* Spawn one worker thread, tracked for join-on-teardown via worker_threads.
+ * Returns 0 when started, -1 on pthread failure (callers treat that as
+ * fatal and tear the session down). */
+static int spawn_worker(session_t *session, size_t *started,
+                        void *(*fn)(void *), void *arg)
 {
-    return ble_channel_worker(arg);
-}
-
-static void *session_bredr_worker_shim(void *arg)
-{
-    return bredr_channel_worker(arg);
+    if (!session || !started || !fn)
+        return -1;
+    if (pthread_create(&session->worker_threads[*started], NULL, fn, arg) != 0)
+        return -1;
+    (*started)++;
+    return 0;
 }
 
 /* Drains the BLE collector queue and runs the tracker + presentation callback
@@ -348,6 +516,52 @@ static void *session_bredr_collector_shim(void *arg)
     return NULL;
 }
 
+/* Quiescence bound for the exhaustive EOF drain: a wedged pipeline warns and
+ * tears down instead of hanging forever. */
+#define SESSION_DRAIN_TIMEOUT_NS 30000000000ull
+
+static uint64_t session_mono_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+/* Wait until every in-flight sample block is released and both event queues
+ * are empty (i.e. the whole capture has been processed and surfaced), the
+ * drain times out, or shutdown is requested. Exhaustive file replay only;
+ * realtime/live teardown discards in-flight data like a Ctrl+C would. */
+static void session_drain_exhaustive(session_t *session)
+{
+    uint64_t start_ns = session_mono_ns();
+
+    for (;;)
+    {
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 10000000L};
+
+        if (atomic_load_explicit(&session->shutdown_requested,
+                                 memory_order_acquire) != 0u)
+            return;
+
+        if (sample_dispatcher_all_free(session->dispatcher) &&
+            service_idle_or_absent(&session->chan_svc) &&
+            collector_count(&session->ble_collector) == 0u &&
+            collector_count(&session->bredr_collector) == 0u)
+            return;
+
+        if (session_mono_ns() - start_ns > SESSION_DRAIN_TIMEOUT_NS)
+        {
+            if (session->config.debug)
+                fprintf(stderr,
+                        "[session] exhaustive drain timed out with data in "
+                        "flight; tearing down anyway\n");
+            return;
+        }
+
+        nanosleep(&ts, NULL);
+    }
+}
+
 int session_run(session_t *session)
 {
     if (!session || session->workers_running) return -1;
@@ -359,10 +573,8 @@ int session_run(session_t *session)
     }
 
     size_t total = session->ble_channel_count + session->bredr_channel_count +
-                   (session->ble_channelizer.active ? 1u : 0u) +
-                   (session->bredr_channelizer.active ? 1u : 0u) +
-                   (session->ble_enabled ? 1u : 0u) +
-                   (session->bredr_enabled ? 1u : 0u);
+                    (session->ble_enabled ? 1u : 0u) +
+                    (session->bredr_enabled ? 1u : 0u);
     session->worker_threads = calloc(total, sizeof(pthread_t));
     if (!session->worker_threads)
     {
@@ -372,71 +584,43 @@ int session_run(session_t *session)
 
     size_t started = 0u;
     for (size_t w = 0u; w < session->ble_channel_count; w++)
-    {
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           session_ble_worker_shim, &session->ble_channels[w]) != 0)
+        if (spawn_worker(session, &started,
+                         ble_channel_worker, &session->ble_channels[w]) != 0)
             break;
-        started++;
-    }
     for (size_t w = 0u; w < session->bredr_channel_count; w++)
-    {
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           session_bredr_worker_shim, &session->bredr_channels[w]) != 0)
+        if (spawn_worker(session, &started,
+                         bredr_channel_worker, &session->bredr_channels[w]) != 0)
             break;
-        started++;
-    }
 
-    if (session->ble_channelizer.active)
+    /* The service owns its DDC + PFB threads (started here, joined in
+     * session_destroy via channelizer_service_stop). Without them the
+     * channel workers would starve, so a start failure is fatal. */
+    if (channelizer_service_start(&session->chan_svc) != 0)
     {
-        session->ble_channelizer.shutdown = &session->shutdown_requested;
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           channelizer_worker, &session->ble_channelizer) != 0)
-        {
-            session_destroy(session);
-            return -1;
-        }
-        session->ble_channelizer_thread = session->worker_threads[started];
-        session->ble_channelizer_running = 1;
-        started++;
+        session_destroy(session);
+        return -1;
     }
-
-    if (session->bredr_channelizer.active)
-    {
-        session->bredr_channelizer.shutdown = &session->shutdown_requested;
-        if (pthread_create(&session->worker_threads[started], NULL,
-                            channelizer_worker, &session->bredr_channelizer) != 0)
-        {
-            /* Channelizer thread failed to start: keep BR/EDR workers but they
-             * would starve, so treat it as a hard failure. */
-            session_destroy(session);
-            return -1;
-        }
-        session->bredr_channelizer_thread = session->worker_threads[started];
-        session->bredr_channelizer_running = 1;
-        started++;
-    }
+    session->chan_svc_running = 1;
 
     /* Collector threads are spawned last (joined last) so they drain any
      * remaining events after the channel workers have stopped producing. */
     if (session->ble_enabled)
     {
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           session_ble_collector_shim, session) != 0)
+        if (spawn_worker(session, &started,
+                         session_ble_collector_shim, session) != 0)
         {
             session_destroy(session);
             return -1;
         }
-        started++;
     }
     if (session->bredr_enabled)
     {
-        if (pthread_create(&session->worker_threads[started], NULL,
-                           session_bredr_collector_shim, session) != 0)
+        if (spawn_worker(session, &started,
+                         session_bredr_collector_shim, session) != 0)
         {
             session_destroy(session);
             return -1;
         }
-        started++;
     }
 
     if (started == 0u)
@@ -457,14 +641,44 @@ int session_run(session_t *session)
         return result;
     }
 
+    /* File replay mode (realtime default, exhaustive on request); no-op for
+     * live radios. Applied before configure/start so the reader thread
+     * observes it from its first block. Collector blocking follows the same
+     * flag so decoded events also apply backpressure instead of
+     * overwrite-oldest. */
+    radio_set_replay_mode(session->device, session->config.file_exhaustive);
+    collector_set_blocking(&session->ble_collector,
+                           session->config.file_exhaustive);
+    collector_set_blocking(&session->bredr_collector,
+                           session->config.file_exhaustive);
+
     uint32_t lna  = session->bredr_enabled ? SESSION_BREDR_LNA_GAIN : SESSION_BLE_LNA_GAIN;
     uint32_t vga  = session->bredr_enabled ? SESSION_BREDR_VGA_GAIN : SESSION_BLE_VGA_GAIN;
+    (void)lna;
+    (void)vga;
+
+    /* Resolve the effective gain: explicit -g wins, otherwise per-device
+     * defaults (HackRF 24/18/amp-off, bladeRF 30 dB). */
+    radio_gain_spec_t gain = session->config.gain;
+    if (!gain.present)
+    {
+        radio_gain_default(session->config.device_type, &gain);
+        if (session->config.device_type == RADIO_DEVICE_HACKRF)
+        {
+            gain.hackrf_lna = (int)(session->bredr_enabled
+                                        ? SESSION_BREDR_LNA_GAIN
+                                        : SESSION_BLE_LNA_GAIN);
+            gain.hackrf_vga = (int)(session->bredr_enabled
+                                        ? SESSION_BREDR_VGA_GAIN
+                                        : SESSION_BLE_VGA_GAIN);
+            gain.hackrf_amp = 0;
+        }
+    }
 
     radio_stream_config_t radio_config = {
         .lo_freq_hz  = session->lo_frequency_hz,
         .sample_rate = session->sample_rate_hz,
-        .lna_gain    = lna,
-        .vga_gain    = vga,
+        .gain        = gain,
     };
 
     result = radio_configure(session->device, &radio_config);
@@ -483,7 +697,22 @@ int session_run(session_t *session)
          * absolute time, so we must not feed it a CLOCK_REALTIME timestamp. */
         struct timespec ts = { .tv_sec = 0, .tv_nsec = 50000000L };
         nanosleep(&ts, NULL);
+        /* Single-pass file replay ends here: the backend has exhausted its
+         * capture, so exit the loop and run the normal teardown + summary. */
+        if (radio_is_finished(session->device))
+            break;
     }
+
+    /* Exhaustive file replay only (never realtime/live): the radio is done
+     * but blocks/events may still be in flight. Drain every stage before the
+     * teardown below stops the workers, so nothing sampled is lost. A
+     * shutdown request (Ctrl+C) skips the drain and tears down immediately. */
+    if (atomic_load_explicit(&session->shutdown_requested,
+                             memory_order_acquire) == 0u &&
+        session->config.file_exhaustive &&
+        session->config.device_type == RADIO_DEVICE_FILE &&
+        radio_is_finished(session->device))
+        session_drain_exhaustive(session);
     /* The capture loop has ended; notify the owner (UI) now, before the
      * potentially blocking radio teardown below, so the UI can flip to the
      * stopped state immediately instead of waiting on device shutdown. */
@@ -516,6 +745,66 @@ static void dispatcher_accumulate(const sample_dispatcher_t *d,
         *consumer_full += d->readers[i]->dropped_blocks;
 }
 
+/* Add one service dispatcher's drops to a running total. Covers every owned
+ * dispatcher: K intermediate (DDC -> PFB) + K partitioned output
+ * (PFB -> channel workers). */
+static void service_accumulate_total(const channelizer_service_t *svc,
+                                     unsigned long *total)
+{
+    unsigned int k, n;
+    if (!svc || !total)
+        return;
+    n = channelizer_service_lane_count(svc);
+    for (k = 0u; k < n; k++)
+    {
+        sample_dispatcher_t *sub = channelizer_service_sub_at(svc, k);
+        sample_dispatcher_t *out = channelizer_service_out_at(svc, k);
+        if (sub)
+            *total += sample_dispatcher_total_dropped(sub);
+        if (out)
+            *total += sample_dispatcher_total_dropped(out);
+    }
+}
+
+/* Fill the sub/out stages of a drop breakdown, with per-lane detail.
+ * Aggregates are the sum over lanes; lane_count records K so the printout
+ * can label per-lane rows. Assumes @p out is zeroed. */
+static void service_accumulate_breakdown(const channelizer_service_t *svc,
+                                         session_drop_breakdown_t *out)
+{
+    unsigned int k, n;
+    if (!svc || !out)
+        return;
+    n = channelizer_service_lane_count(svc);
+    if (n > CHANNELIZER_SERVICE_MAX_LANES)
+        n = CHANNELIZER_SERVICE_MAX_LANES;
+    out->lane_count = n;
+    for (k = 0u; k < n; k++)
+    {
+        sample_dispatcher_t *sub = channelizer_service_sub_at(svc, k);
+        sample_dispatcher_t *lane_out = channelizer_service_out_at(svc, k);
+        unsigned long before_ex, before_full;
+        if (sub)
+        {
+            before_ex = out->sub_pool_exhausted;
+            before_full = out->sub_consumer_full;
+            dispatcher_accumulate(sub, &out->sub_pool_exhausted,
+                                  &out->sub_consumer_full);
+            out->sub_pool_exhausted_lane[k] = out->sub_pool_exhausted - before_ex;
+            out->sub_consumer_full_lane[k] = out->sub_consumer_full - before_full;
+        }
+        if (lane_out)
+        {
+            before_ex = out->out_pool_exhausted;
+            before_full = out->out_consumer_full;
+            dispatcher_accumulate(lane_out, &out->out_pool_exhausted,
+                                  &out->out_consumer_full);
+            out->out_pool_exhausted_lane[k] = out->out_pool_exhausted - before_ex;
+            out->out_consumer_full_lane[k] = out->out_consumer_full - before_full;
+        }
+    }
+}
+
 int session_destroy(session_t *session)
 {
     if (!session) return -1;
@@ -532,28 +821,21 @@ int session_destroy(session_t *session)
      * and session_run() calls session_destroy() before returning, so any
      * post-run query must read this snapshot rather than the live (now-zero)
      * counters. */
-    session->dropped_blocks_total = sample_dispatcher_total_dropped(session->dispatcher);
-    if (session->ble_chan_dispatcher)
-        session->dropped_blocks_total += sample_dispatcher_total_dropped(session->ble_chan_dispatcher);
-    if (session->bredr_chan_dispatcher)
-        session->dropped_blocks_total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
+    session->dropped_blocks_total =
+        sample_dispatcher_total_dropped(session->dispatcher);
+    service_accumulate_total(&session->chan_svc,
+                             &session->dropped_blocks_total);
 
-    /* Snapshot the per-pool breakdown so the session summary can report WHERE
+    /* Snapshot the per-stage breakdown so the session summary can report WHERE
      * blocks were dropped (the live counters are zeroed by the reset below). */
     memset(&session->dropped_breakdown, 0, sizeof(session->dropped_breakdown));
     dispatcher_accumulate(session->dispatcher,
                            &session->dropped_breakdown.rf_pool_exhausted,
                            &session->dropped_breakdown.rf_consumer_full);
-    if (session->ble_chan_dispatcher)
-        dispatcher_accumulate(session->ble_chan_dispatcher,
-                               &session->dropped_breakdown.ble_out_pool_exhausted,
-                               &session->dropped_breakdown.ble_out_consumer_full);
-    if (session->bredr_chan_dispatcher)
-        dispatcher_accumulate(session->bredr_chan_dispatcher,
-                               &session->dropped_breakdown.bredr_out_pool_exhausted,
-                               &session->dropped_breakdown.bredr_out_consumer_full);
+    service_accumulate_breakdown(&session->chan_svc,
+                                 &session->dropped_breakdown);
 
-    if (session->workers_running)
+    if (session->workers_running || session->chan_svc_running)
         session_request_stop(session);
 
     if (session->worker_threads)
@@ -591,47 +873,39 @@ int session_destroy(session_t *session)
 
     session->worker_count    = 0u;
     session->workers_running = 0;
-    session->ble_channelizer_running = 0;
-    session->bredr_channelizer_running = 0;
+    session->chan_svc_running = 0;
     atomic_store_explicit(&session->shutdown_requested, 0u, memory_order_release);
 
-    ble_tracker_free(&session->ble_tracker);
-    bredr_tracker_free(&session->bredr_tracker);
+    ble_registry_free(&session->ble_registry);
+    bredr_registry_free(&session->bredr_registry);
+    session->ble_collector_dropped =
+        collector_dropped(&session->ble_collector);
+    session->bredr_collector_dropped =
+        collector_dropped(&session->bredr_collector);
     collector_destroy(&session->ble_collector);
     collector_destroy(&session->bredr_collector);
-    
-    channelizer_destroy(&session->ble_channelizer);
-    if (session->ble_chan_dispatcher)
-    {
-        sample_dispatcher_destroy(session->ble_chan_dispatcher);
-        free(session->ble_chan_dispatcher);
-        session->ble_chan_dispatcher = NULL;
-    }
-    
-    channelizer_destroy(&session->bredr_channelizer);
-    if (session->bredr_chan_dispatcher)
-    {
-        sample_dispatcher_destroy(session->bredr_chan_dispatcher);
-        free(session->bredr_chan_dispatcher);
-        session->bredr_chan_dispatcher = NULL;
-    }
-    sample_dispatcher_destroy(session->dispatcher);
+
+    /* Service stop joins DDC + PFB threads (request_stop already set the
+     * flag and signalled them); destroy frees banks, readers, dispatchers. */
+    channelizer_service_stop(&session->chan_svc);
+    channelizer_service_destroy(&session->chan_svc);
+    free_dispatcher(&session->dispatcher);
     return 0;
 }
 
-/* --- BLE advertiser tracking: owned by the BLE tracker (see ble_tracker) --- */
+/* --- BLE device/connection correlation: owned by the BLE registry --- */
 
 void session_process_ble_event(session_t *session, const ble_event_t *event)
 {
     if (!session || !event) return;
 
-    /* The tracker owns all BLE correlation: it parses advertising PDUs
+    /* The registry owns all BLE correlation: it parses advertising PDUs
      * (advertiser name/manufacturer, CONNECT_IND linkage) and CRC-gates
-     * data frames against its piconet store. It returns whether the frame
+     * data frames for CRCInit recovery. It returns whether the frame
      * is surfaced to presentation layers (advertising, or a CRC-valid data
      * frame); pure correlation frames are consumed silently. */
     session->ble_frames_emitted++;
-    int surface = ble_tracker_submit_frame(&session->ble_tracker, event);
+    int surface = ble_registry_submit(&session->ble_registry, event, NULL);
     if (surface)
         session->ble_frames_confirmed++;
     if (surface && session->ble_cb)
@@ -643,31 +917,18 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
     if (!session || !event) return;
 
     /* Sole writer is the BR/EDR collector thread, so no mutex is needed here;
-     * the tracker's own lock still guards the GUI poll readers. */
+     * the registry's own lock still guards the GUI poll readers. The touched
+     * connection snapshot is filled by value under the registry lock (never
+     * a raw pointer), so it is safe to hand to the presentation callback. */
     session->bredr_frames_emitted++;
     int packet_is_newest = 0;
-    bredr_piconet_t *pnet = bredr_tracker_add_packet(&session->bredr_tracker,
-                                                     event, &packet_is_newest);
-    bredr_piconet_snapshot_t snapshot;
+    bredr_connection_snapshot_t snapshot;
     memset(&snapshot, 0, sizeof(snapshot));
-    const bredr_piconet_snapshot_t *snapshot_ptr = NULL;
-    if (pnet)
+    const bredr_connection_snapshot_t *snapshot_ptr = NULL;
+    if (bredr_registry_submit(&session->bredr_registry, event,
+                              &snapshot, &packet_is_newest) == 0 &&
+        snapshot.id != 0u)
     {
-        snapshot.lap            = pnet->lap;
-        snapshot.uap_valid      = pnet->uap_valid;
-        snapshot.uap            = pnet->uap;
-        snapshot.clk_known      = pnet->clk_known;
-        snapshot.central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);
-        snapshot.tracking_state = pnet->tracking_state;
-        snapshot.total_packets  = pnet->total_packets;
-        snapshot.combined_rssi_seen =
-            rssi_tracker_average(&pnet->combined_rssi_track, &snapshot.combined_rssi);
-        snapshot.master_rssi_seen =
-            rssi_tracker_average(&pnet->master_rssi_track, &snapshot.master_rssi);
-        for (int lt = 0; lt < 8; lt++)
-            snapshot.slave_rssi_seen[lt] =
-                rssi_tracker_average(&pnet->slave_rssi_track[lt],
-                                     &snapshot.slave_rssi[lt]);
         if (!packet_is_newest)
             snapshot.clk_known = 0;
         snapshot_ptr = &snapshot;
@@ -677,64 +938,32 @@ void session_process_bredr_event(session_t *session, const bredr_event_t *event)
         session->bredr_cb(event, snapshot_ptr, session->bredr_user);
 }
 
-size_t session_bredr_piconet_count(const session_t *session)
-{
-    if (!session) return 0u;
-    return bredr_piconet_store_count(&session->bredr_tracker.store);
-}
-
-int session_bredr_piconet_snapshot(const session_t *session,
-                                  size_t index,
-                                  bredr_piconet_snapshot_t *out)
-{
-    if (!session || !out) return -1;
-    const bredr_piconet_t *pnet = bredr_piconet_store_get(&session->bredr_tracker.store, index);
-    if (!pnet) return -1;
-    memset(out, 0, sizeof(*out));
-    out->lap            = pnet->lap;
-    out->uap_valid      = pnet->uap_valid;
-    out->uap            = pnet->uap;
-    out->clk_known      = pnet->clk_known;
-    out->central_clk_1_6        = bredr_piconet_central_clk_1_6(pnet, pnet->last_seen);
-    out->tracking_state = pnet->tracking_state;
-    out->total_packets  = pnet->total_packets;
-    out->combined_rssi_seen =
-        rssi_tracker_average(&pnet->combined_rssi_track, &out->combined_rssi);
-    out->master_rssi_seen =
-        rssi_tracker_average(&pnet->master_rssi_track, &out->master_rssi);
-    for (int lt = 0; lt < 8; lt++)
-        out->slave_rssi_seen[lt] =
-            rssi_tracker_average(&pnet->slave_rssi_track[lt],
-                                 &out->slave_rssi[lt]);
-    return 0;
-}
-
 size_t session_get_bredr_devices(const session_t *session,
                                  bredr_device_snapshot_t *out, size_t max)
 {
     if (!session) return 0u;
-    return bredr_tracker_get_devices(&session->bredr_tracker, out, max);
+    return bredr_registry_get_devices(&session->bredr_registry, out, max);
 }
 
-size_t session_get_bredr_piconets(const session_t *session,
-                                  bredr_piconet_snapshot_t *out, size_t max)
+size_t session_get_bredr_connections(const session_t *session,
+                                     bredr_connection_snapshot_t *out, size_t max)
 {
     if (!session) return 0u;
-    return bredr_tracker_get_piconets(&session->bredr_tracker, out, max);
+    return bredr_registry_get_connections(&session->bredr_registry, out, max);
 }
 
 size_t session_get_ble_devices(const session_t *session,
                                ble_device_snapshot_t *out, size_t max)
 {
     if (!session) return 0u;
-    return ble_tracker_get_devices(&session->ble_tracker, out, max);
+    return ble_registry_get_devices(&session->ble_registry, out, max);
 }
 
-size_t session_get_ble_piconets(const session_t *session,
-                                ble_piconet_snapshot_t *out, size_t max)
+size_t session_get_ble_connections(const session_t *session,
+                                   ble_connection_snapshot_t *out, size_t max)
 {
     if (!session) return 0u;
-    return ble_tracker_get_piconets(&session->ble_tracker, out, max);
+    return ble_registry_get_connections(&session->ble_registry, out, max);
 }
 
 unsigned long session_dropped_blocks(const session_t *session)
@@ -744,11 +973,9 @@ unsigned long session_dropped_blocks(const session_t *session)
      * snapshot taken just before reset (see session_destroy). */
     if (session->torn_down)
         return session->dropped_blocks_total;
-    unsigned long total = sample_dispatcher_total_dropped(session->dispatcher);
-    if (session->ble_chan_dispatcher)
-        total += sample_dispatcher_total_dropped(session->ble_chan_dispatcher);
-    if (session->bredr_chan_dispatcher)
-        total += sample_dispatcher_total_dropped(session->bredr_chan_dispatcher);
+    unsigned long total =
+        sample_dispatcher_total_dropped(session->dispatcher);
+    service_accumulate_total(&session->chan_svc, &total);
     return total;
 }
 
@@ -765,6 +992,34 @@ unsigned long session_bredr_frame_count(const session_t *session)
     return session ? session->bredr_frames_emitted : 0ul;
 }
 
+void session_collector_dropped(const session_t *session,
+                               unsigned long *ble,
+                               unsigned long *bredr)
+{
+    if (!session)
+    {
+        if (ble)
+            *ble = 0ul;
+        if (bredr)
+            *bredr = 0ul;
+        return;
+    }
+    /* After teardown the queues are gone, so report the snapshot (same
+     * pattern as the block-drop counters). */
+    if (session->torn_down)
+    {
+        if (ble)
+            *ble = session->ble_collector_dropped;
+        if (bredr)
+            *bredr = session->bredr_collector_dropped;
+        return;
+    }
+    if (ble)
+        *ble = collector_dropped(&session->ble_collector);
+    if (bredr)
+        *bredr = collector_dropped(&session->bredr_collector);
+}
+
 void session_dropped_blocks_breakdown(const session_t *session,
                                       session_drop_breakdown_t *out)
 {
@@ -778,14 +1033,7 @@ void session_dropped_blocks_breakdown(const session_t *session,
         memset(out, 0, sizeof(*out));
         dispatcher_accumulate(session->dispatcher,
                                &out->rf_pool_exhausted, &out->rf_consumer_full);
-        if (session->ble_chan_dispatcher)
-            dispatcher_accumulate(session->ble_chan_dispatcher,
-                                   &out->ble_out_pool_exhausted,
-                                   &out->ble_out_consumer_full);
-        if (session->bredr_chan_dispatcher)
-            dispatcher_accumulate(session->bredr_chan_dispatcher,
-                                   &out->bredr_out_pool_exhausted,
-                                   &out->bredr_out_consumer_full);
+        service_accumulate_breakdown(&session->chan_svc, out);
     }
 }
 

@@ -9,34 +9,34 @@ import QtQuick.Controls
 //             37/38/39 highlighted, data channels 0-36 shown alongside).
 //   - Bottom: all 79 BR/EDR channels (1 MHz each), boxes centered on their
 //             channel frequency so LE 37/38/39 line up with BR/EDR 0/24/78.
-// Hybrid mode splits the bar 50/50; BLE mode expands the LE zone to fill
+// Hybrid mode splits the bar 50/50; LE mode expands the LE zone to fill
 // the bar; BR/EDR mode expands the BR/EDR zone to fill the bar.
 //
 // A capture-window overlay ("tuner box") spans the active grid's window —
-// numChannels MHz when BR/EDR-locked, numChannels*2 MHz when BLE-locked —
+// numChannels MHz when BR/EDR-locked, numChannels*2 MHz when LE-locked —
 // starting at the window's left edge, with a dashed LO tick at its center.
 // The window snaps to one of two grids depending on the lock reference:
 //   - BR/EDR lock: left edge = 2401.5 + bottom (1 MHz drag steps, LO at
 //     a half-MHz frequency).
-//   - BLE lock:    left edge = 2401 + 2*bottomLeIndex (2 MHz drag steps,
+//   - LE lock:    left edge = 2401 + 2*bottomLeIndex (2 MHz drag steps,
 //     LO at a whole-MHz frequency).
 //
 // Interaction:
 //   - Drag the body of the tuner box to move the window (grid-snapped).
 //   - Drag the right edge to resize: BR/EDR-locked counts are even,
-//     2..maxChannels; BLE-locked counts are 2..maxChannels BLE channels.
+//     2..maxChannels; LE-locked counts are 2..maxChannels LE channels.
 //   - Drag the left edge to resize: bottom channel and count both change,
 //     right edge stays fixed.
 //   - Click anywhere on the bar to jump the box's left edge there.
 //
 // Pure presentation: this view never assigns its own properties (doing so
 // would break the owner's bindings into it). Edits are reported via the
-// windowEdited signal (in whichever grid is active); CaptureView owns the
+// windowEdited signal (in whichever grid is active); ConfigView owns the
 // channel state and is the single source of truth.
 Item {
     id: root
 
-    // 0 = Hybrid, 1 = BLE, 2 = BR/EDR. Mirrors BACKEND_SESSION_*.
+    // 0 = Hybrid, 1 = LE, 2 = BR/EDR. Mirrors BACKEND_SESSION_*.
     property int sessionTypeIndex: 0
     // Window bottom on the BR/EDR grid (channel index 0..78).
     property int bottomChannel: 0
@@ -46,19 +46,25 @@ Item {
     // it snaps to the BR/EDR grid (1 MHz steps).
     property bool bleLocked: false
     // Active-grid channel count: BR/EDR channels (even, 2..maxChannels)
-    // when BR/EDR-locked, BLE channels (2..maxChannels) when BLE-locked.
+    // when BR/EDR-locked, LE channels (2..maxChannels) when LE-locked.
     property int numChannels: 20
     // Max channels of the active grid supported by the pipeline.
     property int maxChannels: 20
+    // Valid window counts for the active grid, ascending (the lane-split
+    // set the CLI enforces, clipped to the selected radio). Drag counts
+    // snap down into these; empty falls back to even clamping. The owner
+    // (ConfigView) re-snaps authoritatively, so this only keeps emitted
+    // values clean mid-drag.
+    property var validCounts: []
     // True while a session is running — locks the tuner.
     property bool running: false
-    // Range labels drawn inside the tuner box (computed by CaptureView).
+    // Range labels drawn inside the tuner box (computed by ConfigView).
     property string brRangeText: ""
     property string leRangeText: ""
 
     // Emitted when the user edits the capture window by dragging. bottom
     // is expressed in the active grid (leGrid=true -> LE RF index); count
-    // is the active grid's channel count (BLE channels when leGrid).
+    // is the active grid's channel count (LE channels when leGrid).
     signal windowEdited(int bottom, int count, bool leGrid)
 
     // All 40 LE RF channels (2 MHz spacing) mapped to their LE channel
@@ -93,7 +99,7 @@ Item {
     readonly property real bandEndMhz: 2481.0
 
     // Window geometry in MHz, driven by the active grid. The window is
-    // numChannels*2 MHz wide when BLE-locked (2 MHz per BLE channel).
+    // numChannels*2 MHz wide when LE-locked (2 MHz per LE channel).
     readonly property real windowMhz: bleLocked ? numChannels * 2 : numChannels
     readonly property real windowLeftMhz: bleLocked ? 2401 + 2 * bottomLeIndex
                                                     : 2401.5 + bottomChannel
@@ -125,6 +131,19 @@ Item {
 
     // ---- Clamping (pure — applied before emitting windowEdited) -----------
     function clampCount(count) {
+        if (root.validCounts.length > 0) {
+            count = Math.round(count)
+            var best = -1
+            for (var i = 0; i < root.validCounts.length; i++) {
+                if (root.validCounts[i] <= count)
+                    best = root.validCounts[i]
+                else
+                    break
+            }
+            if (best >= 0)
+                return best
+            return root.validCounts[0]
+        }
         if (root.bleLocked) {
             return Math.max(2, Math.min(maxChannels, Math.round(count)))
         }
@@ -210,8 +229,8 @@ Item {
                         ctx.fillText(le.label, (lx0 + lx1) / 2, m.leTop + m.leH / 2)
                     }
                 }
-                ctx.fillStyle = "#5a5a5a"
-                ctx.font = "8px 'Google Sans Code'"
+                ctx.fillStyle = "#858585"
+                ctx.font = "10px 'Google Sans Code'"
                 ctx.textAlign = "right"
                 ctx.textBaseline = "middle"
                 ctx.fillText("LE", root.margin - 8, m.leTop + m.leH / 2)
@@ -236,8 +255,8 @@ Item {
                         ctx.fillText(String(b), (bx0 + bx1) / 2, m.brTop + m.brH / 2)
                     }
                 }
-                ctx.fillStyle = "#5a5a5a"
-                ctx.font = "8px 'Google Sans Code'"
+                ctx.fillStyle = "#858585"
+                ctx.font = "10px 'Google Sans Code'"
                 ctx.textAlign = "right"
                 ctx.textBaseline = "middle"
                 ctx.fillText("BR/EDR", root.margin - 8, m.brTop + m.brH / 2)
@@ -390,7 +409,7 @@ Item {
         onCanceled: dragMode = 0
 
         // Move the window so its left edge sits at leftMhz, snapped to the
-        // active grid (1 MHz steps BR/EDR-locked, 2 MHz steps BLE-locked).
+        // active grid (1 MHz steps BR/EDR-locked, 2 MHz steps LE-locked).
         function moveWindowTo(leftMhz) {
             if (root.bleLocked) {
                 var k = Math.round((leftMhz - 2401) / 2)
@@ -404,7 +423,7 @@ Item {
         }
 
         // Right edge follows the mouse; left edge stays fixed. The count is
-        // expressed in the active grid (even MHz BR/EDR, BLE channels) and
+        // expressed in the active grid (even MHz BR/EDR, LE channels) and
         // the window stays inside the band.
         function resizeRightTo(rightMhz) {
             var mhz = rightMhz - startLeftMhz

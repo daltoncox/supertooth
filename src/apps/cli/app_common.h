@@ -28,6 +28,8 @@ enum
     APP_OPT_DEBUG = 0x100,
     APP_OPT_ENFORCE_CRC,
     APP_OPT_AC_ERRORS,
+    APP_OPT_EXHAUSTIVE,
+    APP_OPT_GAIN,
 };
 
 /* Parsed "<type>:<id>" device spec, e.g. "hackrf:b25062dc22113a0b".
@@ -61,8 +63,9 @@ void app_install_sigint_handler(session_t *session_slot);
 int app_parse_device_spec(const char *spec, app_device_spec_t *out);
 
 /**
- * Print one "<type>:<id>" line per connected radio of every known device
- * type, then return. Used by the bare `-d` / `--device` form.
+ * Print the numbered device list (see radio_enumerate_devices()) for the
+ * bare `-d` / `--device` form, then return. Numbers are the `-d <n>`
+ * selection indices.
  * @return EXIT_SUCCESS on completion, EXIT_FAILURE on enumeration error.
  */
 int app_print_available_devices(const char *argv0);
@@ -76,15 +79,102 @@ int app_print_available_devices(const char *argv0);
 int app_validate_device_spec(const char *argv0, const app_device_spec_t *spec);
 
 /**
+ * Resolve a `-d` argument to a live device. Accepted forms:
+ *   <n>          1-based index into the numbered `-d` listing,
+ *   <type>       first device of that type (e.g. "hackrf"),
+ *   <type>:<id> explicit device (e.g. "hackrf:b25062dc22113a0b").
+ * Every form is re-validated against current hardware, so a device that
+ * vanished since the listing still fails cleanly. On success @p out is
+ * populated with a process-lifetime id and 0 is returned. On failure a
+ * diagnostic (referencing @p argv0) is printed and non-zero returned.
+ */
+int app_resolve_device_arg(const char *argv0, const char *arg,
+                           app_device_spec_t *out);
+
+/**
+ * Pick the default live device (runs without an explicit `-d`): entry #1
+ * of the sorted inventory. On success @p out is populated with a
+ * process-lifetime id and 0 is returned. On no-device the friendly "No
+ * devices found" message (referencing @p argv0) is printed and non-zero
+ * returned.
+ */
+int app_pick_default_device(const char *argv0, app_device_spec_t *out);
+
+/**
  * Print the `--device` usage line for `print_usage` blocks.
  */
 void app_print_device_usage_line(void);
 
 /**
- * Print a per-pool breakdown of dropped blocks from a session summary
- * (see session_dropped_blocks_breakdown). Each pool reports producer-side
- * (pool exhausted) vs consumer-side (reader queue full) drops so the user
- * can see WHERE in the pipeline blocks were lost.
+ * Print the `--exhaustive` usage line for `print_usage` blocks.
+ */
+void app_print_exhaustive_usage_line(void);
+
+/**
+ * Print the `-V/--version` usage line for `print_usage` blocks.
+ */
+void app_print_version_usage_line(void);
+
+/**
+ * Print the `--debug` usage line for `print_usage` blocks.
+ */
+void app_print_debug_usage_line(void);
+
+/**
+ * Print the `-h/--help` usage line for `print_usage` blocks.
+ */
+void app_print_help_usage_line(void);
+
+/**
+ * Print the standardized "Other Options" section (version + help lines)
+ * for `print_usage` blocks, preceded by a blank line.
+ */
+void app_print_other_usage_lines(void);
+
+/**
+ * Print the `--ac-errors` usage line (BREDR Options section).
+ */
+void app_print_ac_errors_usage_line(void);
+
+/**
+ * Print the `--enforce-crc` usage line (LE Options section).
+ */
+void app_print_enforce_crc_usage_line(void);
+
+/**
+ * Print the `-g/--gain` usage line for `print_usage` blocks.
+ */
+void app_print_gain_usage_line(void);
+
+/**
+ * Default live device type when the user passes no `-d` flag: HackRF when
+ * compiled in, otherwise bladeRF, otherwise file (validation-only).
+ */
+radio_device_type_t app_default_device_type(void);
+
+/**
+ * Print the resolved gain selection as a banner line ("Gain : ..."),
+ * formatted per device type (raw -g value when explicit, device default
+ * otherwise). FILE prints "(n/a - replay)".
+ */
+void app_print_gain_summary(radio_device_type_t type,
+                            const radio_gain_spec_t *spec);
+
+/**
+ * Resolve the raw `-g/--gain` argument (NULL = flag omitted → device
+ * defaults) into @p out for @p type. On malformed/out-of-range input
+ * prints "Invalid --gain ...", the device-specific help, and returns
+ * non-zero. @p argv0 is used only for diagnostics.
+ */
+int app_resolve_gain_spec(const char *argv0, radio_device_type_t type,
+                          const char *raw, radio_gain_spec_t *out);
+
+/**
+ * Print a per-stage breakdown of dropped blocks from a session summary
+ * (see session_dropped_blocks_breakdown). Each stage (rf / sub / out)
+ * reports producer-side (pool exhausted) vs consumer-side (reader queue
+ * full) drops, plus per-lane detail when K > 1, so the user can see WHERE
+ * in the pipeline blocks were lost.
  */
 void app_print_drop_breakdown(const session_drop_breakdown_t *b);
 

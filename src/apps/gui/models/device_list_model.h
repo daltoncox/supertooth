@@ -16,11 +16,11 @@
  * @brief QML-facing list model backing the DeviceListView table.
  *
  * Each row is a single observed radio entity: a BLE advertiser, a BR/EDR
- * piconet member (master or a specific slave slot), a BR/EDR piconet, or an
- * LE connection. Rows are produced by the core trackers and delivered via
- * setRows() on a 4 Hz poll driven by ReceiverController (which calls
- * backend_session_poll_entities). The core supplies a stable entity id, a
- * 1-second average RSSI, and first/last-seen timestamps.
+ * connection member (central or a specific peripheral slot), a BR/EDR
+ * connection, or an LE connection. Rows are produced by the core registries
+ * and delivered via setRows() on a 1 Hz poll driven by ReceiverController
+ * (which calls backend_session_poll_entities). The core supplies a stable
+ * entity id, a 1-second average RSSI, and first/last-seen timestamps.
  *
  * The displayed RSSI (rssiDb) is the core's rolling 1-second average. The
  * RSSI chart shows that average sampled at the poll rate (the faint raw
@@ -77,6 +77,7 @@ public:
     Q_INVOKABLE void sortBy(const QString &roleName, Qt::SortOrder order);
 
     Q_INVOKABLE int rowForDeviceId(int id) const;
+    Q_INVOKABLE int deviceIdAt(int row) const;
 
     /// Sentinel for "no RSSI yet" (pinned to bottom of any RSSI sort).
     static constexpr double kRssiSentinel = -999.0;
@@ -109,6 +110,12 @@ private:
         QString addrType;               // BLE adv subtype / ""
         QString displayName;            // BLE local name (if any)
         QString manufacturer;           // BLE manufacturer (if any)
+        QString services;               // merged advertised services
+        QString appearance;             // GAP appearance (if any)
+        QString flags;                  // AD flags description (if any)
+        QString deviceClass;            // Class of Device (if advertised)
+        int txPower = 0;                // AD Tx Power dBm
+        int txPowerValid = 0;
 
         double rssiDb = qQNaN();       // 1 s average
         int    rssiValid = 0;
@@ -122,19 +129,37 @@ private:
         int crcInitConfirmed = 0;       // 0 while still unconfirmed
         int crcInitCandidates = 0;      // distinct CRCInit candidates accumulated
 
+        qulonglong groupId = 0;         // BR/EDR piconet linkage (0 = no group)
+        int ltSlot = -2;                // -1 = connection, 255 = central,
+                                        // 0..7 = peripheral, -2 = other
+        int isLastChild = 0;            // 1 when this member is the last child
+                                        // of its piconet group (└─ vs ├─)
+        int hasChildren = 0;            // 1 when a connection row has member
+                                        // rows broken out beneath it
+
         QVector<QPointF> avgSeries;     // (seconds, dB)
     };
 
     static QString typeLabelFor(const QString &proto, const QString &device,
                                 const QString &addrType);
     static QString identifierLabelFor(const Row &r);
+    // BR/EDR piconet tree helpers (hardcoded-expanded Option 2). A row is a
+    // group parent when it is a BR/EDR "connection" member-row source, and a
+    // group child when it carries a nonzero groupId with a member ltSlot.
+    // INQUIRY / standalone / LE rows are never grouped.
+    static bool isPiconetConnection(const Row &r);
+    static bool isPiconetMember(const Row &r);
+    static int treeRank(const Row &r);
+    // Marks isLastChild for every member of each piconet group. Expects rows
+    // already in display order (connection first, then members).
+    static void assignTreeFlags(QVector<Row> &rows);
     static QString formatLastSeen(qint64 ms);
     bool lessThan(const Row &a, const Row &b) const;
     QVariant sortKey(const Row &r) const;
     void maybeResort();
     void rebuildLookup();
 
-    static constexpr int kMaxSeriesPoints = 600;   // ~150 s at 4 Hz
+    static constexpr int kMaxSeriesPoints = 600;   // ~600 s at 1 Hz
 
     QVector<Row> m_rows;
     QHash<int, int> m_rowById;          // stable device id -> display row

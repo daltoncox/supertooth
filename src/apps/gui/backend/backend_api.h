@@ -21,11 +21,17 @@
 extern "C" {
 #endif
 
-/* Input-type indices mirror Header.qml inputTypeSelector. */
+/* Input-type indices for the config-page device-type selector.
+ * File replay (1) exists for backend plumbing but is hidden from the GUI. */
 #define BACKEND_INPUT_HACKRF 0
 #define BACKEND_INPUT_FILE   1
+#define BACKEND_INPUT_BLADERF 2
 
-/* Session-type indices mirror CaptureView.qml sessionTypeSelector. */
+/* Maximum entries ever returned by backend_live_input_types(). */
+#define BACKEND_MAX_LIVE_INPUTS 4
+#define BACKEND_INPUT_LABEL_LEN 32
+
+/* Session-type indices mirror ConfigView.qml sessionTypeSelector. */
 #define BACKEND_SESSION_HYBRID 0
 #define BACKEND_SESSION_BLE    1
 #define BACKEND_SESSION_BREDR  2
@@ -35,10 +41,6 @@ extern "C" {
 #define BACKEND_BLE_CH38 38u
 #define BACKEND_BLE_CH39 39u
 
-/* Channel-layout grids (mirror RECEIVER_BREDR_GRID_* in the core). */
-#define BACKEND_GRID_BREDR 0
-#define BACKEND_GRID_LE    1
-
 #define BACKEND_ADDR_TEXT_LEN   32
 #define BACKEND_TYPE_TEXT_LEN   32
 #define BACKEND_INFO_TEXT_LEN   160
@@ -46,6 +48,10 @@ extern "C" {
 #define BACKEND_PROTO_TEXT_LEN  8
 #define BACKEND_NAME_TEXT_LEN   72
 #define BACKEND_MANUF_TEXT_LEN  40
+#define BACKEND_SERVICES_TEXT_LEN 160
+#define BACKEND_APPEARANCE_TEXT_LEN 48
+#define BACKEND_FLAGS_TEXT_LEN  64
+#define BACKEND_COD_TEXT_LEN    96
 #define BACKEND_DETAIL_KEY_LEN  40
 #define BACKEND_DETAIL_VAL_LEN  192
 #define BACKEND_DETAIL_MAX      32
@@ -87,8 +93,8 @@ typedef struct
 typedef void (*backend_row_fn)(const backend_row_t *row, void *user);
 
 /**
- * A polled, display-ready device/piconet entity (one row in the device list).
- * Produced by backend_session_poll_entities() from the core trackers. All
+ * A polled, display-ready device/connection entity (one row in the device list).
+ * Produced by backend_session_poll_entities() from the core registries. All
  * strings are NUL-terminated. The callback receives a pointer valid only for
  * the duration of the call; copy out anything needed.
  */
@@ -96,14 +102,20 @@ typedef struct
 {
     uint64_t id;                       /**< stable entity id (matches core) */
     int      kind;                    /**< entity_kind_t: 0=BR/EDR dev,
-                                          1=BR/EDR piconet, 2=BLE dev,
-                                          3=BLE piconet */
+                                          1=BR/EDR connection, 2=BLE dev,
+                                          3=BLE connection */
     char     proto[BACKEND_PROTO_TEXT_LEN];   /**< "BR/EDR" or "LE" */
     char     addr[BACKEND_ADDR_TEXT_LEN];     /**< core addr_str */
     char     device[BACKEND_TYPE_TEXT_LEN];   /**< core label */
     char     addr_type[BACKEND_TYPE_TEXT_LEN];/**< BLE address subtype */
     char     name[BACKEND_NAME_TEXT_LEN];     /**< BLE local name (if any) */
     char     manufacturer[BACKEND_MANUF_TEXT_LEN]; /**< BLE manufacturer */
+    char     services[BACKEND_SERVICES_TEXT_LEN]; /**< merged advertised services */
+    char     appearance[BACKEND_APPEARANCE_TEXT_LEN]; /**< GAP appearance */
+    char     flags[BACKEND_FLAGS_TEXT_LEN]; /**< AD flags description */
+    char     device_class[BACKEND_COD_TEXT_LEN]; /**< Class of Device */
+    int8_t   tx_power;                  /**< AD Tx Power dBm */
+    int      tx_power_valid;
     float    rssi_db;                  /**< 1 s average RSSI (NaN if invalid) */
     int      rssi_valid;              /**< 0 => no signal yet */
     uint64_t first_seen_ms;
@@ -113,6 +125,12 @@ typedef struct
     uint32_t crc_init;              /**< BLE connection CRCInit (0 if not found) */
     int      crc_init_confirmed;    /**< 0 while CRCInit is still unconfirmed */
     unsigned int crc_init_candidates; /**< distinct CRCInit candidates accumulated */
+    uint64_t group_id;              /**< BR/EDR piconet linkage: member -> owning
+                                         connection_id, connection -> own id,
+                                         0 = standalone / LE (no group) */
+    int      lt_slot;               /**< -1 = BR/EDR connection, 255 = central,
+                                         0..7 = peripheral LT_ADDR,
+                                         -2 = other (LE / standalone) */
 } backend_entity_t;
 
 /**
@@ -140,18 +158,32 @@ void backend_session_set_stopped_callback(backend_session_t *session,
                                           backend_stopped_fn on_stopped,
                                           void *user);
 
+/* RX gain selection for the GUI session runners below. Plain ints (no core
+ * headers) so the Qt/C++ side can construct it from QML SpinBox values.
+ * Only the fields for the selected input type are used; the rest are
+ * ignored. NULL gain pointer = device defaults (same as omitting -g). */
+typedef struct
+{
+    int hackrf_lna;      /* HackRF LNA: 0,8,16,24,32,40 (default 24) */
+    int hackrf_vga;      /* HackRF VGA: even 0-62 (default 18) */
+    int hackrf_amp;      /* HackRF AMP: 0=off, 1=on (default 0) */
+    int bladerf_gain_db; /* bladeRF overall RX gain 0-60 dB (default 30) */
+} backend_gain_t;
+
 /**
  * Start a blocking BLE receive session on the given LE channel window:
- * le_channel_count consecutive LE RF channels (1..10) starting at
+ * le_channel_count consecutive LE RF channels (1..40) starting at
  * bottom_le_rf (0..39). The radio tunes a whole-MHz LO at the window
  * center; only advertising RF channels (0/12/39 -> LE 37/38/39) are
- * decoded, data channels stay idle. Values are clamped defensively.
+ * decoded, data channels stay idle. Values are clamped defensively
+ * to what the selected radio can sustain.
  * Blocks until backend_session_request_stop() is called (call from a
  * worker thread). For each decoded frame, @p on_row is invoked on the
  * session worker thread with a populated row.
  *
- * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_FILE.
- * @param device_id   HackRF identifier (NULL = default). Ignored for FILE.
+ * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_BLADERF.
+ * @param device_id   Radio identifier (NULL = default).
+ * @param gain        RX gains (NULL = device defaults).
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_ble(backend_session_t *session,
@@ -160,19 +192,22 @@ int backend_session_run_ble(backend_session_t *session,
                             int input_type,
                             const char *device_id,
                             int enforce_crc,
+                            const backend_gain_t *gain,
                             backend_row_fn on_row,
                             void *user);
 
 /**
  * Start a blocking BR/EDR (Classic Bluetooth) receive session on the given
- * channel window: channel_count consecutive BR/EDR channels (even, 2..20)
+ * channel window: channel_count consecutive BR/EDR channels (even, snapped
+ * to the staged lane split: 2..20 plus 24,28,32,36,40,42,48,54,60,64,72)
  * starting at bottom_channel (0..78, bottom+count-1 <= 78). Values are
  * clamped defensively. Blocks until backend_session_request_stop() is
  * called (call from a worker thread). For each decoded frame, @p on_row is
  * invoked on the session worker thread with a populated row.
  *
- * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_FILE.
- * @param device_id   HackRF identifier (NULL = default). Ignored for FILE.
+ * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_BLADERF.
+ * @param device_id   Radio identifier (NULL = default).
+ * @param gain        RX gains (NULL = device defaults).
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_bredr(backend_session_t *session,
@@ -180,35 +215,34 @@ int backend_session_run_bredr(backend_session_t *session,
                               unsigned int bottom_channel,
                               int input_type,
                               const char *device_id,
+                              const backend_gain_t *gain,
                               backend_row_fn on_row,
                               void *user);
 
 /**
  * Start a blocking hybrid (BR/EDR + BLE) receive session from a single
- * stream covering the configured channel window. The grid selects the LO
- * alignment: BACKEND_GRID_BREDR = window is channel_count MHz starting at
- * bottom_channel (LO at a half-MHz); BACKEND_GRID_LE = window is
- * channel_count+1 MHz starting at bottom_channel (LO at a whole MHz;
- * channel_count is odd and bottom_channel even, since the two BR/EDR
- * channels centered on the Nyquist edges are not processed). ble_channel
+ * stream covering the configured BR/EDR channel window (channel_count MHz
+ * starting at bottom_channel, LO at a half-MHz). BLE fans out inside the
+ * window from the shared 1 MHz channelizer. ble_channel
  * is the advertising channel (37/38/39) whose center lies inside the
  * window, or 0 to leave the BLE worker idle. Values are clamped/validated
  * defensively. Blocks until backend_session_request_stop() is called
  * (call from a worker thread). Both BR/EDR and BLE decoded frames are
  * delivered through @p on_row.
  *
- * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_FILE.
- * @param device_id   HackRF identifier (NULL = default). Ignored for FILE.
+ * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_BLADERF.
+ * @param device_id   Radio identifier (NULL = default).
+ * @param gain        RX gains (NULL = device defaults).
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_hybrid(backend_session_t *session,
                                unsigned int channel_count,
                                unsigned int bottom_channel,
-                               int le_grid,
                                uint8_t ble_channel,
                                int input_type,
                                const char *device_id,
                                int enforce_crc,
+                               const backend_gain_t *gain,
                                backend_row_fn on_row,
                                void *user);
 
@@ -216,10 +250,80 @@ int backend_session_run_hybrid(backend_session_t *session,
 void backend_session_request_stop(backend_session_t *session);
 
 /**
- * Snapshot the current device/piconet entities from the core trackers into
- * @p out (capacity @p max). Returns the number of entities written. Caller
- * provides the buffer; safe to call from the GUI thread while a capture runs
- * (the core getters lock internally).
+ * Find the default live radio device (first identifier of the first live
+ * device type; file replay is skipped). Thin wrapper over
+ * session_get_default_device() for the GUI/QML side, which cannot include
+ * the core headers.
+ * @param out_type_name  Optional buffer for the type name (e.g. "hackrf").
+ * @param type_len       Size of @p out_type_name (ignored when NULL).
+ * @param out_id         Optional buffer for the NUL-terminated id.
+ * @param id_len         Size of @p out_id (ignored when NULL).
+ * @return 0 on success, non-zero when no live device is present.
+ * All outputs are optional: NULL/0 probes for existence.
+ */
+int backend_get_default_device(char *out_type_name, size_t type_len,
+                               char *out_id, size_t id_len);
+
+/**
+ * List the live radio input types compiled into this build (HackRF and/or
+ * bladeRF when their backends are enabled; file replay is never included).
+ * Shared with the QML device-type selector so a radio disabled via
+ * -DENABLE_HACKRF=OFF / -DENABLE_BLADERF=OFF never appears in the GUI.
+ * @param out_types  Output array of BACKEND_INPUT_* values (capacity @p max).
+ * @param max        Capacity of @p out_types.
+ * @return Number of live input types written (0 when none compiled in).
+ */
+int backend_live_input_types(int *out_types, int max);
+
+/**
+ * Human-readable label for a BACKEND_INPUT_* value ("HackRF", "bladeRF",
+ * "File"). Used by the QML device-type selector.
+ * @return 0 on success, non-zero for unknown input types.
+ */
+int backend_input_type_label(int input_type, char *out, size_t out_len);
+
+/**
+ * Enumerate device identifiers for a BACKEND_INPUT_* value. Thin wrapper
+ * over radio_list_devices() so Qt code never mirrors radio_device_type_t.
+ * On success the caller owns the array and must release it with
+ * backend_free_device_list(). File input has no enumeration (success with
+ * count 0).
+ * @return 0 on success, negative on failure.
+ */
+int backend_list_devices(int input_type, char ***out_identifiers,
+                         size_t *out_count);
+void backend_free_device_list(char ***identifiers, size_t count);
+
+/**
+ * Per-device capture-window sizing, shared with the CLI defaults
+ * (session_default_bredr/ble_count). Lets the QML spectrum clamp to what
+ * the selected radio can sustain instead of hardcoded HackRF-class limits.
+ */
+unsigned int backend_default_bredr_count(int input_type);
+unsigned int backend_default_ble_count(int input_type);
+unsigned int backend_max_bredr_count(int input_type);
+unsigned int backend_max_ble_count(int input_type);
+
+/**
+ * Valid capture-window channel counts for an input type, ascending.
+ * Same validity the CLI enforces via session_validate_layout(): the
+ * lane-split set the channelizer can stage (BR/EDR grid: even 2..20,
+ * then 24,28,32,36,40,42,48,54,60,64,72, plus 79 at 80 Msps) clipped to
+ * what the radio can sustain — not every even count in range (e.g. 22
+ * has no lane split). LE grid: the 2 MHz-span counts the lane planner
+ * accepts, likewise device-clipped.
+ * @param le_grid  Non-zero for the LE grid, zero for the BR/EDR grid.
+ * @param out      Output array (capacity @p max).
+ * @return Number of counts written (0 when none valid).
+ */
+int backend_supported_counts(int input_type, int le_grid,
+                             unsigned *out, int max);
+
+/**
+ * Snapshot the current device/connection entities from the core registries
+ * into @p out (capacity @p max). Returns the number of entities written.
+ * Caller provides the buffer; safe to call from the GUI thread while a
+ * capture runs (the core getters lock internally).
  */
 size_t backend_session_poll_entities(backend_session_t *session,
                                      backend_entity_t *out, size_t max);

@@ -2,7 +2,7 @@
  * @file test_drift_confirm.c
  * @brief Unit tests for two-packet drift confirmation in clock tracking.
  *
- * A locked piconet (uap_valid && clk_known) is driven with a real captured
+ * A locked link (uap_valid && clk_known) is driven with a real captured
  * header (tests/bredr/capture_151FC475.h, UAP 0x15) via bredr_recovery_process().
  * The SAME frame is replayed at shifted radio_start_sample_index values: the
  * recovery logic cannot tell a receiver-clock shift from central-clock drift,
@@ -87,28 +87,28 @@ static int find_clean_frame(clean_frame_t *out)
 }
 
 /* Feed the frame at receiver shift s (rx moves by s slots vs capture). */
-static int feed_shifted(bredr_piconet_t *pnet, const clean_frame_t *cf, int s)
+static int feed_shifted(bredr_link_t *link, const clean_frame_t *cf, int s)
 {
     bredr_event_t ev;
     memset(&ev, 0, sizeof(ev));
     ev.meta.radio_sample_rate_hz = 3200u;
     ev.meta.radio_start_sample_index = cf->clkn0 + (uint64_t)(2 * s);
     ev.frame = cf->frame;
-    return bredr_recovery_process(pnet, &ev);
+    return bredr_recovery_process(link, &ev);
 }
 
-static bredr_piconet_t *locked_pnet(const clean_frame_t *cf)
+static bredr_link_t *locked_link(const clean_frame_t *cf)
 {
-    bredr_piconet_t *pnet = (bredr_piconet_t *)malloc(sizeof(*pnet));
-    if (!pnet)
+    bredr_link_t *link = (bredr_link_t *)malloc(sizeof(*link));
+    if (!link)
     {
         g_failures++;
         return NULL;
     }
-    bredr_piconet_init(pnet, CAP_LAP);
+    bredr_link_init(link, CAP_LAP);
     uint32_t rx0 = cf->clkn0 >> 1;
-    bredr_piconet_set_uap(pnet, CAP_TRUE_UAP, cf->k0, rx0);
-    return pnet;
+    bredr_link_set_uap(link, CAP_TRUE_UAP, cf->k0, rx0);
+    return link;
 }
 
 int main(void)
@@ -121,7 +121,7 @@ int main(void)
 
     /* 1. Base hits build confidence, offset untouched. */
     {
-        bredr_piconet_t *p = locked_pnet(&cf);
+        bredr_link_t *p = locked_link(&cf);
         TEST_ASSERT(feed_shifted(p, &cf, 0) == 1);
         TEST_ASSERT(p->tracking_state == 2);
         TEST_ASSERT(feed_shifted(p, &cf, 0) == 1);
@@ -133,7 +133,7 @@ int main(void)
 
     /* 2+3. Single suspect parks the candidate; repeat confirms the drift. */
     {
-        bredr_piconet_t *p = locked_pnet(&cf);
+        bredr_link_t *p = locked_link(&cf);
         TEST_ASSERT(feed_shifted(p, &cf, 0) == 1); /* state 2 */
         TEST_ASSERT(feed_shifted(p, &cf, 0) == 1); /* state 3 */
         TEST_ASSERT(feed_shifted(p, &cf, +1) == 1);
@@ -149,7 +149,7 @@ int main(void)
 
     /* 4. A base hit clears a pending suspicion (glitch, not drift). */
     {
-        bredr_piconet_t *p = locked_pnet(&cf);
+        bredr_link_t *p = locked_link(&cf);
         TEST_ASSERT(feed_shifted(p, &cf, 0) == 1); /* state 2 */
         TEST_ASSERT(feed_shifted(p, &cf, +1) == 1);
         TEST_ASSERT(p->drift_candidate == -1);
@@ -162,7 +162,7 @@ int main(void)
 
     /* 5. Conflicting deltas clear the suspicion without touching tracking. */
     {
-        bredr_piconet_t *p = locked_pnet(&cf);
+        bredr_link_t *p = locked_link(&cf);
         TEST_ASSERT(feed_shifted(p, &cf, 0) == 1); /* state 2 */
         TEST_ASSERT(feed_shifted(p, &cf, +1) == 1);
         TEST_ASSERT(p->drift_candidate == -1);
@@ -176,7 +176,7 @@ int main(void)
 
     /* 6. A packet matching nothing clears suspicion and decays confidence. */
     {
-        bredr_piconet_t *p = locked_pnet(&cf);
+        bredr_link_t *p = locked_link(&cf);
         TEST_ASSERT(feed_shifted(p, &cf, +1) == 1);
         TEST_ASSERT(p->drift_candidate == -1);
         TEST_ASSERT(feed_shifted(p, &cf, +3) == 0);
@@ -189,7 +189,7 @@ int main(void)
     /* 7. A lone glitch no longer moves the offset (old code applied +1/-1
      * immediately); the following base hit keeps the lock healthy. */
     {
-        bredr_piconet_t *p = locked_pnet(&cf);
+        bredr_link_t *p = locked_link(&cf);
         TEST_ASSERT(feed_shifted(p, &cf, 0) == 1); /* state 2 */
         TEST_ASSERT(feed_shifted(p, &cf, 0) == 1); /* state 3 */
         TEST_ASSERT(feed_shifted(p, &cf, +1) == 1);
@@ -202,7 +202,7 @@ int main(void)
 
     /* 8. Lifecycle clears the pending candidate. */
     {
-        bredr_piconet_t *p = locked_pnet(&cf);
+        bredr_link_t *p = locked_link(&cf);
         TEST_ASSERT(feed_shifted(p, &cf, +1) == 1);
         TEST_ASSERT(p->drift_candidate == -1);
         bredr_recovery_reset(p);
@@ -210,10 +210,10 @@ int main(void)
         free(p);
     }
     {
-        bredr_piconet_t *p = locked_pnet(&cf);
+        bredr_link_t *p = locked_link(&cf);
         TEST_ASSERT(feed_shifted(p, &cf, +1) == 1);
         TEST_ASSERT(p->drift_candidate == -1);
-        bredr_piconet_set_uap(p, CAP_TRUE_UAP, cf.k0, cf.clkn0 >> 1);
+        bredr_link_set_uap(p, CAP_TRUE_UAP, cf.k0, cf.clkn0 >> 1);
         TEST_ASSERT(p->drift_candidate == 0);
         TEST_ASSERT(p->tracking_state == 1);
         free(p);

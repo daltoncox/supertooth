@@ -5,17 +5,17 @@ usage() {
     cat <<EOF
 Usage: $0 <build-dir> --version <ver> --qt-prefix <path> --output <deb-path>
 
-Build a vendor .deb for supertooth.  Bundles all 4 binaries plus Qt 6.8
-and radio library dependencies (hackrf, liquid-dsp) inside the
+Build a vendor .deb for supertooth.  Bundles both binaries plus Qt 6.8
+and radio library dependencies (hackrf, bladeRF, liquid-dsp) inside the
 package under /opt/supertooth.
 
 Layout:
-  /opt/supertooth/bin/      supertooth-bin + CLI tools, qt.conf
+  /opt/supertooth/bin/      supertooth (CLI) + supertooth-desktop (GUI), qt.conf
   /opt/supertooth/lib/      bundled shared libraries (Qt, ICU, radio)
   /opt/supertooth/plugins/  Qt platform/imageformat/... plugins
   /opt/supertooth/qml/      QML modules
-  /usr/bin/supertooth       thin wrapper (exec) -> /opt/supertooth/bin/supertooth-bin
-  /usr/bin/supertooth-*     symlinks -> /opt/supertooth/bin/
+  /usr/bin/supertooth       CLI (multiplexed: hybrid, ble, bredr, record)
+  /usr/bin/supertooth-desktop  Qt GUI application
   /usr/share/applications/  supertooth.desktop (via cmake --install, left in place)
   /usr/share/icons/...      supertooth-app.png (via cmake --install, left in place)
 
@@ -27,7 +27,7 @@ vendored Qt.
 
 Steps:
   1. cmake --install to a staging directory
-  2. Move binaries into /opt/supertooth/bin, wrapper + symlinks into /usr/bin
+  2. Move binaries into /opt/supertooth/bin, symlinks into /usr/bin
   3. Copy needed shared libraries from Qt and system paths into lib/
   4. Copy Qt platform plugins and QML modules
   5. Set RPATH on all binaries and bundled Qt libraries
@@ -42,11 +42,14 @@ BUILD_DIR=""
 VERSION="0.0.0"
 QT_PREFIX=""
 OUTPUT_DEB=""
+# Custom liquid-dsp install prefix (packaging/build-liquid-linux.sh default).
+LIQUID_PREFIX="${LIQUID_PREFIX:-/opt/liquid-dsp}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version) VERSION="$2"; shift 2 ;;
         --qt-prefix) QT_PREFIX="$2"; shift 2 ;;
+        --liquid-prefix) LIQUID_PREFIX="$2"; shift 2 ;;
         --output) OUTPUT_DEB="$2"; shift 2 ;;
         --arch) ARCH="$2"; shift 2 ;;
         -*)
@@ -144,33 +147,26 @@ PLUGIN_DIR="$OPT_ROOT/plugins"
 QML_DIR="$OPT_ROOT/qml"
 mkdir -p "$BIN_DIR" "$LIB_DIR"
 
-if [[ ! -f "$STAGING/usr/bin/supertooth" ]]; then
+if [[ ! -f "$STAGING/usr/bin/supertooth-desktop" ]]; then
     echo "Error: GUI binary not found in staging. Was the project configured with -DBUILD_GUI=ON?"
     exit 1
 fi
+if [[ ! -f "$STAGING/usr/bin/supertooth" ]]; then
+    echo "Error: CLI binary not found in staging."
+    exit 1
+fi
 
-# Move all four binaries into /opt/supertooth/bin.  The GUI binary is
-# renamed to supertooth-bin; /usr/bin/supertooth becomes a thin wrapper.
-mv "$STAGING/usr/bin/supertooth" "$BIN_DIR/supertooth-bin"
-mv \
-    "$STAGING/usr/bin/supertooth-bredr" \
-    "$STAGING/usr/bin/supertooth-ble" \
-    "$STAGING/usr/bin/supertooth-hybrid" \
-    "$BIN_DIR/"
+# Move both binaries into /opt/supertooth/bin and symlink them back into
+# /usr/bin. The kernel resolves the symlink before exec, so $ORIGIN still
+# points at /opt/supertooth/bin.
+mv "$STAGING/usr/bin/supertooth-desktop" "$BIN_DIR/supertooth-desktop"
+mv "$STAGING/usr/bin/supertooth" "$BIN_DIR/supertooth"
 
-cat > "$STAGING/usr/bin/supertooth" << 'WRAPPER'
-#!/bin/sh
-exec /opt/supertooth/bin/supertooth-bin "$@"
-WRAPPER
-chmod 755 "$STAGING/usr/bin/supertooth"
+# CLI + GUI: plain symlinks into /usr/bin.
+ln -s /opt/supertooth/bin/supertooth "$STAGING/usr/bin/supertooth"
+ln -s /opt/supertooth/bin/supertooth-desktop "$STAGING/usr/bin/supertooth-desktop"
 
-# CLI tools: plain symlinks.  The kernel resolves the symlink before
-# exec, so $ORIGIN still points at /opt/supertooth/bin.
-ln -s /opt/supertooth/bin/supertooth-bredr "$STAGING/usr/bin/supertooth-bredr"
-ln -s /opt/supertooth/bin/supertooth-ble  "$STAGING/usr/bin/supertooth-ble"
-ln -s /opt/supertooth/bin/supertooth-hybrid "$STAGING/usr/bin/supertooth-hybrid"
-
-# qt.conf sits next to supertooth-bin.  Qt resolves relative entries
+# qt.conf sits next to supertooth-desktop.  Qt resolves relative entries
 # against the directory containing qt.conf, so plugin/QML paths need no
 # environment variables in the wrapper.
 cat > "$BIN_DIR/qt.conf" << 'QTCONF'
@@ -190,21 +186,27 @@ BUILD_BIN_DIR="$BUILD_DIR/src/apps/cli"
 BUILD_GUI_DIR="$BUILD_DIR/src/apps/gui"
 
 BINARIES=(
-    "$BUILD_BIN_DIR/supertooth-bredr"
-    "$BUILD_BIN_DIR/supertooth-ble"
-    "$BUILD_BIN_DIR/supertooth-hybrid"
-    "$BUILD_GUI_DIR/supertooth"
+    "$BUILD_BIN_DIR/supertooth"
+    "$BUILD_GUI_DIR/supertooth-desktop"
 )
 
 # System library directories to search (bundled only if not standard)
 # Standard libs (glibc, libstdc++, libpthread, libm, librt, libdl, libz)
 # are NOT bundled — they come from the target system.
+# LIQUID_PREFIX (custom source-built liquid-dsp, default /opt/liquid-dsp)
+# is appended when present so ldd-resolved or globbed libliquid is vendored.
 SYSTEM_LIB_DIRS=(
     /usr/lib/$MULTIARCH
     /usr/lib
     /lib/$MULTIARCH
     /lib
 )
+if [[ -d "$LIQUID_PREFIX/lib" ]]; then
+    SYSTEM_LIB_DIRS+=("$LIQUID_PREFIX/lib")
+fi
+if [[ -d "$LIQUID_PREFIX/lib64" ]]; then
+    SYSTEM_LIB_DIRS+=("$LIQUID_PREFIX/lib64")
+fi
 
 resolve_lib() {
     local soname="$1"
@@ -310,9 +312,10 @@ for binary in "${BINARIES[@]}"; do
             continue
         fi
 
-        # Bundle remaining system libraries
+        # Bundle remaining system libraries (+ custom liquid prefix)
         if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ||
-              "$libpath" == "$QT_PREFIX"/* ]]; then
+              "$libpath" == "$QT_PREFIX"/* ||
+              "$libpath" == "$LIQUID_PREFIX"/* ]]; then
             copy_lib_with_symlinks "$libpath"
         fi
     done < <(ldd "$binary" 2>/dev/null || true)
@@ -401,10 +404,12 @@ if [[ -d "$QT_PREFIX/qml" ]]; then
 fi
 
 # ------------------------------------------------------------------
-# Also bundle radio libs from the system (hackrf, liquid)
+# Also bundle radio libs: hackrf + bladeRF from the system, liquid-dsp
+# from the custom source prefix (/opt/liquid-dsp) or system fallback.
+# NOTE: bladeRF soname uses capital RF (libbladeRF.so.2).
 # ------------------------------------------------------------------
 echo "=== Bundling radio library dependencies ==="
-for libpattern in libhackrf.so* libliquid.so*; do
+for libpattern in libhackrf.so* 'libbladeRF.so*' libbladeRf.so* libbladerf.so* libliquid.so*; do
     for dir in "${SYSTEM_LIB_DIRS[@]}"; do
         for libpath in "$dir/$libpattern"; do
             [[ -f "$libpath" ]] && copy_lib_with_symlinks "$libpath"
@@ -432,6 +437,7 @@ while IFS= read -r -d '' sofile; do
         is_system_qt_lib "$libpath" && continue
         if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ||
               "$libpath" == "$QT_PREFIX"/* ||
+              "$libpath" == "$LIQUID_PREFIX"/* ||
               "$libpath" == "$OPT_ROOT"/* ]]; then
             copy_lib_with_symlinks "$libpath"
         fi
@@ -442,10 +448,8 @@ done < <(find "$OPT_ROOT" \( -name '*.so' -o -name '*.so.*' \) -type f -print0)
 # Set RPATH on all binaries
 # ------------------------------------------------------------------
 STAGED_BINARIES=(
-    "$BIN_DIR/supertooth-bredr"
-    "$BIN_DIR/supertooth-ble"
-    "$BIN_DIR/supertooth-hybrid"
-    "$BIN_DIR/supertooth-bin"
+    "$BIN_DIR/supertooth"
+    "$BIN_DIR/supertooth-desktop"
 )
 
 echo "=== Setting RPATH ==="
@@ -503,7 +507,7 @@ for lib in "$LIB_DIR"/libQt6*.so.6.* "$LIB_DIR"/libicu*.so.??.*; do
 done
 echo "  All bundle libraries resolve"
 
-# Plugin and QML paths are handled by qt.conf next to supertooth-bin.
+# Plugin and QML paths are handled by qt.conf next to supertooth-desktop.
 # No environment variables or global linker configuration are needed.
 
 # ------------------------------------------------------------------
@@ -522,14 +526,12 @@ Depends: libc6 (>= 2.35), libstdc++6 (>= 12), libgl1, libglx0
 Section: comm
 Priority: optional
 Homepage: https://github.com/daltoncox/supertooth
-Description: Supertooth is a C-based software-defined Bluetooth receiver that
- captures and decodes BR/EDR and BLE packets using a HackRF SDR.
- .
- This package includes all four applications:
-  - supertooth-bredr:  BR/EDR multichannel receiver
-  - supertooth-ble: BLE advertising channel scanner
-  - supertooth-hybrid: simultaneous BR/EDR + BLE receiver
-  - supertooth:     Qt GUI application
+ Description: Supertooth is a C-based software-defined Bluetooth receiver that
+  captures and decodes BR/EDR and BLE packets using a HackRF SDR.
+  .
+  This package includes both applications:
+   - supertooth: multiplexed CLI (hybrid, ble, bredr, record)
+   - supertooth-desktop: Qt GUI application
 CONTROL
 
 cat > "$DEBIAN_DIR/postinst" << 'POSTINST'

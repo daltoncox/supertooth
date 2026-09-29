@@ -18,11 +18,22 @@ set(_supertooth_test_targets
     test_codec_oracle
     test_replay_frame_dump
     test_drift_confirm
+    test_bredr_bitstream_decoder
+    test_bredr_registry
     test_ble_crc_reverse
     test_ble_data_codec
     test_ble_bitstream_decoder
+    test_ble_adv_info
+    test_ble_registry
+    test_ble_display
     test_radio_list_devices
+    test_gain_spec
+    test_wav_io
+    test_file_device
+    test_dispatcher_backpressure
     test_channel_layout
+    test_collector_blocking
+    test_exhaustive_replay
     test_rssi_window
     test_rssi_tracker
 )
@@ -33,5 +44,8 @@ if(TARGET test_recovery_btbb_parity)
     list(APPEND _supertooth_test_targets test_recovery_btbb_parity)
 endif()
 
+# NOTE: tests/repro_liquid_qdetector_overrun.c is intentionally NOT wired into
+# ctest -- it is a standalone upstream liquid-dsp repro (cc ... -lliquid),
+# not a project regression test. Do not add it as an executable here.
 add_custom_target(tests)
 add_dependencies(tests ${_supertooth_test_targets})

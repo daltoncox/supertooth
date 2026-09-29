@@ -2,12 +2,12 @@
  * @file test_radio_list_devices.c
  * @brief Verify radio_list_devices() / radio_free_device_list() behave.
  *
- * This test runs without guarantees that HackRF hardware is present.
- * When no devices are connected, radio_list_devices() must still report
- * RADIO_SUCCESS with an empty (but non-NULL-semantically valid) result,
- * and radio_free_device_list() must release it without leaking. When
- * devices are present, every returned identifier must be a non-NULL,
- * NUL-terminated string.
+ * This test runs without guarantees that radio hardware is present.
+ * For every compiled-in device type, radio_list_devices() must report
+ * RADIO_SUCCESS (possibly with zero devices), every returned identifier
+ * must be a non-NULL, NUL-terminated string, and a bogus id must never
+ * be considered present. Types compiled out (see ENABLE_HACKRF /
+ * ENABLE_BLADERF) must fail cleanly instead of touching missing drivers.
  */
 
 #include <stdio.h>
@@ -28,16 +28,16 @@ static int g_failures = 0;
         }                                                                                             \
     } while (0)
 
-int main(void)
+static void check_compiled_in_type(radio_device_type_t type)
 {
     char **identifiers = NULL;
     size_t count = 0u;
 
     /* Invalid argument handling: NULL out pointers. */
-    TEST_ASSERT(radio_list_devices(RADIO_DEVICE_HACKRF, NULL, &count) != RADIO_SUCCESS);
-    TEST_ASSERT(radio_list_devices(RADIO_DEVICE_HACKRF, &identifiers, NULL) != RADIO_SUCCESS);
+    TEST_ASSERT(radio_list_devices(type, NULL, &count) != RADIO_SUCCESS);
+    TEST_ASSERT(radio_list_devices(type, &identifiers, NULL) != RADIO_SUCCESS);
 
-    int result = radio_list_devices(RADIO_DEVICE_HACKRF, &identifiers, &count);
+    int result = radio_list_devices(type, &identifiers, &count);
     TEST_ASSERT(result == RADIO_SUCCESS);
 
     if (result == RADIO_SUCCESS)
@@ -58,9 +58,49 @@ int main(void)
 
     /* radio_device_exists(): a bogus id must never be considered present,
      * regardless of whether real hardware is connected. */
-    TEST_ASSERT(radio_device_exists(RADIO_DEVICE_HACKRF,
+    TEST_ASSERT(radio_device_exists(type,
                                     "this_id_does_not_exist") ==
                 RADIO_DEVICE_NOT_FOUND);
+
+    printf("test_radio_list_devices: type %d ok (%zu device(s))\n",
+           (int)type, count);
+}
+
+int main(void)
+{
+    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT; t++)
+    {
+        radio_device_type_t type = (radio_device_type_t)t;
+        const char *name = radio_device_type_name(type);
+
+        if (type == RADIO_DEVICE_FILE)
+        {
+            /* File replay is not enumerable hardware: empty success. */
+            char **ids = NULL;
+            size_t n = 0u;
+            TEST_ASSERT(name != NULL);
+            TEST_ASSERT(radio_list_devices(type, &ids, &n) == RADIO_SUCCESS);
+            TEST_ASSERT(n == 0u);
+            radio_free_device_list(&ids, n);
+            continue;
+        }
+
+        if (name == NULL)
+        {
+            /* Backend compiled out: enumeration and existence checks
+             * must fail cleanly (never RADIO_SUCCESS / present). */
+            char **ids = NULL;
+            size_t n = 0u;
+            TEST_ASSERT(radio_list_devices(type, &ids, &n) != RADIO_SUCCESS);
+            TEST_ASSERT(radio_device_exists(type, "anything") !=
+                        RADIO_SUCCESS);
+            TEST_ASSERT(radio_device_exists(type, "anything") !=
+                        RADIO_DEVICE_NOT_FOUND);
+            continue;
+        }
+
+        check_compiled_in_type(type);
+    }
 
     if (g_failures)
     {
@@ -68,6 +108,6 @@ int main(void)
         return 1;
     }
 
-    printf("test_radio_list_devices: ok (%zu device(s))\n", count);
+    printf("test_radio_list_devices: ok\n");
     return 0;
 }

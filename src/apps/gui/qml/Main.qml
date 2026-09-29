@@ -42,7 +42,7 @@ ApplicationWindow {
     }
 
     Binding {
-        target: header
+        target: sidebar
         property: "playing"
         value: receiverController.running
     }
@@ -57,74 +57,69 @@ ApplicationWindow {
             onItemSelected: function (index) {
                 stack.currentIndex = index
             }
-        }
-
-        ColumnLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 0
-
-            Header {
-                id: header
-                Layout.fillWidth: true
-onPlayPauseToggled: {
+            onPlayPauseToggled: {
                 // Channel params are passed in the session's native grid:
-                // LE RF units for BLE sessions, BR/EDR units otherwise.
-                var isBle = captureView.sessionTypeIndex === 1
-                var count = isBle ? captureView.backendLeChannelCount
-                                  : captureView.backendChannelCount
-                var bottom = isBle ? captureView.bottomLeIndex
-                                    : captureView.backendBottomChannel
+                // LE RF units for LE sessions, BR/EDR units otherwise.
+                var isBle = configView.sessionTypeIndex === 1
+                var count = isBle ? configView.backendLeChannelCount
+                                  : configView.backendChannelCount
+                var bottom = isBle ? configView.bottomLeIndex
+                                    : configView.backendBottomChannel
                 console.log("Supertooth: play/pause toggled; running =",
                             receiverController.running,
-                            "inputType =", header.inputTypeIndex,
-                            "deviceID =", header.deviceID,
-                            "sessionType =", captureView.sessionTypeIndex,
-                            "enforceCrc =", captureView.enforceCrc,
+                            "inputType =", configView.inputType,
+                            "deviceID =", configView.deviceID,
+                            "sessionType =", configView.sessionTypeIndex,
+                            "enforceCrc =", configView.enforceCrc,
                             "channels =", count,
                             "bottom =", bottom,
-                            "leGrid =", captureView.backendLeGrid,
-                            "bleAdv =", captureView.backendBleAdvChannel)
+                            "bleAdv =", configView.backendBleAdvChannel,
+                            "lna =", configView.hackrfLna,
+                            "vga =", configView.hackrfVga,
+                            "amp =", configView.hackrfAmp,
+                            "bladerfGain =", configView.bladerfGain)
                 if (receiverController.running) {
                     receiverController.stop()
                 } else {
                     frameListModel.clear()
                     deviceListModel.clear()
-                    receiverController.start(header.inputTypeIndex,
-                                             header.deviceID,
-                                             captureView.sessionTypeIndex,
-                                             captureView.enforceCrc,
+                    receiverController.start(configView.inputType,
+                                             configView.deviceID,
+                                             configView.sessionTypeIndex,
+                                             configView.enforceCrc,
                                              count,
                                              bottom,
-                                             captureView.backendLeGrid,
-                                             captureView.backendBleAdvChannel,
-                                             captureView.acErrors)
+                                             configView.backendBleAdvChannel,
+                                             configView.acErrors,
+                                             configView.hackrfLna,
+                                             configView.hackrfVga,
+                                             configView.hackrfAmp ? 1 : 0,
+                                             configView.bladerfGain)
                 }
             }
-            }
+        }
 
-            StackLayout {
-                id: stack
+        StackLayout {
+            id: stack
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: sidebar.selectedIndex
+
+            FrameListView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: sidebar.selectedIndex
-
-                FrameListView {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    frameModel: frameListModel
-                }
-                DeviceListView {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    deviceModel: deviceListModel
-                }
-                CaptureView {
-                    id: captureView
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    running: receiverController.running
-                }
+                frameModel: frameListModel
+            }
+            DeviceListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                deviceModel: deviceListModel
+            }
+            ConfigView {
+                id: configView
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                running: receiverController.running
             }
         }
     }

@@ -35,9 +35,237 @@ struct backend_session
  * --debug CLI argument) and applied to every session_config_t below. */
 static int g_gui_debug = 0;
 
+/* Map a BACKEND_INPUT_* index to a radio device type. FILE input is the
+ * caller's responsibility (device id = capture path); unknown indices fall
+ * back to the default live type. Disabled backends are never returned. */
+static radio_device_type_t backend_device_for_input(int input_type)
+{
+    if (input_type == BACKEND_INPUT_FILE)
+        return RADIO_DEVICE_FILE;
+#if HAVE_BLADERF
+    if (input_type == BACKEND_INPUT_BLADERF)
+        return RADIO_DEVICE_BLADERF;
+#endif
+#if HAVE_HACKRF
+    if (input_type == BACKEND_INPUT_HACKRF)
+        return RADIO_DEVICE_HACKRF;
+    /* Fall through to the default live type for unknown indices. */
+    return RADIO_DEVICE_HACKRF;
+#elif HAVE_BLADERF
+    return RADIO_DEVICE_BLADERF;
+#else
+    return RADIO_DEVICE_FILE;
+#endif
+}
+
 void backend_set_debug(int on)
 {
     g_gui_debug = on ? 1 : 0;
+}
+
+/* Resolve the GUI gain selection into a session-ready radio_gain_spec_t.
+ * NULL = device defaults (present == 0, session fills per-device values).
+ * Non-NULL = explicit selection (present == 1), defensively clamped to the
+ * hardware grid so QML ints can never fail a session start: HackRF LNA is
+ * snapped down to an 8 dB step in 0..40, VGA is snapped down to an even
+ * value in 0..62, AMP is normalized to 0/1, bladeRF gain is clamped to
+ * 0..60 dB. Only the fields for the selected input type are read. */
+static void backend_resolve_gain(int input_type, const backend_gain_t *gui,
+                                 radio_gain_spec_t *out)
+{
+    radio_device_type_t dev = backend_device_for_input(input_type);
+    radio_gain_default(dev, out);
+    if (!gui)
+        return;
+    out->present = 1;
+    if (dev == RADIO_DEVICE_HACKRF)
+    {
+        int lna = gui->hackrf_lna;
+        int vga = gui->hackrf_vga;
+        if (lna < RADIO_HACKRF_LNA_MIN)
+            lna = RADIO_HACKRF_LNA_MIN;
+        if (lna > RADIO_HACKRF_LNA_MAX)
+            lna = RADIO_HACKRF_LNA_MAX;
+        lna = (lna / 8) * 8;
+        if (vga < RADIO_HACKRF_VGA_MIN)
+            vga = RADIO_HACKRF_VGA_MIN;
+        if (vga > RADIO_HACKRF_VGA_MAX)
+            vga = RADIO_HACKRF_VGA_MAX;
+        vga = (vga / 2) * 2;
+        out->hackrf_lna = lna;
+        out->hackrf_vga = vga;
+        out->hackrf_amp = gui->hackrf_amp ? 1 : 0;
+    }
+    else if (dev == RADIO_DEVICE_BLADERF)
+    {
+        int g = gui->bladerf_gain_db;
+        if (g < RADIO_BLADERF_GAIN_MIN)
+            g = RADIO_BLADERF_GAIN_MIN;
+        if (g > RADIO_BLADERF_GAIN_MAX)
+            g = RADIO_BLADERF_GAIN_MAX;
+        out->bladerf_gain_db = g;
+    }
+}
+
+/* Inverse of backend_device_for_input(): BACKEND_INPUT_* for a live radio
+ * type, or -1 when the type is not a compiled-in live radio. */
+static int backend_input_for_device(radio_device_type_t type)
+{
+    switch (type)
+    {
+#if HAVE_HACKRF
+    case RADIO_DEVICE_HACKRF:
+        return BACKEND_INPUT_HACKRF;
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        return BACKEND_INPUT_BLADERF;
+#endif
+    default:
+        return -1;
+    }
+}
+
+int backend_live_input_types(int *out_types, int max)
+{
+    int n = 0;
+
+    if (!out_types || max <= 0)
+        return 0;
+    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT && n < max; t++)
+    {
+        radio_device_type_t type = (radio_device_type_t)t;
+        if (!radio_device_type_is_live(type) || !radio_device_type_name(type))
+            continue;
+        int input = backend_input_for_device(type);
+        if (input < 0)
+            continue;
+        out_types[n++] = input;
+    }
+    return n;
+}
+
+int backend_input_type_label(int input_type, char *out, size_t out_len)
+{
+    const char *label = NULL;
+
+    if (!out || out_len == 0u)
+        return -1;
+    switch (input_type)
+    {
+    case BACKEND_INPUT_HACKRF:
+        label = "HackRF";
+        break;
+    case BACKEND_INPUT_BLADERF:
+        label = "bladeRF";
+        break;
+    case BACKEND_INPUT_FILE:
+        label = "File";
+        break;
+    default:
+        return -1;
+    }
+    snprintf(out, out_len, "%s", label);
+    return 0;
+}
+
+int backend_list_devices(int input_type, char ***out_identifiers,
+                         size_t *out_count)
+{
+    if (!out_identifiers || !out_count)
+        return -1;
+    *out_identifiers = NULL;
+    *out_count = 0u;
+    if (input_type == BACKEND_INPUT_FILE)
+        return 0;
+    return radio_list_devices(backend_device_for_input(input_type),
+                              out_identifiers, out_count);
+}
+
+void backend_free_device_list(char ***identifiers, size_t count)
+{
+    radio_free_device_list(identifiers, count);
+}
+
+unsigned int backend_default_bredr_count(int input_type)
+{
+    return session_default_bredr_count(backend_device_for_input(input_type));
+}
+
+unsigned int backend_default_ble_count(int input_type)
+{
+    return session_default_ble_count(backend_device_for_input(input_type));
+}
+
+unsigned int backend_max_bredr_count(int input_type)
+{
+    radio_device_type_t dev = backend_device_for_input(input_type);
+    uint32_t max_rate = session_device_max_rate_hz(dev);
+    unsigned int count = max_rate / 1000000u;
+
+    if (count > BREDR_SESSION_MAX_CHANNELS)
+        count = BREDR_SESSION_MAX_CHANNELS;
+    count = session_snap_bredr_count(count);
+    if (count < 2u)
+        count = 2u;
+    return count;
+}
+
+int backend_supported_counts(int input_type, int le_grid,
+                             unsigned *out, int max)
+{
+    radio_device_type_t dev = backend_device_for_input(input_type);
+    unsigned int lo, hi;
+    int n = 0;
+
+    if (!out || max <= 0)
+        return 0;
+    if (le_grid)
+    {
+        lo = 1u;
+        hi = BLE_RF_CHANNEL_COUNT;
+    }
+    else
+    {
+        lo = 2u;
+        hi = BREDR_SESSION_MAX_CHANNELS;
+    }
+    for (unsigned int c = lo; c <= hi && n < max; c++)
+    {
+        session_layout_status_t st;
+        /* BR/EDR grid mirrors the CLI/backend contract: even counts plus
+         * 79 ("all"). Odd counts can slip through the rate validator via
+         * the 4 MHz floor but are rejected by the CLI parser and rounded
+         * down by the backend clamp, so they must never be offered. */
+        if (!le_grid && (c & 1u) && c != BREDR_SESSION_MAX_CHANNELS)
+            continue;
+        if (le_grid)
+            st = session_validate_layout(dev, 1, 0, SESSION_REF_BLE,
+                                         0u, c);
+        else
+            st = session_validate_layout(dev, 1, 1, SESSION_REF_BREDR,
+                                         0u, c);
+        if (st == SESSION_LAYOUT_OK)
+            out[n++] = c;
+    }
+    return n;
+}
+
+unsigned int backend_max_ble_count(int input_type)
+{
+    radio_device_type_t dev = backend_device_for_input(input_type);
+    uint32_t max_rate = session_device_max_rate_hz(dev);
+    unsigned int count = max_rate / 2000000u;
+
+    if (count < 1u)
+        count = 1u;
+    if (count > BLE_SESSION_MAX_CHANNELS)
+        count = BLE_SESSION_MAX_CHANNELS;
+    while (count > 1u &&
+           session_validate_layout(dev, 1, 0, SESSION_REF_BLE,
+                                   0u, count) != SESSION_LAYOUT_OK)
+        count--;
+    return count;
 }
 
 /* ---------------------------------------------------------------------------
@@ -289,6 +517,94 @@ static void build_detail(backend_row_t *row, const ble_packet_t *pkt,
             add_detail(row, "AD Structure", "type=0x%02X (%s) len=%u data=%s",
                        ad_type, bt_assigned_ad_type_name(ad_type), ad_l, hex);
 
+            /* Service UUID lists (0x02-0x07): resolve each UUID to its
+             * assigned name so the Frame Info pane reads as words. */
+            if ((ad_type >= 0x02u && ad_type <= 0x07u) ||
+                ad_type == 0x14u || ad_type == 0x15u || ad_type == 0x1Fu)
+            {
+                unsigned int uuid_len = 2u;
+                if (ad_type == 0x04u || ad_type == 0x05u || ad_type == 0x1Fu)
+                    uuid_len = 4u;
+                else if (ad_type == 0x06u || ad_type == 0x07u || ad_type == 0x15u)
+                    uuid_len = 16u;
+                for (unsigned int j = vb; j + uuid_len <= ve && row->detail_count < BACKEND_DETAIL_MAX; j += uuid_len)
+                {
+                    if (uuid_len == 2u)
+                    {
+                        uint16_t uuid = (uint16_t)ad[j] | ((uint16_t)ad[j + 1u] << 8u);
+                        const char *nm = bt_assigned_service_uuid_name(uuid);
+                        add_detail(row, "Service", "%s (0x%04X)", nm ? nm : "Unknown", uuid);
+                    }
+                    else if (uuid_len == 4u)
+                    {
+                        uint32_t uuid = (uint32_t)ad[j] | ((uint32_t)ad[j + 1u] << 8u) |
+                                        ((uint32_t)ad[j + 2u] << 16u) | ((uint32_t)ad[j + 3u] << 24u);
+                        add_detail(row, "Service", "0x%08X", uuid);
+                    }
+                    else
+                    {
+                        char uuid_str[40];
+                        snprintf(uuid_str, sizeof(uuid_str),
+                                 "%02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                                 ad[j+15u], ad[j+14u], ad[j+13u], ad[j+12u],
+                                 ad[j+11u], ad[j+10u], ad[j+9u], ad[j+8u],
+                                 ad[j+7u], ad[j+6u], ad[j+5u], ad[j+4u],
+                                 ad[j+3u], ad[j+2u], ad[j+1u], ad[j]);
+                        add_detail(row, "Service", "%s", uuid_str);
+                    }
+                }
+            }
+
+            /* AD type 0x01 (Flags): decode the bitfield to words. */
+            if (ad_type == 0x01u && (ve - vb) >= 1u)
+            {
+                char flags[BACKEND_FLAGS_TEXT_LEN];
+                ble_adv_flags_format(ad[vb], flags, sizeof(flags));
+                add_detail(row, "Flags", "%s (0x%02X)", flags, ad[vb]);
+            }
+
+            /* AD type 0x0A (Tx Power Level): signed dBm. */
+            if (ad_type == 0x0Au && (ve - vb) >= 1u)
+                add_detail(row, "Tx Power", "%d dBm", (int)(int8_t)ad[vb]);
+
+            /* AD type 0x19 (Appearance): category [+ subcategory]. */
+            if (ad_type == 0x19u && (ve - vb) >= 2u)
+            {
+                uint16_t app = (uint16_t)ad[vb] | ((uint16_t)ad[vb + 1u] << 8u);
+                char app_str[BACKEND_APPEARANCE_TEXT_LEN];
+                bt_assigned_appearance_format(app, app_str, sizeof(app_str));
+                add_detail(row, "Appearance", "%s", app_str);
+            }
+
+            /* AD type 0x0D (Class of Device): major service classes +
+             * major/minor device class. */
+            if (ad_type == 0x0Du && (ve - vb) >= 3u)
+            {
+                uint32_t cod = (uint32_t)ad[vb] | ((uint32_t)ad[vb + 1u] << 8u) |
+                               ((uint32_t)ad[vb + 2u] << 16u);
+                char cod_str[BACKEND_COD_TEXT_LEN];
+                bt_cod_format(cod, cod_str, sizeof(cod_str));
+                add_detail(row, "Class of Device", "%s (0x%06X)", cod_str, cod);
+            }
+
+            /* Service Data (0x16/0x20/0x21): name the UUID being annotated. */
+            if ((ad_type == 0x16u && (ve - vb) >= 2u) ||
+                (ad_type == 0x20u && (ve - vb) >= 4u))
+            {
+                if (ad_type == 0x16u)
+                {
+                    uint16_t uuid = (uint16_t)ad[vb] | ((uint16_t)ad[vb + 1u] << 8u);
+                    add_detail(row, "Service Data", "%s (0x%04X)",
+                               bt_assigned_service_uuid_name(uuid), uuid);
+                }
+                else
+                {
+                    uint32_t uuid = (uint32_t)ad[vb] | ((uint32_t)ad[vb + 1u] << 8u) |
+                                    ((uint32_t)ad[vb + 2u] << 16u) | ((uint32_t)ad[vb + 3u] << 24u);
+                    add_detail(row, "Service Data", "0x%08X", uuid);
+                }
+            }
+
             /* AD type 0x08 (Shortened Local Name) or 0x09 (Complete Local
              * Name) carry the advertiser's local name verbatim as their
              * payload (typically ASCII / UTF-8, no NUL terminator). Surface
@@ -492,7 +808,7 @@ static void ble_packet_trampoline(const ble_event_t *event, void *user)
  * bredr_build_decode_inputs() so the facade can attempt a header decode
  * without depending on static CLI helpers. Returns 1 when both UAP and
  * CLK1-6 are available, 0 otherwise. */
-static int bredr_gui_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
+static int bredr_gui_build_decode_inputs(const bredr_connection_snapshot_t *connection,
                                          const rx_metadata_t *meta,
                                          uint8_t *uap_out,
                                          uint8_t *clk1_6_out)
@@ -501,15 +817,15 @@ static int bredr_gui_build_decode_inputs(const bredr_piconet_snapshot_t *pnet,
         return 0;
     *uap_out = 0u;
     *clk1_6_out = 0u;
-    if (!pnet)
+    if (!connection)
         return 0;
 
-    int have_uap = pnet->uap_valid;
-    int have_clk = pnet->clk_known && meta && meta->radio_sample_rate_hz != 0u;
+    int have_uap = connection->uap_valid;
+    int have_clk = connection->clk_known && meta && meta->radio_sample_rate_hz != 0u;
     if (have_uap)
-        *uap_out = pnet->uap;
+        *uap_out = connection->uap;
     if (have_clk)
-        *clk1_6_out = pnet->central_clk_1_6;
+        *clk1_6_out = connection->central_clk_1_6;
     return have_uap && have_clk;
 }
 
@@ -543,7 +859,7 @@ static void bredr_build_raw(backend_row_t *row, const bredr_frame_t *frame)
 }
 
 static void bredr_packet_trampoline(const bredr_event_t *event,
-                                    const bredr_piconet_snapshot_t *pnet,
+                                    const bredr_connection_snapshot_t *connection,
                                     void *user)
 {
     backend_session_t *bs = (backend_session_t *)user;
@@ -568,8 +884,8 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
     uint32_t lap = frame->lap & 0xFFFFFFu;
 
     /* Address: full UAP+LAP (UAP shown as "??" until recovered). */
-    if (pnet && pnet->uap_valid)
-        snprintf(row.addr, sizeof(row.addr), "0x%02X%06" PRIX32, pnet->uap, lap);
+    if (connection && connection->uap_valid)
+        snprintf(row.addr, sizeof(row.addr), "0x%02X%06" PRIX32, connection->uap, lap);
     else
         snprintf(row.addr, sizeof(row.addr), "0x??%06" PRIX32, lap);
 
@@ -581,7 +897,7 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
 
     /* Attempt header decode if UAP + CLK1-6 context is available. */
     uint8_t uap = 0u, clk1_6 = 0u;
-    int have_ctx = bredr_gui_build_decode_inputs(pnet, m, &uap, &clk1_6);
+    int have_ctx = bredr_gui_build_decode_inputs(connection, m, &uap, &clk1_6);
 
     bredr_packet_t pkt;
     memset(&pkt, 0, sizeof(pkt));
@@ -596,8 +912,9 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
         snprintf(row.type, sizeof(row.type), "%s",
                  bredr_packet_type_name(pkt.header.type));
 
-        /* Direction: CLK1 (the LSB of CLK1-6) is 0 on master→slave slots and
-         * 1 on slave→master slots. LT_ADDR 0 means broadcast. */
+        /* Direction: CLK1 (the LSB of CLK1-6) is 0 on central→peripheral
+         * slots and 1 on peripheral→central slots. LT_ADDR 0 means
+         * broadcast. */
         unsigned int lt_addr = pkt.header.lt_addr & 0x07u;
         char peer[BACKEND_ADDR_TEXT_LEN];
         if (lt_addr == 0u)
@@ -613,7 +930,7 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
         }
         else
         {
-            /* Odd slot: the addressed slave is transmitting to the Central. */
+            /* Odd slot: the addressed peripheral is transmitting to the Central. */
             snprintf(row.src, sizeof(row.src), "%s", peer);
             snprintf(row.dst, sizeof(row.dst), "Central");
         }
@@ -628,17 +945,17 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
     /* Info summary line (mirrors the CLI bredr_print_packet_summary_line). */
     char uap_str[8];
     char clk_str[8];
-    if (pnet && pnet->uap_valid)
-        snprintf(uap_str, sizeof(uap_str), "%02X", pnet->uap);
+    if (connection && connection->uap_valid)
+        snprintf(uap_str, sizeof(uap_str), "%02X", connection->uap);
     else
         snprintf(uap_str, sizeof(uap_str), "??");
-    if (pnet && pnet->clk_known)
-        snprintf(clk_str, sizeof(clk_str), "%02u", pnet->central_clk_1_6);
+    if (connection && connection->clk_known)
+        snprintf(clk_str, sizeof(clk_str), "%02u", connection->central_clk_1_6);
     else
         snprintf(clk_str, sizeof(clk_str), "??");
     snprintf(row.info, sizeof(row.info), "ac=%u uap=%s clk=%s track=%d",
              frame->ac_errors, uap_str, clk_str,
-             pnet ? pnet->tracking_state : -1);
+             connection ? connection->tracking_state : -1);
 
     bredr_build_raw(&row, frame);
 
@@ -646,18 +963,18 @@ static void bredr_packet_trampoline(const bredr_event_t *event,
     add_detail(&row, "Channel", "%u", m->channel_index);
     add_detail(&row, "LAP", "0x%06" PRIX32, lap);
     add_detail(&row, "AC Errors", "%u", frame->ac_errors);
-    if (pnet)
+    if (connection)
     {
-        if (pnet->uap_valid)
-            add_detail(&row, "UAP", "0x%02X", pnet->uap);
+        if (connection->uap_valid)
+            add_detail(&row, "UAP", "0x%02X", connection->uap);
         else
             add_detail(&row, "UAP", "??");
-        add_detail(&row, "Tracking", "%d", pnet->tracking_state);
-        if (pnet->clk_known)
-            add_detail(&row, "CLK1-6", "%u", pnet->central_clk_1_6);
+        add_detail(&row, "Tracking", "%d", connection->tracking_state);
+        if (connection->clk_known)
+            add_detail(&row, "CLK1-6", "%u", connection->central_clk_1_6);
         else
             add_detail(&row, "CLK1-6", "??");
-        add_detail(&row, "Piconet Packets", "%lu", pnet->total_packets);
+        add_detail(&row, "Connection Packets", "%lu", connection->total_packets);
     }
     add_detail(&row, "RSSI", "%.1f dBr", m->rssi_dbr);
     if (frame->has_header)
@@ -762,6 +1079,7 @@ int backend_session_run_ble(backend_session_t *session,
                             int input_type,
                             const char *device_id,
                             int enforce_crc,
+                            const backend_gain_t *gain,
                             backend_row_fn on_row,
                             void *user)
 {
@@ -774,8 +1092,9 @@ int backend_session_run_ble(backend_session_t *session,
     session->packet_count = 0ul;
     session->enforce_crc = enforce_crc ? 1 : 0;
 
-    radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
-    (void)input_type; /* Only HackRF is supported by the backend today. */
+    radio_device_type_t dev_type = backend_device_for_input(input_type);
+    radio_gain_spec_t gain_spec;
+    backend_resolve_gain(input_type, gain, &gain_spec);
 
     /* Defensive clamping of the LE window: 40 RF channels (0..39), up to
      * BLE_SESSION_MAX_CHANNELS processors. */
@@ -792,6 +1111,7 @@ int backend_session_run_ble(backend_session_t *session,
         .device_type = dev_type,
         .device_id = device_id,
         .debug = g_gui_debug,
+        .gain = gain_spec,
     };
     if (session_init(s, &cfg) != 0)
         return -1;
@@ -810,6 +1130,7 @@ int backend_session_run_bredr(backend_session_t *session,
                               unsigned int bottom_channel,
                               int input_type,
                               const char *device_id,
+                              const backend_gain_t *gain,
                               backend_row_fn on_row,
                               void *user)
 {
@@ -820,16 +1141,21 @@ int backend_session_run_bredr(backend_session_t *session,
     session->user = user;
     session->packet_count = 0ul;
 
-    radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
-    (void)input_type; /* Only HackRF is supported by the backend today. */
+    radio_device_type_t dev_type = backend_device_for_input(input_type);
+    radio_gain_spec_t gain_spec;
+    backend_resolve_gain(input_type, gain, &gain_spec);
 
-    /* Defensive clamping, mirroring supertooth-bredr validation. The on-air
-     * band is channels 0..78. */
+    /* Defensive clamping, mirroring run_bredr validation. The on-air
+     * band is channels 0..78. Counts snap down to the nearest supported
+     * lane split (backend devices are HackRF-class: <= 20 channels). */
     channel_count &= ~1u;
     if (channel_count < 2u)
         channel_count = 2u;
     if (channel_count > BREDR_SESSION_MAX_CHANNELS)
         channel_count = BREDR_SESSION_MAX_CHANNELS;
+    channel_count = session_snap_bredr_count(channel_count);
+    if (channel_count < 2u)
+        channel_count = 2u;
     unsigned int max_bottom = 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;
@@ -838,6 +1164,7 @@ int backend_session_run_bredr(backend_session_t *session,
         .device_type = dev_type,
         .device_id = device_id,
         .debug = g_gui_debug,
+        .gain = gain_spec,
     };
     if (session_init(session->session, &cfg) != 0)
         return -1;
@@ -847,18 +1174,18 @@ int backend_session_run_bredr(backend_session_t *session,
     session_set_stopped_callback(session->session, backend_session_stopped_trampoline, session);
 
     return session_tune(session->session, SESSION_REF_BREDR, bottom_channel, channel_count) == 0
-                ? session_run(session->session)
-                : -1;
+                 ? session_run(session->session)
+                 : -1;
 }
 
 int backend_session_run_hybrid(backend_session_t *session,
                                unsigned int channel_count,
                                unsigned int bottom_channel,
-                               int le_grid,
                                uint8_t ble_channel,
                                int input_type,
                                const char *device_id,
                                int enforce_crc,
+                               const backend_gain_t *gain,
                                backend_row_fn on_row,
                                void *user)
 {
@@ -870,44 +1197,24 @@ int backend_session_run_hybrid(backend_session_t *session,
     session->packet_count = 0ul;
     session->enforce_crc = enforce_crc ? 1 : 0;
 
-    radio_device_type_t dev_type = RADIO_DEVICE_HACKRF;
-    (void)input_type; /* Only HackRF is supported by the backend today. */
+    radio_device_type_t dev_type = backend_device_for_input(input_type);
+    radio_gain_spec_t gain_spec;
+    backend_resolve_gain(input_type, gain, &gain_spec);
 
-    /* Defensive validation of the channel window. On the BR/EDR grid the
-     * window is channel_count MHz (even count); on the LE grid it is
-     * channel_count+1 MHz (odd count, even bottom). */
+    /* Hybrid always captures the BR/EDR grid: channel_count MHz (even
+     * count) from bottom_channel. BLE fans out inside the window from the
+     * shared channelizer, so no LE-grid tune exists anymore. Counts snap
+     * to the lane-split table like the BR/EDR path. */
     session_protocol_ref_t ref = SESSION_REF_BREDR;
-    if (le_grid == BACKEND_GRID_LE)
-    {
-        /* The GUI passes the window in BR/EDR-style MHz units (an odd
-         * channel_count spanning channel_count+1 MHz and an even
-         * bottom_channel). session_tune() expects LE RF units on the LE
-         * grid (one LE channel per 2 MHz), so halve both before tuning. */
-        bottom_channel &= ~1u;
-        if (channel_count < 1u)
-            channel_count = 1u;
-        if (channel_count > 2u * BLE_SESSION_MAX_CHANNELS - 1u)
-            channel_count = 2u * BLE_SESSION_MAX_CHANNELS - 1u;
-        if ((channel_count & 1u) == 0u)
-            channel_count -= 1u;
-
-        channel_count = (channel_count + 1u) / 2u;
-        if (channel_count > BLE_SESSION_MAX_CHANNELS)
-            channel_count = BLE_SESSION_MAX_CHANNELS;
-        bottom_channel /= 2u;
-        ref = SESSION_REF_BLE;
-    }
-    else
-    {
-        channel_count &= ~1u;
-        if (channel_count < 2u)
-            channel_count = 2u;
-        if (channel_count > BREDR_SESSION_MAX_CHANNELS)
-            channel_count = BREDR_SESSION_MAX_CHANNELS;
-    }
-    unsigned int max_bottom = (ref == SESSION_REF_BLE)
-                                  ? BLE_RF_CHANNEL_COUNT - channel_count
-                                  : 78u - (channel_count - 1u);
+    channel_count &= ~1u;
+    if (channel_count < 2u)
+        channel_count = 2u;
+    if (channel_count > BREDR_SESSION_MAX_CHANNELS)
+        channel_count = BREDR_SESSION_MAX_CHANNELS;
+    channel_count = session_snap_bredr_count(channel_count);
+    if (channel_count < 2u)
+        channel_count = 2u;
+    unsigned int max_bottom = 78u - (channel_count - 1u);
     if (bottom_channel > max_bottom)
         bottom_channel = max_bottom;
 
@@ -915,6 +1222,7 @@ int backend_session_run_hybrid(backend_session_t *session,
         .device_type = dev_type,
         .device_id = device_id,
         .debug = g_gui_debug,
+        .gain = gain_spec,
     };
     if (session_init(session->session, &cfg) != 0)
         return -1;
@@ -944,6 +1252,28 @@ void backend_session_request_stop(backend_session_t *session)
     session_request_stop(session->session);
 }
 
+int backend_get_default_device(char *out_type_name, size_t type_len,
+                               char *out_id, size_t id_len)
+{
+    radio_device_type_t type = RADIO_DEVICE_HACKRF;
+    char id[256] = {0};
+
+    if ((out_type_name && type_len == 0u) || (out_id && id_len == 0u))
+        return -1;
+
+    if (session_get_default_device(&type, id, sizeof(id)) != RADIO_SUCCESS)
+        return -1;
+
+    if (out_type_name)
+    {
+        const char *name = session_device_type_name(type);
+        snprintf(out_type_name, type_len, "%s", name ? name : "");
+    }
+    if (out_id)
+        snprintf(out_id, id_len, "%s", id);
+    return 0;
+}
+
 size_t backend_session_poll_entities(backend_session_t *session,
                                      backend_entity_t *out, size_t max)
 {
@@ -954,10 +1284,10 @@ size_t backend_session_poll_entities(backend_session_t *session,
     size_t cap = max;
     size_t n = 0u;
 
-    bredr_device_snapshot_t  *bd = (bredr_device_snapshot_t *)calloc(cap, sizeof(*bd));
-    bredr_piconet_snapshot_t *bp = (bredr_piconet_snapshot_t *)calloc(cap, sizeof(*bp));
-    ble_device_snapshot_t    *ld = (ble_device_snapshot_t *)calloc(cap, sizeof(*ld));
-    ble_piconet_snapshot_t   *lp = (ble_piconet_snapshot_t *)calloc(cap, sizeof(*lp));
+    bredr_device_snapshot_t     *bd = (bredr_device_snapshot_t *)calloc(cap, sizeof(*bd));
+    bredr_connection_snapshot_t *bp = (bredr_connection_snapshot_t *)calloc(cap, sizeof(*bp));
+    ble_device_snapshot_t       *ld = (ble_device_snapshot_t *)calloc(cap, sizeof(*ld));
+    ble_connection_snapshot_t   *lp = (ble_connection_snapshot_t *)calloc(cap, sizeof(*lp));
     if (!bd || !bp || !ld || !lp)
     {
         free(bd); free(bp); free(ld); free(lp);
@@ -965,9 +1295,9 @@ size_t backend_session_poll_entities(backend_session_t *session,
     }
 
     size_t nb = session_get_bredr_devices(s, bd, cap);
-    size_t np = session_get_bredr_piconets(s, bp, cap);
+    size_t np = session_get_bredr_connections(s, bp, cap);
     size_t nl = session_get_ble_devices(s, ld, cap);
-    size_t nq = session_get_ble_piconets(s, lp, cap);
+    size_t nq = session_get_ble_connections(s, lp, cap);
 
     #define EMIT_BASE(e, snap)                                                \
         do {                                                                  \
@@ -989,6 +1319,8 @@ size_t backend_session_poll_entities(backend_session_t *session,
         EMIT_BASE(e, &bd[i]);
         snprintf(e->proto, sizeof(e->proto), "BR/EDR");
         snprintf(e->device, sizeof(e->device), "%s", bd[i].label);
+        e->group_id = (bd[i].connection_id == 0u) ? 0u : bd[i].connection_id + 100000000u;
+        e->lt_slot = (bd[i].connection_id == 0u) ? -2 : (int)bd[i].lt_addr;
     }
     for (size_t i = 0; i < np && n < cap; i++)
     {
@@ -1002,6 +1334,10 @@ size_t backend_session_poll_entities(backend_session_t *session,
         e->id = bp[i].id + 100000000u;
         snprintf(e->proto, sizeof(e->proto), "BR/EDR");
         snprintf(e->device, sizeof(e->device), "%s", bp[i].label);
+        /* Piconet linkage: the connection owns its group. Offset the group
+         * the same way so member group_ids resolve to this row's id. */
+        e->group_id = bp[i].id + 100000000u;
+        e->lt_slot = -1;
     }
     for (size_t i = 0; i < nl && n < cap; i++)
     {
@@ -1015,6 +1351,14 @@ size_t backend_session_poll_entities(backend_session_t *session,
         snprintf(e->name, sizeof(e->name), "%s", ld[i].name);
         snprintf(e->manufacturer, sizeof(e->manufacturer), "%s",
                  ld[i].manufacturer);
+        snprintf(e->services, sizeof(e->services), "%s", ld[i].services);
+        snprintf(e->appearance, sizeof(e->appearance), "%s", ld[i].appearance);
+        snprintf(e->flags, sizeof(e->flags), "%s", ld[i].flags);
+        snprintf(e->device_class, sizeof(e->device_class), "%s", ld[i].device_class);
+        e->tx_power = ld[i].tx_power;
+        e->tx_power_valid = ld[i].tx_power_valid;
+        e->group_id = 0u;
+        e->lt_slot = -2;
     }
     for (size_t i = 0; i < nq && n < cap; i++)
     {
@@ -1027,6 +1371,8 @@ size_t backend_session_poll_entities(backend_session_t *session,
         e->crc_init = lp[i].crc_init;
         e->crc_init_confirmed = lp[i].crc_init_confirmed;
         e->crc_init_candidates = lp[i].candidate_count;
+        e->group_id = 0u;
+        e->lt_slot = -2;
     }
 
     #undef EMIT_BASE

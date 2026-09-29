@@ -49,21 +49,30 @@ qt_add_qml_module(appSupertooth
     QML_FILES
         qml/Main.qml
         qml/Sidebar.qml
-        qml/Header.qml
+        qml/components/LabeledComboBox.qml
+        qml/components/ChannelSpectrum.qml
         qml/views/FrameListView.qml
         qml/views/DeviceListView.qml
-        qml/views/CaptureView.qml
-        qml/views/ChannelSpectrum.qml
+        qml/views/ConfigView.qml
 )
 
 if(APPLE)
-    set(_supertooth_output_name Supertooth)
+    # CMake derives both the .app folder name and the executable name from
+    # OUTPUT_NAME, so it cannot natively produce Supertooth.app containing
+    # an executable named supertooth-desktop. Build Supertooth.app and rename
+    # only the executable inside via the POST_BUILD step below (Info.plist is
+    # patched to match). The original executable is kept in place so
+    # incremental builds stay up to date.
+    # The GUI executable keeps the supertooth-desktop name to avoid colliding
+    # with the `supertooth` CLI that packaging/bundle-macos.sh stages into
+    # Contents/MacOS alongside it.
+    set(GUI_OUTPUT_NAME "Supertooth")
 else()
-    set(_supertooth_output_name supertooth)
+    set(GUI_OUTPUT_NAME "supertooth-desktop")
 endif()
 
 set_target_properties(appSupertooth PROPERTIES
-    OUTPUT_NAME ${_supertooth_output_name}
+    OUTPUT_NAME ${GUI_OUTPUT_NAME}
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_BUNDLE_NAME "Supertooth"
     MACOSX_BUNDLE_BUNDLE_VERSION "${SUPERTOOTH_VERSION}"
@@ -71,6 +80,18 @@ set_target_properties(appSupertooth PROPERTIES
     MACOSX_BUNDLE_ICON_FILE "Supertooth.icns"
     WIN32_EXECUTABLE TRUE
 )
+
+if(APPLE)
+    add_custom_command(TARGET appSupertooth POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:appSupertooth>"
+            "$<TARGET_BUNDLE_CONTENT_DIR:appSupertooth>/MacOS/supertooth-desktop"
+        COMMAND python3 -c
+            "import os,plistlib,sys; p=sys.argv[1]; os.chmod(p,0o644); d=plistlib.load(open(p,'rb')); d['CFBundleExecutable']='supertooth-desktop'; plistlib.dump(d,open(p,'wb'))"
+            "$<TARGET_BUNDLE_CONTENT_DIR:appSupertooth>/Info.plist"
+        COMMENT "Naming bundle executable supertooth-desktop inside Supertooth.app"
+        VERBATIM)
+endif()
 
 target_include_directories(appSupertooth PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/models

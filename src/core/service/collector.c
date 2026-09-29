@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <time.h>
 
 int collector_init(collector_t *c, size_t item_size, size_t capacity,
                    const _Atomic unsigned int *shutdown)
@@ -41,6 +42,7 @@ int collector_init(collector_t *c, size_t item_size, size_t capacity,
     c->tail = 0u;
     c->count = 0u;
     c->dropped = 0u;
+    c->blocking = 0;
     return 0;
 }
 
@@ -60,7 +62,31 @@ int collector_submit(collector_t *c, const void *item)
         return -1;
 
     pthread_mutex_lock(&c->mutex);
-    if (c->count == c->capacity)
+    if (c->blocking)
+    {
+        /* Exhaustive replay: wait for room instead of discarding. Timed wait
+         * so shutdown is honored even if the consumer stalls. */
+        while (c->count == c->capacity)
+        {
+            struct timespec deadline;
+            clock_gettime(CLOCK_REALTIME, &deadline);
+            deadline.tv_nsec += 50000000L;
+            if (deadline.tv_nsec >= 1000000000L)
+            {
+                deadline.tv_sec += 1;
+                deadline.tv_nsec -= 1000000000L;
+            }
+            pthread_cond_timedwait(&c->cond, &c->mutex, &deadline);
+            if (c->shutdown &&
+                atomic_load_explicit(c->shutdown,
+                                     memory_order_acquire) != 0u)
+            {
+                pthread_mutex_unlock(&c->mutex);
+                return -1;
+            }
+        }
+    }
+    else if (c->count == c->capacity)
     {
         /* Overwrite-oldest: drop the tail entry to make room. */
         c->tail = (c->tail + 1u) % c->capacity;
@@ -93,6 +119,9 @@ int collector_pop(collector_t *c, void *out_item)
     memcpy(out_item, c->buf + c->tail * c->item_size, c->item_size);
     c->tail = (c->tail + 1u) % c->capacity;
     c->count--;
+    /* Wake any producer blocked in a blocking submit, plus the usual
+     * consumer signalers. */
+    pthread_cond_broadcast(&c->cond);
     pthread_mutex_unlock(&c->mutex);
     return 0;
 }
@@ -104,4 +133,38 @@ void collector_wake(collector_t *c)
     pthread_mutex_lock(&c->mutex);
     pthread_cond_broadcast(&c->cond);
     pthread_mutex_unlock(&c->mutex);
+}
+
+void collector_set_blocking(collector_t *c, int blocking)
+{
+    if (!c)
+        return;
+    pthread_mutex_lock(&c->mutex);
+    c->blocking = blocking ? 1 : 0;
+    pthread_cond_broadcast(&c->cond);
+    pthread_mutex_unlock(&c->mutex);
+}
+
+size_t collector_count(const collector_t *c)
+{
+    collector_t *m = (collector_t *)c;
+    size_t n = 0u;
+    if (!m)
+        return 0u;
+    pthread_mutex_lock(&m->mutex);
+    n = m->count;
+    pthread_mutex_unlock(&m->mutex);
+    return n;
+}
+
+unsigned long collector_dropped(const collector_t *c)
+{
+    collector_t *m = (collector_t *)c;
+    unsigned long n = 0ul;
+    if (!m)
+        return 0ul;
+    pthread_mutex_lock(&m->mutex);
+    n = m->dropped;
+    pthread_mutex_unlock(&m->mutex);
+    return n;
 }

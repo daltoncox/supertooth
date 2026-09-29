@@ -7,6 +7,7 @@
 #include <liquid/liquid.h>
 
 #include "ble_bitstream_decoder.h"
+#include "channelizer_service.h"
 #include "receive_event_models.h"
 #include "sample_dispatcher.h"
 
@@ -15,7 +16,9 @@ extern "C" {
 #endif
 
 #define BLE_SESSION_SAMPLES_PER_SYMBOL 2u
-#define BLE_SESSION_MAX_CHANNELS 10u
+/* Max LE RF channels per session: the full 40-channel band (80 Msps staged
+ * over 4 lanes on wideband-capable devices; HackRF stays at 10). */
+#define BLE_SESSION_MAX_CHANNELS 40u
 #define BLE_SESSION_LNA_GAIN 24u
 #define BLE_SESSION_VGA_GAIN 18u
 
@@ -30,17 +33,8 @@ typedef struct {
 
     cpfskdem demodulator;
     unsigned int samples_per_symbol;
-    unsigned int input_decimation;
-
-    unsigned int bin;
-    unsigned int bank_M;
-    unsigned int frame_stride;   /**< frames to skip per output sample (grid/1MHz) */
-    float rssi_cal_db;
-
-    float complex *decimated;
-    size_t buf_cap_samples;
-
-    unsigned int abs_sample_scale;
+    unsigned int input_decimation; /**< cached from reader.view_decimation */
+    float rssi_cal_db;             /**< cached from reader.view_rssi_cal_db */
 
     ble_bitstream_decoder_t decoder;
 
@@ -63,22 +57,23 @@ typedef struct {
     _Bool active;
 } ble_channel_processor_t;
 
+/* The reader is configured by the channelizer service before init (bin,
+ * stride, centre and friends live on reader.view_*); init only wires the
+ * demodulator/decoder and caches stream scalars. */
 int ble_channel_processor_init(ble_channel_processor_t *proc,
-                               sample_dispatcher_t *dispatcher,
-                               uint16_t rf_index,
-                               uint32_t center_frequency_hz,
-                               unsigned int sample_rate_hz,
-                               unsigned int chan_bin,
-                               unsigned int bank_M,
-                               unsigned int bank_M2,
-                                unsigned int frame_stride,
-                                float rssi_cal_db);
+                               uint16_t rf_index);
 
 void ble_channel_processor_destroy(ble_channel_processor_t *proc);
 
 void *ble_channel_worker(void *arg);
 
-int ble_channel_processor_process_block(ble_channel_processor_t *proc, sample_block_t *blk);
+/* Demodulate one gathered stream (as returned by sample_reader_next):
+ * @p samples holds @p count contiguous 2 Msps samples, @p base_radio is
+ * the block's RF-domain base. */
+int ble_channel_processor_process_stream(ble_channel_processor_t *proc,
+                                         const float complex *samples,
+                                         unsigned int count,
+                                         uint64_t base_radio);
 
 #ifdef __cplusplus
 }

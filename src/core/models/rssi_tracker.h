@@ -3,8 +3,9 @@
  * @brief Sample-ring RSSI tracker with a fixed time window.
  *
  * Replaces the ad-hoc EMA + rolling-window RSSI logic that used to be
- * duplicated across the BR/EDR piconet (combined / central / 8 peripherals)
- * and the BLE advertiser / connection records. Each logical entity owns one
+ * duplicated across the BR/EDR connection (combined / central /
+ * 8 peripherals) and the BLE advertiser / connection records. Each logical
+ * entity owns one
  * rssi_tracker_t that retains the last RSSI_TRACKER_MAX_SAMPLES frames and
  * reports the mean RSSI over the most recent RSSI_TRACKER_WINDOW_SEC of
  * receive time.

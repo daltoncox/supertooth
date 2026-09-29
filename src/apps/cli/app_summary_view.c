@@ -175,7 +175,7 @@ void app_summary_view_print_ble(unsigned long packet_no,
 
 void app_summary_view_print_bredr(unsigned long packet_no,
                                   const bredr_event_t *event,
-                                  const bredr_piconet_snapshot_t *pnet)
+                                  const bredr_connection_snapshot_t *connection)
 {
     const bredr_frame_t *frame = &event->frame;
     const rx_metadata_t *m = &event->meta;
@@ -186,8 +186,8 @@ void app_summary_view_print_bredr(unsigned long packet_no,
     fmt_time(m, time_s, sizeof(time_s));
     fmt_rssi(m->rssi_dbr, rssi_s, sizeof(rssi_s));
 
-    if (pnet && pnet->uap_valid)
-        snprintf(addr, sizeof(addr), "0x%02X%06" PRIX32, pnet->uap, lap);
+    if (connection && connection->uap_valid)
+        snprintf(addr, sizeof(addr), "0x%02X%06" PRIX32, connection->uap, lap);
     else
         snprintf(addr, sizeof(addr), "0x??%06" PRIX32, lap);
 
@@ -199,11 +199,11 @@ void app_summary_view_print_bredr(unsigned long packet_no,
      * backend_api.c bredr_packet_trampoline). */
     uint8_t uap = 0u, clk1_6 = 0u;
     int have_ctx = 0;
-    if (pnet && pnet->uap_valid)
-        uap = pnet->uap;
-    if (pnet && pnet->clk_known && m->radio_sample_rate_hz != 0u)
-        clk1_6 = pnet->central_clk_1_6;
-    have_ctx = (pnet && pnet->uap_valid && pnet->clk_known &&
+    if (connection && connection->uap_valid)
+        uap = connection->uap;
+    if (connection && connection->clk_known && m->radio_sample_rate_hz != 0u)
+        clk1_6 = connection->central_clk_1_6;
+    have_ctx = (connection && connection->uap_valid && connection->clk_known &&
                 m->radio_sample_rate_hz != 0u);
 
     bredr_packet_t pkt;

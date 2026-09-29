@@ -10,14 +10,12 @@
 #   /Supertooth.app                 Qt GUI (macdeployqt vendors Qt frameworks,
 #                                   plugins and QML imports)
 #   /Supertooth.app/Contents/MacOS/
-#     Supertooth                    GUI executable
-#     supertooth-bredr              CLI: BR/EDR multichannel receiver
-#     supertooth-ble                CLI: BLE advertising scanner
-#     supertooth-hybrid             CLI: simultaneous BR/EDR + BLE receiver
+#     supertooth-desktop          GUI executable
+#     supertooth                  multiplexed CLI (hybrid, ble, bredr, record)
 #   /Supertooth.app/Contents/Frameworks/
-#     *.dylib                       Homebrew radio libs (hackrf, liquid-dsp)
-#                                   plus transitive deps (libusb, fftw), with
-#                                   install names rewritten to
+#     *.dylib                       Homebrew radio libs (hackrf, bladeRF,
+#                                   liquid-dsp) plus transitive deps
+#                                   (libusb, fftw), with install names rewritten to
 #                                   @executable_path/../Frameworks/...
 #   /Applications -> /Applications  symlink for drag-to-install
 #
@@ -93,7 +91,7 @@ VERSION="${VERSION#v}"
 
 APP_SRC="$BUILD_DIR/src/apps/gui/Supertooth.app"
 CLI_DIR="$BUILD_DIR/src/apps/cli"
-CLIS=(supertooth-bredr supertooth-ble supertooth-hybrid)
+CLIS=(supertooth)
 
 if [[ ! -d "$APP_SRC" ]]; then
     echo "Error: GUI bundle not found at $APP_SRC."
@@ -128,6 +126,9 @@ STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
 
 echo "=== Staging Supertooth.app ==="
+# The build already produces Supertooth.app whose Info.plist points at the
+# GUI executable Contents/MacOS/supertooth-desktop (see src/apps/gui/
+# CMakeLists.txt). Copying to the staging dir keeps the build tree clean.
 APP="$STAGING/Supertooth.app"
 cp -a "$APP_SRC" "$APP"
 chmod -R u+w "$APP"
@@ -186,7 +187,7 @@ done
 # /opt/homebrew, /usr/local or /opt/local is copied in and the
 # referencing load command is rewritten to
 # @executable_path/../Frameworks/<basename>. Runs to a fixpoint so
-# transitive deps (e.g. hackrf -> libusb, liquid -> fftw) are caught.
+# transitive deps (e.g. hackrf/bladeRF -> libusb, liquid -> fftw) are caught.
 # System (/usr/lib, /System) and framework (@rpath, Qt .framework)
 # references are left alone — macdeployqt already handled Qt.
 # ------------------------------------------------------------------

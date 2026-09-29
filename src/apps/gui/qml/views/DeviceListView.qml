@@ -218,7 +218,7 @@ Item {
 
     Timer {
         id: scrollGuardTimer
-        interval: 250
+        interval: 100
         repeat: false
         onTriggered: root.scrollGuardY = -1
     }
@@ -238,6 +238,51 @@ Item {
         deviceListView.currentIndex = row
     }
 
+    // Select a row by display index: single path shared by mouse clicks
+    // and keyboard navigation. Clamps to [0, count-1]. Resolves the row
+    // to a stable device ID (via deviceIdAt) so the highlight survives
+    // the 1 Hz live re-sort, then reloads detail + chart and scrolls
+    // only if the row is off-screen (Contain preserves scrollGuard).
+    function selectRow(row) {
+        if (!deviceModel || deviceModel.count === 0) return
+        row = Math.max(0, Math.min(row, deviceModel.count - 1))
+        var id = deviceModel.deviceIdAt(row)
+        if (id === 0) return
+        selectedDeviceId = id
+        deviceListView.currentIndex = row
+        loadDetail(row)
+        loadChart(row)
+        deviceListView.positionViewAtIndex(row, ListView.Contain)
+    }
+
+    // Move selection relative to the live row. Re-resolves via
+    // selectedRow() on every press so a 1 Hz re-sort between keypresses
+    // can't strand us on a stale index. No selection + Down starts at
+    // the top, + Up starts at the bottom; ends clamp (no wrap).
+    function selectRelative(delta) {
+        if (!deviceModel || deviceModel.count === 0) return
+        var cur = selectedRow()
+        if (cur < 0)
+            selectRow(delta > 0 ? 0 : deviceModel.count - 1)
+        else
+            selectRow(cur + delta)
+    }
+
+    // Global while the Device tab is open (StackLayout hides inactive
+    // children, so root.visible is true only on the Device tab). Window
+    // context on purpose: arrows keep working after clicking the chart
+    // or info pane, per UX decision.
+    Shortcut {
+        sequences: ["Up"]
+        enabled: root.visible
+        onActivated: root.selectRelative(-1)
+    }
+    Shortcut {
+        sequences: ["Down"]
+        enabled: root.visible
+        onActivated: root.selectRelative(1)
+    }
+
     // Periodically re-read the chart series so newly-captured frames are
     // painted and the rolling window keeps sliding forward even when no
     // frames arrive (so the trace visibly advances in time). Resolves the
@@ -246,7 +291,7 @@ Item {
     // pane so its values (RSSI, rate, last seen) track the 1 Hz model tick.
     Timer {
         id: chartRefreshTimer
-        interval: 500
+        interval: 1000
         repeat: true
         running: root.selectedDeviceId > 0
         onTriggered: {
@@ -516,13 +561,18 @@ ListModel {
                         // row instead of showing a stale snapshot.
                         property var cells: [rssi, proto, type, identifier, firstSeen, lastSeen, packetRate]
 
+                        // BR/EDR piconet tree state is encoded in the
+                        // identifier prefix (├─/└─ child). The
+                        // model hardcodes the expanded layout, so the view
+                        // only reflects it with emphasis.
+                        // All connections (BR/EDR with or without members,
+                        // LE) render bold; members/standalone rows do not.
+                        property bool isConnection: String(cells[2]) === "CONN"
+
                         MouseArea {
                             anchors.fill: parent
                             onClicked: {
-                                root.selectedDeviceId = deviceId
-                                deviceListView.currentIndex = index
-                                root.loadDetail(index)
-                                root.loadChart(index)
+                                root.selectRow(index)
                             }
                         }
 
@@ -542,6 +592,8 @@ ListModel {
                                     verticalAlignment: Text.AlignVCenter
                                     leftPadding: 8
                                     rightPadding: 8
+                                    font.bold: columns.get(index).role === "identifier"
+                                               && rowDelegate.isConnection
                                     elide: Text.ElideRight
                                     clip: true
                                 }

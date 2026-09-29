@@ -142,6 +142,33 @@ static void build_dh1_frame(uint16_t header_data, uint8_t uap, uint8_t clk6,
     frame->air_payload_bits = total * 8u;
 }
 
+/* Mirror of sanity_check_header() in bredr_clock_recovery.c: golden headers
+ * must be slot-legal for the packet's true CLK1-6, otherwise the recovery
+ * backend correctly prunes the true candidate and the vector can never
+ * converge. Peripheral slots (odd CLK1-6) reject LT_ADDR 0 (broadcast),
+ * POLL (0x1) and FHS (0x2); SCO types (HV1/HV2/HV3 = 0x5/0x6/0x7) must have
+ * FLOW/ARQN/SEQN == 0. */
+static int gen_slot_legal(uint16_t data, uint8_t clk6)
+{
+    uint8_t lt   = (uint8_t)(data & 0x07u);
+    uint8_t type = (uint8_t)((data >> 3) & 0x0Fu);
+    uint8_t flow = (uint8_t)((data >> 7) & 0x01u);
+    uint8_t arqn = (uint8_t)((data >> 8) & 0x01u);
+    uint8_t seqn = (uint8_t)((data >> 9) & 0x01u);
+
+    if (clk6 & 1u)
+    {
+        if (lt == 0u)
+            return 0;
+        if (type == 0x01u || type == 0x02u)
+            return 0;
+    }
+    if (type == 0x05u || type == 0x06u || type == 0x07u)
+        if (flow || arqn || seqn)
+            return 0;
+    return 1;
+}
+
 /* ---- emit a single case as a C initializer ---- */
 static void emit_case(const char *name, uint8_t uap,
                        uint32_t first_clkn, int n_packets,
@@ -181,8 +208,36 @@ static void emit_case(const char *name, uint8_t uap,
          * CLK1-6 = (clkn >> 1) & 0x3f (libbtbb stores clkn >> 1). */
         uint32_t clkn = first_clkn + 2u * (uint32_t)k;
         uint8_t clk6 = (uint8_t)((clkn >> 1) & 0x3fu);
-        uint16_t data = (k == n_packets - 1) ? pool[dh1_idx]
-                                            : pool[k % pool_n];
+        uint16_t data;
+        if (k == n_packets - 1)
+        {
+            /* Final DH1 packet: first DH1-typed, slot-legal header at/after dh1_idx. */
+            data = pool[dh1_idx];
+            for (int i = 0; i < pool_n; i++)
+            {
+                uint16_t cand = pool[(dh1_idx + i) % pool_n];
+                if (((cand & 0x78u) == 0x20u) && gen_slot_legal(cand, clk6))
+                {
+                    data = cand;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            /* Header-only packets: first slot-legal header at/after the
+             * round-robin position so the true candidate is never pruned. */
+            data = pool[k % pool_n];
+            for (int j = 0; j < pool_n; j++)
+            {
+                uint16_t cand = pool[(k + j) % pool_n];
+                if (gen_slot_legal(cand, clk6))
+                {
+                    data = cand;
+                    break;
+                }
+            }
+        }
         int hec = lb_forward_hec(data, uap);
 
         if (k == n_packets - 1)
@@ -237,9 +292,10 @@ int main(void)
         /* payload-length coverage */
         {0x47,0x2AA,0,12,user0,0}, {0x9B,0x2AA,0,12,user1,1},
         {0xD3,0x2AA,0,12,user17,17},
-        /* LT_ADDR / flow / arqn / seqn variation via header bits */
-        {0x47,0x000,0,12,user4,4}, {0x47,0x007,0,12,user4,4}, {0x47,0x038,0,12,user4,4},
-        {0x47,0x1C0,0,12,user4,4}, {0x47,0x001,0,12,user4,4}, {0x47,0x380,0,12,user4,4},
+        /* Slot-legal representative (headers are drawn from the reachable
+         * pool with a slot-legality filter, so extra same-UAP cases would
+         * be byte-identical duplicates). */
+        {0x47,0x000,0,12,user4,4},
     };
 
     for (size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); i++) {

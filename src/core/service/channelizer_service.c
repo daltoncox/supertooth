@@ -1,0 +1,709 @@
+/**
+ * @file service/channelizer_service.c
+ * @brief See channelizer_service.h.
+ */
+
+#include "channelizer_service.h"
+
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* RF centres (Hz). BLE geometry mirrors ble_bitstream_decoder.h without
+ * pulling the protocol headers into the service. */
+#define SVC_BREDR_BASE_HZ 2402000000u
+#define SVC_BREDR_STEP_HZ 1000000u
+#define SVC_BLE_BASE_HZ 2402000000u
+#define SVC_BLE_STEP_HZ 2000000u
+
+int channelizer_service_plan(unsigned int sample_rate_hz,
+                              uint32_t grid_hz,
+                              unsigned int *K_out,
+                              unsigned int *M_lane_out)
+{
+    if (sample_rate_hz == 0u || grid_hz == 0u)
+        return -1;
+    if (grid_hz != CHANNELIZER_BANK_GRID_BR_EDR_HZ &&
+        grid_hz != CHANNELIZER_BANK_GRID_BLE_HZ)
+        return -1;
+    if (sample_rate_hz % 1000000u != 0u)
+        return -1;
+
+    /* Fewest lanes that fit the per-lane budget: K = ceil(Fs / 20 MHz).
+     * Lanes are equal (Fs % K == 0) with an even bin count each. Larger K
+     * is never tried: staging uses the minimum thread count, so counts
+     * like 30 (3x10) or 56 stay unsupported by design. Supported BR/EDR
+     * counts are exactly 2..20 (even) + 24,28,32,36,40,42,48,54,60,64,72,
+     * plus 79 ("all": full 0..78 band at 80 Msps, LO 2441 MHz). */
+    unsigned int K =
+        (sample_rate_hz + CHANNELIZER_SERVICE_MAX_LANE_RATE_HZ - 1u) /
+        CHANNELIZER_SERVICE_MAX_LANE_RATE_HZ;
+    if (K < 1u || K > CHANNELIZER_SERVICE_MAX_LANES)
+        return -1;
+    if (sample_rate_hz % K != 0u)
+        return -1;
+    unsigned int lane_hz = sample_rate_hz / K;
+    if (lane_hz % grid_hz != 0u)
+        return -1;
+    unsigned int M = lane_hz / grid_hz;
+    if (M < 2u || (M & 1u) != 0u)
+        return -1; /* firpfbch2 requires an even bin count */
+    if (K_out)
+        *K_out = K;
+    if (M_lane_out)
+        *M_lane_out = M;
+    return 0;
+}
+
+int channelizer_service_valid_bredr_count(unsigned int C)
+{
+    /* "all" mode: C == 79 covers the full 0..78 band but requires an 80 Msps
+     * input (LO 2441 MHz, span 2401..2481 MHz), so it plans at 80 MHz rather
+     * than 79 MHz. The LO lands on the 1 MHz raster, so there is no
+     * half-channel grid residual to premix. */
+    if (C == CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS)
+        return channelizer_service_plan(80000000u,
+                                         CHANNELIZER_BANK_GRID_BR_EDR_HZ,
+                                         NULL, NULL) == 0;
+    if (C < 2u || C > CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS)
+        return 0;
+    if ((C & 1u) != 0u)
+        return 0;
+    return channelizer_service_plan(C * 1000000u,
+                                     CHANNELIZER_BANK_GRID_BR_EDR_HZ,
+                                     NULL, NULL) == 0;
+}
+
+unsigned int channelizer_service_snap_bredr_count(unsigned int C)
+{
+    /* Snap preserves the "all" sentinel: any request >= 79 lands on 79
+     * (80 Msps input) rather than flooring to the even lane-split table. */
+    if (C >= CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS)
+    {
+        if (channelizer_service_valid_bredr_count(
+                CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS))
+            return CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS;
+        C = CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS - 1u;
+    }
+    C &= ~1u;
+    while (C >= 2u)
+    {
+        if (channelizer_service_valid_bredr_count(C))
+            return C;
+        C -= 2u;
+    }
+    return 0u;
+}
+
+int channelizer_service_valid_sample_rate(unsigned int sample_rate_hz,
+                                           uint32_t grid_hz)
+{
+    if (channelizer_service_plan(sample_rate_hz, grid_hz, NULL, NULL) == 0)
+        return 1;
+    /* 2 MHz -> 1 MHz fallback (BLE-only power saver). */
+    if (grid_hz == CHANNELIZER_BANK_GRID_BLE_HZ &&
+        channelizer_service_plan(sample_rate_hz,
+                                  CHANNELIZER_BANK_GRID_BR_EDR_HZ,
+                                  NULL, NULL) == 0)
+        return 1;
+    return 0;
+}
+
+/* max RF samples fed per PFB call so one bank call never exceeds the output
+ * block capacity. */
+static size_t svc_max_in(unsigned int M, unsigned int M2)
+{
+    const size_t CAP = SAMPLE_BLOCK_SAMPLE_CAPACITY;
+    size_t max_frames = CAP / (size_t)M;
+    if (max_frames > 2u)
+        max_frames -= 2u;
+    else
+        max_frames = 1u;
+    max_frames = (max_frames / 4u) * 4u;
+    if (max_frames < 4u)
+        max_frames = 4u;
+    return max_frames * (size_t)M2;
+}
+
+static int svc_alloc_dispatcher(sample_dispatcher_t **out)
+{
+    *out = (sample_dispatcher_t *)calloc(1, sizeof(**out));
+    if (!*out)
+        return -1;
+    if (sample_dispatcher_init(*out) != 0)
+    {
+        free(*out);
+        *out = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+static void svc_free_dispatcher(sample_dispatcher_t **d)
+{
+    if (!d || !*d)
+        return;
+    sample_dispatcher_destroy(*d);
+    free(*d);
+    *d = NULL;
+}
+
+/* Lane index for an in-span centre (integer-division tie-break: a centre
+ * exactly on a lane edge belongs to the upper lane). */
+static unsigned int svc_lane_for_center(const channelizer_service_t *s,
+                                        uint32_t center_hz)
+{
+    return (center_hz - s->span_lo_hz) / s->sub_rate_hz;
+}
+
+/* Effective LO of a lane's PFB: the bank aligns the (1 MHz grid) sub-band
+ * centre onto the service grid itself, enabling its own residual NCO when
+ * they differ (2 MHz grid on a half-grid LO). Descriptors must map bins
+ * against this, not the raw sub-centre. */
+static uint32_t svc_lane_lo_eff(const channelizer_service_t *s,
+                                unsigned int lane)
+{
+    return s->pfb[lane].lo_eff_hz;
+}
+
+static void svc_build_descriptors(channelizer_service_t *s)
+{
+    const unsigned int Fs = s->cfg.sample_rate_hz;
+    const unsigned int stride = s->grid_actual_hz / 1000000u;
+    const unsigned int decim =
+        s->D * s->M2_lane * stride;
+
+    s->bredr_count = 0u;
+    for (unsigned int c = 0u;
+         c < CHANNELIZER_SERVICE_MAX_BREDR_CHANNELS; c++)
+    {
+        uint32_t center =
+            SVC_BREDR_BASE_HZ + (uint64_t)c * SVC_BREDR_STEP_HZ;
+        int32_t offset = (int32_t)center - (int32_t)s->cfg.lo_hz;
+        if (labs((long)offset) >= (int32_t)(Fs / 2u))
+            continue;
+        unsigned int lane = svc_lane_for_center(s, center);
+        if (lane >= s->K)
+            continue;
+        int bin = channelizer_bank_bin_for_center(
+            s->M_lane, svc_lane_lo_eff(s, lane), center,
+            s->grid_actual_hz);
+        if (bin < 0)
+            continue;
+        channelizer_channel_t *d =
+            &s->bredr_desc[s->bredr_count++];
+        d->dispatcher       = s->out[lane];
+        d->bin              = (unsigned int)bin;
+        d->M                = s->M_lane;
+        d->stride           = 1u; /* BR/EDR always reads every frame */
+        d->input_decimation = s->D * s->M2_lane;
+        d->center_hz        = center;
+        d->rssi_cal_db      = CHANNELIZER_BANK_RSSI_CAL_DB;
+    }
+
+    /* BLE descriptors use the service grid (stride 2 at 2 MHz): only the
+     * BLE-only service requests 2 MHz; hybrid BLE fans out over the shared
+     * 1 MHz service with stride 1. */
+    s->ble_count = 0u;
+    for (unsigned int rf = 0u;
+         rf < CHANNELIZER_SERVICE_MAX_BLE_CHANNELS; rf++)
+    {
+        uint32_t center =
+            SVC_BLE_BASE_HZ + (uint64_t)rf * SVC_BLE_STEP_HZ;
+        int32_t offset = (int32_t)center - (int32_t)s->cfg.lo_hz;
+        if (labs((long)offset) >= (int32_t)(Fs / 2u))
+            continue;
+        unsigned int lane = svc_lane_for_center(s, center);
+        if (lane >= s->K)
+            continue;
+        int bin = channelizer_bank_bin_for_center(
+            s->M_lane, svc_lane_lo_eff(s, lane), center,
+            s->grid_actual_hz);
+        if (bin < 0)
+            continue;
+        channelizer_channel_t *d = &s->ble_desc[s->ble_count++];
+        d->dispatcher       = s->out[lane];
+        d->bin              = (unsigned int)bin;
+        d->M                = s->M_lane;
+        d->stride           = stride;
+        d->input_decimation = decim;
+        d->center_hz        = center;
+        d->rssi_cal_db      = CHANNELIZER_BANK_RSSI_CAL_DB;
+    }
+}
+
+int channelizer_service_init(channelizer_service_t *s,
+                              sample_dispatcher_t *rf,
+                              const channelizer_service_config_t *cfg)
+{
+    if (!s || !rf || !cfg || cfg->sample_rate_hz == 0u)
+        return -1;
+    if (cfg->grid_hz != CHANNELIZER_BANK_GRID_BR_EDR_HZ &&
+        cfg->grid_hz != CHANNELIZER_BANK_GRID_BLE_HZ)
+        return -1;
+    memset(s, 0, sizeof(*s));
+    s->cfg = *cfg;
+    s->rf  = rf;
+
+    /* 2 MHz -> 1 MHz fallback (BLE-only power saver). */
+    uint32_t grid = cfg->grid_hz;
+    unsigned int K = 0u, M_lane = 0u;
+    if (channelizer_service_plan(cfg->sample_rate_hz, grid, &K,
+                                  &M_lane) != 0)
+    {
+        if (grid != CHANNELIZER_BANK_GRID_BLE_HZ ||
+            channelizer_service_plan(cfg->sample_rate_hz,
+                                      CHANNELIZER_BANK_GRID_BR_EDR_HZ, &K,
+                                      &M_lane) != 0)
+            return -1;
+        grid = CHANNELIZER_BANK_GRID_BR_EDR_HZ;
+    }
+    s->grid_actual_hz = grid;
+    s->K              = K;
+    s->D              = K; /* DDC decimation; 1 = premix-only */
+    s->sub_rate_hz    = cfg->sample_rate_hz / K;
+    s->M_lane         = M_lane;
+    s->M2_lane        = M_lane / 2u;
+    /* Wideband grid anchor: sub-centres inherit this alignment, so every
+     * PFB runs NCO-free (the DDC's single folded NCO covers lane
+     * translation + grid premix on every path). */
+    s->lo_eff_hz      = channelizer_bank_grid_align(cfg->lo_hz, grid);
+    s->span_lo_hz = (uint32_t)((int64_t)s->lo_eff_hz -
+                               (int64_t)(cfg->sample_rate_hz / 2u));
+    for (unsigned int k = 0u; k < K; k++)
+    {
+        s->sub_centers_hz[k] = (uint32_t)(
+            (int64_t)s->span_lo_hz +
+            (int64_t)(s->sub_rate_hz / 2u) +
+            (int64_t)k * (int64_t)s->sub_rate_hz);
+    }
+
+    unsigned int m  = cfg->m != 0u ? cfg->m : CHANNELIZER_BANK_DEFAULT_M;
+    float as = cfg->as != 0.0f ? cfg->as : CHANNELIZER_BANK_DEFAULT_AS;
+
+    /* Progress counters for the fail path (destroy() assumes full init). */
+    unsigned int n_out = 0u, n_sub = 0u, n_ddc = 0u, n_pfb = 0u;
+    unsigned int n_rd_ddc = 0u, n_rd_pfb = 0u;
+
+    /* Owned dispatchers: K intermediates (DDC output) + K lane outputs. */
+    for (unsigned int k = 0u; k < K; k++)
+    {
+        if (svc_alloc_dispatcher(&s->out[k]) != 0)
+            goto fail;
+        n_out++;
+    }
+    for (unsigned int k = 0u; k < K; k++)
+    {
+        if (svc_alloc_dispatcher(&s->sub[k]) != 0)
+            goto fail;
+        n_sub++;
+    }
+    /* One DDC per lane: premix-only (decim == 1) at K == 1, nco + firdecim
+     * above that. The shift folds lane translation + grid residual into a
+     * single NCO everywhere. */
+    for (unsigned int k = 0u; k < K; k++)
+    {
+        if (ddc_stage_init(&s->ddc[k], cfg->sample_rate_hz,
+                            cfg->lo_hz, s->sub_centers_hz[k], K,
+                            DDC_STAGE_DEFAULT_M,
+                            DDC_STAGE_DEFAULT_AS) != 0)
+            goto fail;
+        n_ddc++;
+    }
+    /* One NCO-free PFB per lane, fed its grid-aligned sub-centre. */
+    for (unsigned int k = 0u; k < K; k++)
+    {
+        if (channelizer_bank_init(&s->pfb[k], s->sub_rate_hz,
+                                   s->sub_centers_hz[k], grid, m,
+                                   as) != 0)
+            goto fail;
+        n_pfb++;
+        s->max_in[k] = svc_max_in(s->M_lane, s->M2_lane);
+    }
+    s->dsps_live = 1;
+
+    /* Readers: DDC lanes broadcast-read RF; PFB lanes read their sub lane. */
+    for (unsigned int k = 0u; k < K; k++)
+    {
+        if (sample_reader_init(&s->ddc_readers[k], rf) != 0)
+            goto fail;
+        n_rd_ddc++;
+    }
+    for (unsigned int k = 0u; k < K; k++)
+    {
+        if (sample_reader_init(&s->pfb_readers[k], s->sub[k]) != 0)
+            goto fail;
+        n_rd_pfb++;
+    }
+    s->readers_live = 1;
+
+    svc_build_descriptors(s);
+    if (s->bredr_count == 0u && s->ble_count == 0u)
+        goto fail;
+    if (s->cfg.debug)
+    {
+        fprintf(stderr,
+                "[chan_svc] lo=%u eff=%u Fs=%u grid=%u K=%u M_lane=%u D=%u : "
+                "%zu BLE + %zu BR/EDR descriptors\n",
+                s->cfg.lo_hz, s->lo_eff_hz, s->cfg.sample_rate_hz,
+                s->grid_actual_hz, s->K, s->M_lane, s->D, s->ble_count,
+                s->bredr_count);
+    }
+    return 0;
+
+fail:
+    for (unsigned int k = 0u; k < n_rd_ddc; k++)
+        sample_reader_destroy(&s->ddc_readers[k]);
+    for (unsigned int k = 0u; k < n_rd_pfb; k++)
+        sample_reader_destroy(&s->pfb_readers[k]);
+    for (unsigned int k = 0u; k < n_ddc; k++)
+        ddc_stage_destroy(&s->ddc[k]);
+    for (unsigned int k = 0u; k < n_pfb; k++)
+        channelizer_bank_destroy(&s->pfb[k]);
+    for (unsigned int k = 0u; k < n_sub; k++)
+        svc_free_dispatcher(&s->sub[k]);
+    for (unsigned int k = 0u; k < n_out; k++)
+        svc_free_dispatcher(&s->out[k]);
+    memset(s, 0, sizeof(*s));
+    return -1;
+}
+
+/* Acquire one output block (live: NULL + drop note on exhaustion;
+ * exhaustive: wait, NULL only on shutdown). */
+static sample_block_t *svc_acquire_block(sample_dispatcher_t *dst,
+                                         const channelizer_service_t *s)
+{
+    sample_block_t *b = s->cfg.exhaustive
+        ? sample_dispatcher_acquire_blocking(dst, s->cfg.shutdown)
+        : sample_dispatcher_acquire_block(dst);
+    if (!b && !s->cfg.exhaustive)
+        sample_dispatcher_note_drop(dst, s->cfg.debug);
+    return b;
+}
+
+/* Push one filled block. Returns 0 to keep going, -1 when an exhaustive
+ * worker must stop (shutdown observed while pushing). */
+static int svc_push_block(sample_dispatcher_t *dst, sample_block_t *b,
+                          const channelizer_service_t *s)
+{
+    if (!s->cfg.exhaustive)
+    {
+        sample_dispatcher_push_block(dst, b);
+        sample_block_release(b);
+        return 0;
+    }
+    sample_dispatcher_push_blocking(dst, b, s->cfg.shutdown);
+    sample_block_release(b);
+    return (s->cfg.shutdown &&
+            atomic_load_explicit(s->cfg.shutdown,
+                                 memory_order_acquire) != 0u)
+               ? -1
+               : 0;
+}
+
+static void *svc_ddc_worker(void *arg)
+{
+    channelizer_service_t *s;
+    unsigned int lane;
+    {
+        typeof(s->worker_ctx[0]) *ctx = arg;
+        s    = ctx->svc;
+        lane = ctx->lane;
+    }
+    ddc_stage_t *stage       = &s->ddc[lane];
+    sample_reader_t *reader  = &s->ddc_readers[lane];
+    sample_dispatcher_t *dst = s->sub[lane];
+    const _Atomic unsigned int *shutdown = s->cfg.shutdown;
+
+    for (;;)
+    {
+        const float complex *in;
+        unsigned int in_n;
+        uint64_t in_base;
+
+        /* Raw mode: next() hands out the pool block directly (zero copy);
+         * it stays held until the next call or destroy. */
+        if (sample_reader_next(reader, shutdown, &in, &in_n, &in_base) != 0)
+            break;
+
+        sample_block_t *db = svc_acquire_block(dst, s);
+        if (!db)
+        {
+            if (s->cfg.exhaustive)
+                break; /* shutdown requested; held block flushes at destroy */
+            continue;
+        }
+
+        unsigned int n_out = 0u;
+        uint64_t out_base  = 0u;
+        ddc_stage_execute(stage, in, in_n, in_base,
+                          db->samples, &n_out, &out_base);
+        db->num_samples       = n_out;
+        db->block_base_sample = out_base;
+
+        if (svc_push_block(dst, db, s) != 0)
+            break;
+    }
+    return NULL;
+}
+
+static void *svc_pfb_worker(void *arg)
+{
+    channelizer_service_t *s;
+    unsigned int lane;
+    {
+        typeof(s->worker_ctx[0]) *ctx = arg;
+        s    = ctx->svc;
+        lane = ctx->lane;
+    }
+    channelizer_bank_t *bank = &s->pfb[lane];
+    sample_reader_t *reader  = &s->pfb_readers[lane];
+    sample_dispatcher_t *dst = s->out[lane];
+    const unsigned int M     = s->M_lane;
+    const size_t max_in      = s->max_in[lane];
+    /* Sub-domain offsets convert back to input-domain samples via D. */
+    const uint64_t lane_scale = (uint64_t)s->D;
+    const _Atomic unsigned int *shutdown = s->cfg.shutdown;
+
+    sample_block_t *sb = NULL;
+    for (;;)
+    {
+        const float complex *in;
+        unsigned int in_n;
+        uint64_t base;
+
+        /* Raw mode: next() hands out the pool block directly (zero copy);
+         * it stays held across the max_in sub-chunks below. */
+        if (sample_reader_next(reader, shutdown, &in, &in_n, &base) != 0)
+            break;
+
+        /* Bank keeps its own carry across calls; feed in place in
+         * max_in-sized sub-chunks. Bases stay in input-domain units. */
+        size_t done   = 0u;
+        int stop      = 0;
+        while (done < (size_t)in_n && stop == 0)
+        {
+            size_t n = (size_t)in_n - done;
+            if (n > max_in)
+                n = max_in;
+
+            sample_block_t *fm = svc_acquire_block(dst, s);
+            if (!fm)
+                break; /* live: drop rest of block; exhaustive: shutdown */
+
+            unsigned int frames_out = 0u;
+            channelizer_bank_execute(bank, &in[done], n,
+                                     fm->samples, &frames_out, NULL);
+            fm->num_samples       = (unsigned int)((size_t)M * frames_out);
+            fm->block_base_sample = base + (uint64_t)done * lane_scale;
+
+            stop = svc_push_block(dst, fm, s);
+            done += n;
+        }
+
+        if (stop != 0)
+            break;
+    }
+    return NULL;
+}
+
+int channelizer_service_start(channelizer_service_t *s)
+{
+    if (!s || s->running || s->K == 0u)
+        return -1;
+    size_t started = 0u;
+
+    for (unsigned int k = 0u; k < s->K; k++)
+    {
+        s->worker_ctx[started].svc  = s;
+        s->worker_ctx[started].lane = k;
+        if (pthread_create(&s->worker_threads[started], NULL,
+                           svc_ddc_worker,
+                           &s->worker_ctx[started]) != 0)
+        {
+            channelizer_service_stop(s);
+            return -1;
+        }
+        started++;
+    }
+    for (unsigned int k = 0u; k < s->K; k++)
+    {
+        s->worker_ctx[started].svc  = s;
+        s->worker_ctx[started].lane = k;
+        if (pthread_create(&s->worker_threads[started], NULL,
+                           svc_pfb_worker,
+                           &s->worker_ctx[started]) != 0)
+        {
+            channelizer_service_stop(s);
+            return -1;
+        }
+        started++;
+    }
+    s->worker_count = started;
+    s->running      = 1;
+    return 0;
+}
+
+void channelizer_service_stop(channelizer_service_t *s)
+{
+    if (!s || s->worker_count == 0u)
+    {
+        if (s)
+            s->running = 0;
+        return;
+    }
+    /* Request stop so wait_pop unblocks, then wake and join. Setting the
+     * owner's flag mirrors session_request_stop; the session is tearing
+     * down whenever this runs. */
+    if (s->cfg.shutdown)
+        atomic_store_explicit(( _Atomic unsigned int *)s->cfg.shutdown, 1u,
+                              memory_order_release);
+    channelizer_service_signal(s);
+    for (size_t w = 0u; w < s->worker_count; w++)
+        pthread_join(s->worker_threads[w], NULL);
+    s->worker_count = 0u;
+    s->running      = 0;
+}
+
+void channelizer_service_signal(channelizer_service_t *s)
+{
+    if (!s || !s->readers_live)
+        return;
+    for (unsigned int k = 0u; k < s->K; k++)
+        sample_reader_signal(&s->ddc_readers[k]);
+    for (unsigned int k = 0u; k < s->K; k++)
+        sample_reader_signal(&s->pfb_readers[k]);
+}
+
+size_t channelizer_service_dispatcher_count(
+    const channelizer_service_t *s)
+{
+    if (!s || s->K == 0u)
+        return 0u;
+    return 2u * (size_t)s->K; /* K sub + K out */
+}
+
+sample_dispatcher_t *channelizer_service_dispatcher_at(
+    const channelizer_service_t *s, size_t i)
+{
+    if (!s || s->K == 0u)
+        return NULL;
+    if (i < (size_t)s->K)
+        return s->sub[i];
+    i -= (size_t)s->K;
+    return i < (size_t)s->K ? s->out[i] : NULL;
+}
+
+unsigned int channelizer_service_lane_count(const channelizer_service_t *s)
+{
+    return s ? s->K : 0u;
+}
+
+sample_dispatcher_t *channelizer_service_sub_at(
+    const channelizer_service_t *s, unsigned int k)
+{
+    if (!s || k >= s->K || k >= CHANNELIZER_SERVICE_MAX_LANES)
+        return NULL;
+    return s->sub[k];
+}
+
+sample_dispatcher_t *channelizer_service_out_at(
+    const channelizer_service_t *s, unsigned int k)
+{
+    if (!s || k >= s->K || k >= CHANNELIZER_SERVICE_MAX_LANES)
+        return NULL;
+    return s->out[k];
+}
+
+size_t channelizer_service_get_bredr_count(const channelizer_service_t *s)
+{
+    return s ? s->bredr_count : 0u;
+}
+
+size_t channelizer_service_get_ble_count(const channelizer_service_t *s)
+{
+    return s ? s->ble_count : 0u;
+}
+
+uint32_t channelizer_service_bredr_center(const channelizer_service_t *s,
+                                          size_t idx)
+{
+    if (!s || idx >= s->bredr_count)
+        return 0u;
+    return s->bredr_desc[idx].center_hz;
+}
+
+uint32_t channelizer_service_ble_center(const channelizer_service_t *s,
+                                        size_t idx)
+{
+    if (!s || idx >= s->ble_count)
+        return 0u;
+    return s->ble_desc[idx].center_hz;
+}
+
+static int svc_reader_init_from(const channelizer_channel_t *d,
+                                sample_reader_t *reader)
+{
+    if (!d || !reader || !d->dispatcher)
+        return -1;
+    if (sample_reader_init(reader, d->dispatcher) != 0)
+        return -1;
+    if (sample_reader_configure_view(reader, d->bin, d->M, d->stride,
+                                     d->input_decimation,
+                                     CHANNELIZER_BANK_OUTPUT_RATE_HZ,
+                                     d->center_hz, d->rssi_cal_db) != 0)
+    {
+        sample_reader_destroy(reader);
+        return -1;
+    }
+    return 0;
+}
+
+int channelizer_service_bredr_reader_init(channelizer_service_t *s,
+                                          size_t idx,
+                                          sample_reader_t *reader)
+{
+    if (!s || idx >= s->bredr_count || !reader)
+        return -1;
+    return svc_reader_init_from(&s->bredr_desc[idx], reader);
+}
+
+int channelizer_service_ble_reader_init(channelizer_service_t *s,
+                                        size_t idx,
+                                        sample_reader_t *reader)
+{
+    if (!s || idx >= s->ble_count || !reader)
+        return -1;
+    return svc_reader_init_from(&s->ble_desc[idx], reader);
+}
+
+void channelizer_service_destroy(channelizer_service_t *s)
+{
+    if (!s)
+        return;
+    if (s->running)
+        channelizer_service_stop(s);
+    if (s->readers_live)
+    {
+        for (unsigned int k = 0u; k < s->K; k++)
+            sample_reader_destroy(&s->ddc_readers[k]);
+        for (unsigned int k = 0u; k < s->K; k++)
+            sample_reader_destroy(&s->pfb_readers[k]);
+        s->readers_live = 0;
+    }
+    if (s->dsps_live)
+    {
+        for (unsigned int k = 0u; k < s->K; k++)
+            ddc_stage_destroy(&s->ddc[k]);
+        for (unsigned int k = 0u; k < s->K; k++)
+            channelizer_bank_destroy(&s->pfb[k]);
+        s->dsps_live = 0;
+    }
+    for (unsigned int k = 0u; k < CHANNELIZER_SERVICE_MAX_LANES; k++)
+    {
+        svc_free_dispatcher(&s->sub[k]);
+        svc_free_dispatcher(&s->out[k]);
+    }
+    memset(s, 0, sizeof(*s));
+}

@@ -28,7 +28,7 @@ ReceiverController::ReceiverController(QObject *parent)
         qCInfo(lcSession) << "Receiver session created";
     }
 
-    m_poll.setInterval(250);   /* 4 Hz device-list poll */
+    m_poll.setInterval(1000);   /* 1 Hz device-list poll */
     connect(&m_poll, &QTimer::timeout, this, &ReceiverController::pollDevices);
 }
 
@@ -61,7 +61,9 @@ void ReceiverController::setRunning(bool running)
 bool ReceiverController::start(int inputType, const QString &deviceId,
                                 int sessionType, bool enforceCrc,
                                 int channelCount, int bottomChannel,
-                                int leGrid, int bleChannel, int acErrors)
+                                int bleChannel, int acErrors,
+                                int hackrfLna, int hackrfVga, int hackrfAmp,
+                                int bladerfGain)
 {
     qCInfo(lcSession).nospace().noquote()
         << "start() requested: inputType=" << inputType
@@ -70,9 +72,12 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         << " enforceCrc=" << enforceCrc
         << " channelCount=" << channelCount
         << " bottomChannel=" << bottomChannel
-        << " leGrid=" << leGrid
         << " bleChannel=" << bleChannel
         << " acErrors=" << acErrors
+        << " lna=" << hackrfLna
+        << " vga=" << hackrfVga
+        << " amp=" << hackrfAmp
+        << " bladerfGain=" << bladerfGain
         << " running=" << m_running;
 
     if (m_running)
@@ -98,6 +103,13 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
     {
         qCWarning(lcSession) << "start() aborted: file replay not supported";
         emit errorOccurred(tr("File replay is not yet supported."));
+        return false;
+    }
+
+    if (deviceId.isEmpty() && backend_get_default_device(nullptr, 0u, nullptr, 0u) != 0)
+    {
+        qCWarning(lcSession) << "start() aborted: no devices found";
+        emit errorOccurred(tr("No devices found."));
         return false;
     }
 
@@ -127,12 +139,21 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         << ", device=" << (idStr.isEmpty() ? QString("<default>") : idStr)
         << ", channels=" << channelCount
         << ", bottom=" << bottomChannel
-        << ", grid=" << (leGrid == BACKEND_GRID_LE ? "LE" : "BR/EDR")
-        << ", bleCh=" << bleChannel << ")";
+        << ", bleCh=" << bleChannel
+        << ", lna=" << hackrfLna
+        << ", vga=" << hackrfVga
+        << ", amp=" << hackrfAmp
+        << ", bladerfGain=" << bladerfGain << ")";
+
+    backend_gain_t gain;
+    gain.hackrf_lna = hackrfLna;
+    gain.hackrf_vga = hackrfVga;
+    gain.hackrf_amp = hackrfAmp ? 1 : 0;
+    gain.bladerf_gain_db = bladerfGain;
 
     m_thread = std::make_unique<std::thread>(
         [session, sessionType, inputType, idStr, enforceCrc,
-         channelCount, bottomChannel, leGrid, bleChannel, self]() {
+         channelCount, bottomChannel, bleChannel, gain, self]() {
             QByteArray idBytes = idStr.toUtf8();
             const char *idPtr = idBytes.isEmpty() ? nullptr
                                                   : idBytes.constData();
@@ -151,6 +172,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
                                                  (unsigned int)channelCount,
                                                  inputType, idPtr,
                                                  enforceCrc ? 1 : 0,
+                                                 &gain,
                                                  &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_ble returned"
                                   << result;
@@ -162,6 +184,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
                                                    (unsigned int)channelCount,
                                                    (unsigned int)bottomChannel,
                                                    inputType, idPtr,
+                                                   &gain,
                                                    &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_bredr returned"
                                   << result;
@@ -172,10 +195,10 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
                 result = backend_session_run_hybrid(session,
                                                     (unsigned int)channelCount,
                                                     (unsigned int)bottomChannel,
-                                                    leGrid,
                                                     (uint8_t)bleChannel,
                                                     inputType, idPtr,
                                                     enforceCrc ? 1 : 0,
+                                                    &gain,
                                                     &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_hybrid returned"
                                   << result;
@@ -283,9 +306,10 @@ void ReceiverController::pollDevices()
     if (!m_session || !m_running)
         return;
 
-    /* The promoted piconet store can now hold 512 entries; combined with the
-     * other device/piconet registries the total entity count can exceed the
-     * old 256 buffer, so allocate on the heap to avoid truncation. */
+    /* The promoted BLE registry can now hold 512 connections; combined
+     * with the other device/connection registries the total entity count
+     * can exceed the old 256 buffer, so allocate on the heap to avoid
+     * truncation. */
     const size_t cap = 4096u;
     backend_entity_t *buf = (backend_entity_t *)calloc(cap, sizeof(backend_entity_t));
     if (!buf)
@@ -311,6 +335,11 @@ void ReceiverController::pollDevices()
         m.insert(QStringLiteral("addrType"), QString::fromUtf8(e->addr_type));
         m.insert(QStringLiteral("displayName"), QString::fromUtf8(e->name));
         m.insert(QStringLiteral("manufacturer"), QString::fromUtf8(e->manufacturer));
+        m.insert(QStringLiteral("services"), QString::fromUtf8(e->services));
+        m.insert(QStringLiteral("appearance"), QString::fromUtf8(e->appearance));
+        m.insert(QStringLiteral("flags"), QString::fromUtf8(e->flags));
+        m.insert(QStringLiteral("deviceClass"), QString::fromUtf8(e->device_class));
+        m.insert(QStringLiteral("txPower"), e->tx_power_valid ? QVariant::fromValue((int)e->tx_power) : QVariant());
         m.insert(QStringLiteral("rssiDb"), (double)e->rssi_db);
         m.insert(QStringLiteral("rssiValid"), e->rssi_valid ? true : false);
         m.insert(QStringLiteral("firstSeenMs"), (qlonglong)e->first_seen_ms);
@@ -320,6 +349,8 @@ void ReceiverController::pollDevices()
         m.insert(QStringLiteral("crcInit"), (qulonglong)e->crc_init);
         m.insert(QStringLiteral("crcInitConfirmed"), e->crc_init_confirmed ? true : false);
         m.insert(QStringLiteral("crcInitCandidates"), (int)e->crc_init_candidates);
+        m.insert(QStringLiteral("groupId"), (qulonglong)e->group_id);
+        m.insert(QStringLiteral("ltSlot"), (int)e->lt_slot);
         list.append(m);
     }
     emit devicesUpdated(list);

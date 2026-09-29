@@ -9,17 +9,17 @@
 #include "device_models.h"
 
 void bredr_print_packet_details(const bredr_frame_t *frame,
-                                const bredr_piconet_snapshot_t *pnet,
+                                const bredr_connection_snapshot_t *connection,
                                 const rx_metadata_t *meta);
 void bredr_print_packet_summary_line(unsigned long packet_no,
                                      const bredr_frame_t *frame,
-                                     const bredr_piconet_snapshot_t *pnet,
+                                     const bredr_connection_snapshot_t *connection,
                                      const rx_metadata_t *meta);
-void bredr_print_piconet_snapshot(const bredr_piconet_snapshot_t *pnet);
+void bredr_print_connection_snapshot(const bredr_connection_snapshot_t *connection);
 void bredr_print_rssi_snapshot(unsigned long packet_no,
                                const bredr_frame_t *frame,
                                const rx_metadata_t *meta,
-                               const bredr_piconet_snapshot_t *const *piconets,
+                               const bredr_connection_snapshot_t *const *connections,
                                size_t count,
                                unsigned int master_clock_mhz);
 

@@ -1,4 +1,19 @@
+/* AUTO-GENERATED from Bluetooth SIG Assigned Numbers YAML (see generator note).
+ * Sources (fetched 2026-09-15, commit 4904c3c7):
+ *   assigned_numbers/company_identifiers/company_identifiers.yaml
+ *   assigned_numbers/core/ad_types.yaml
+ *   assigned_numbers/core/appearance_values.yaml
+ *   assigned_numbers/core/class_of_device.yaml
+ *   assigned_numbers/uuids/service_uuids.yaml
+ *   assigned_numbers/uuids/service_class.yaml
+ * From https://bitbucket.org/bluetooth-SIG/public (raw/main).
+ * To refresh: re-fetch the YAML files above and re-run the generator
+ * (tools script kept out of tree; see commit message), then rebuild + test.
+ */
 #include "bt_assigned_numbers.h"
+
+#include <stdio.h>
+#include <string.h>
 
 static const char * const bt_assigned_company_names[] = {
     [0x0000] = "Ericsson AB",
@@ -54,7 +69,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0032] = "Red-M (Communications) Ltd",
     [0x0033] = "Commil Ltd",
     [0x0034] = "Computer Access Technology Corporation (CATC)",
-    [0x0035] = "Eclipse (HQ Espana) S.L.",
     [0x0036] = "Renesas Electronics Corporation",
     [0x0037] = "Mobilian Corporation",
     [0x0038] = "Syntronix Corporation",
@@ -106,7 +120,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x0067] = "GN Hearing",
     [0x0068] = "General Motors",
     [0x0069] = "A&D Engineering, Inc.",
-    [0x006A] = "LTIMINDTREE LIMITED",
+    [0x006A] = "LTM Limited",
     [0x006B] = "Polar Electro OY",
     [0x006C] = "Beautiful Enterprise Co., Ltd.",
     [0x006E] = "Summit Data Communications, Inc.",
@@ -124,7 +138,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x007A] = "MStar Semiconductor, Inc.",
     [0x007B] = "Hanlynn Technologies",
     [0x007D] = "Seers Technology Co., Ltd.",
-    [0x007E] = "Sports Tracking Technologies Ltd.",
     [0x007F] = "Autonet Mobile",
     [0x0080] = "DeLorme Publishing Company, Inc.",
     [0x0081] = "WuXi Vimicro",
@@ -134,7 +147,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0085] = "BlueRadios, Inc.",
     [0x0086] = "Equinux AG",
     [0x0087] = "Garmin International, Inc.",
-    [0x0088] = "Ecotest",
     [0x0089] = "GN Hearing A/S",
     [0x008A] = "Jawbone",
     [0x008B] = "Topcon Positioning Systems, LLC",
@@ -242,7 +254,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x00F3] = "Kent Displays Inc.",
     [0x00F4] = "Nautilus Inc.",
     [0x00F5] = "Smartifier Oy",
-    [0x00F6] = "Elcometer Limited",
     [0x00F7] = "VSN Technologies, Inc.",
     [0x00F8] = "AceUni Corp., Ltd.",
     [0x00FA] = "Crystal Alarm AB",
@@ -291,7 +302,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x0127] = "Salutica Allied Solutions",
     [0x0128] = "GPSI Group Pty Ltd",
     [0x0129] = "Nimble Devices Oy",
-    [0x012A] = "Changzhou Yongse Infotech  Co., Ltd.",
+    [0x012A] = "Changzhou Yongse Infotech Co., Ltd.",
     [0x012B] = "SportIQ",
     [0x012C] = "TEMEC Instruments B.V.",
     [0x012D] = "Sony Corporation",
@@ -378,10 +389,8 @@ static const char * const bt_assigned_company_names[] = {
     [0x017F] = "XTel Wireless ApS",
     [0x0180] = "Gigaset Technologies GmbH",
     [0x0181] = "Gecko Health Innovations, Inc.",
-    [0x0182] = "HOP Ubiquitous",
     [0x0183] = "Walt Disney",
     [0x0184] = "Nectar",
-    [0x0186] = "CORE Lighting Ltd",
     [0x0187] = "Seraphim Sense Ltd",
     [0x0188] = "Unico RBC",
     [0x0189] = "Physical Enterprises Inc.",
@@ -409,7 +418,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x01A0] = "Channel Enterprises (HK) Ltd.",
     [0x01A1] = "FIAMM",
     [0x01A2] = "GIGALANE.CO.,LTD",
-    [0x01A3] = "EROAD",
     [0x01A4] = "MSA Innovation, LLC",
     [0x01A5] = "Icon Health and Fitness",
     [0x01A6] = "Wille Engineering",
@@ -431,7 +439,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x01B7] = "General Electric Company",
     [0x01B8] = "i+D3 S.L.",
     [0x01B9] = "HANA Micron",
-    [0x01BA] = "Stages Cycling LLC",
+    [0x01BA] = "SPIA Cycling Inc.",
     [0x01BB] = "Cochlear Bone Anchored Solutions AB",
     [0x01BC] = "SenionLab AB",
     [0x01BD] = "Syszone Co., Ltd",
@@ -462,11 +470,10 @@ static const char * const bt_assigned_company_names[] = {
     [0x01D9] = "Savant Systems LLC",
     [0x01DA] = "Logitech International SA",
     [0x01DB] = "Innblue Consulting",
-    [0x01DC] = "iParking Ltd.",
     [0x01DD] = "Koninklijke Philips N.V.",
     [0x01DE] = "Minelab Electronics Pty Limited",
     [0x01DF] = "Bison Group Ltd.",
-    [0x01E0] = "Widex A/S",
+    [0x01E0] = "WS Audiology Denmark A/S",
     [0x01E1] = "Jolla Ltd",
     [0x01E3] = "Caterpillar Inc",
     [0x01E4] = "Freedom Innovations",
@@ -474,7 +481,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x01E6] = "Technology Solutions (UK) Ltd",
     [0x01EA] = "Advanced Application Design, Inc.",
     [0x01EC] = "Spreadtrum Communications Shanghai Ltd",
-    [0x01ED] = "CuteCircuit LTD",
     [0x01EE] = "Valeo Service",
     [0x01EF] = "Fullpower Technologies, Inc.",
     [0x01F0] = "KloudNation",
@@ -520,7 +526,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x021C] = "Mobicomm Inc",
     [0x021D] = "Edamic",
     [0x021E] = "Goodnet, Ltd",
-    [0x021F] = "Luster Leaf Products  Inc",
+    [0x021F] = "Luster Leaf Products Inc",
     [0x0220] = "Manus Machina BV",
     [0x0221] = "Mobiquity Networks Inc",
     [0x0222] = "Praxis Dynamics",
@@ -539,7 +545,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0230] = "Foster Electric Company, Ltd",
     [0x0231] = "ETA SA",
     [0x0232] = "x-Senso Solutions Kft",
-    [0x0233] = "Shenzhen SuLong Communication Ltd",
     [0x0234] = "FengFan (BeiJing) Technology Co, Ltd",
     [0x0235] = "Qrio Inc",
     [0x0236] = "Pitpatpet Ltd",
@@ -567,7 +572,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x024F] = "Schneider Schreibgeräte GmbH",
     [0x0250] = "Sapphire Circuits LLC",
     [0x0251] = "Lumo Bodytech Inc.",
-    [0x0252] = "UKC Technosolution",
+    [0x0252] = "Restar Corporation",
     [0x0253] = "Xicato Inc.",
     [0x0254] = "Playbrush",
     [0x0255] = "Dai Nippon Printing Co., Ltd.",
@@ -583,7 +588,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x025F] = "Yardarm Technologies",
     [0x0261] = "SECVRE GmbH",
     [0x0262] = "Glacial Ridge Technologies",
-    [0x0263] = "Identiv, Inc.",
     [0x0264] = "DDS, Inc.",
     [0x0265] = "SMK Corporation",
     [0x0266] = "Schawbel Technologies LLC",
@@ -652,7 +656,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x02A9] = "Chargelib",
     [0x02AA] = "Doppler Lab",
     [0x02AB] = "BBPOS Limited",
-    [0x02AC] = "RTB Elektronik GmbH & Co. KG",
     [0x02AD] = "Rx Networks, Inc.",
     [0x02AE] = "WeatherFlow, Inc.",
     [0x02AF] = "Technicolor USA Inc.",
@@ -671,7 +674,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x02BC] = "Genevac Ltd",
     [0x02BD] = "Chemtronics",
     [0x02BE] = "Seguro Technology Sp. z o.o.",
-    [0x02BF] = "Redbird Flight Simulations",
     [0x02C0] = "Dash Robotics",
     [0x02C1] = "LINE Corporation",
     [0x02C2] = "Guillemot Corporation",
@@ -715,7 +717,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x02E9] = "Sensogram Technologies, Inc.",
     [0x02EA] = "Fujitsu Limited",
     [0x02EB] = "Ardic Technology",
-    [0x02EC] = "Delta Systems, Inc",
     [0x02ED] = "HTC Corporation",
     [0x02EE] = "Citizen Holdings Co., Ltd.",
     [0x02EF] = "SMART-INNOVATION.inc",
@@ -766,7 +767,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0320] = "SONO ELECTRONICS. CO., LTD",
     [0x0323] = "Rotor Bike Components",
     [0x0324] = "Astro, Inc.",
-    [0x0325] = "Amotus Solutions",
     [0x0326] = "Healthwear Technologies (Changzhou)Ltd",
     [0x0327] = "Essex Electronics",
     [0x0328] = "Grundfos A/S",
@@ -788,11 +788,9 @@ static const char * const bt_assigned_company_names[] = {
     [0x0339] = "Blue Sky Scientific, LLC",
     [0x033A] = "Appception, Inc.",
     [0x033B] = "Courtney Thorne Limited",
-    [0x033C] = "Virtuosys",
     [0x033D] = "TPV Technology Limited",
     [0x033E] = "Monitra SA",
     [0x033F] = "Automation Components, Inc.",
-    [0x0340] = "Letsense s.r.l.",
     [0x0341] = "Etesian Technologies LLC",
     [0x0342] = "GERTEC BRASIL LTDA.",
     [0x0343] = "Drekker Development Pty. Ltd.",
@@ -809,7 +807,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x0351] = "Pieps GmbH",
     [0x0352] = "iRiding(Xiamen)Technology Co.,Ltd.",
     [0x0353] = "Alpha Audiotronics, Inc.",
-    [0x0354] = "TOPPAN FORMS CO.,LTD.",
+    [0x0354] = "TOPPAN, Inc.",
     [0x0355] = "Sigma Designs, Inc.",
     [0x0356] = "Spectrum Brands, Inc.",
     [0x0357] = "Polymap Wireless",
@@ -916,7 +914,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x03C2] = "Snapchat Inc",
     [0x03C3] = "Casambi Technologies Oy",
     [0x03C4] = "Pico Technology Inc.",
-    [0x03C5] = "St. Jude Medical, Inc.",
+    [0x03C5] = "Abbott Medical",
     [0x03C6] = "Intricon",
     [0x03C7] = "Structural Health Systems, Inc.",
     [0x03C8] = "Avvel International",
@@ -951,14 +949,12 @@ static const char * const bt_assigned_company_names[] = {
     [0x03E5] = "ffly4u",
     [0x03E6] = "IoT Instruments Oy",
     [0x03E7] = "TRUE Fitness Technology",
-    [0x03E8] = "Reiner Kartengeraete GmbH & Co. KG.",
     [0x03E9] = "SHENZHEN LEMONJOY TECHNOLOGY CO., LTD.",
     [0x03EA] = "Hello Inc.",
     [0x03EB] = "Ozo Edu, Inc.",
     [0x03EC] = "Jigowatts Inc.",
     [0x03ED] = "BASIC MICRO.COM,INC.",
     [0x03EE] = "CUBE TECHNOLOGIES",
-    [0x03EF] = "foolography GmbH",
     [0x03F0] = "CLINK",
     [0x03F1] = "Hestan Smart Cooking Inc.",
     [0x03F2] = "WindowMaster A/S",
@@ -982,10 +978,8 @@ static const char * const bt_assigned_company_names[] = {
     [0x0405] = "Vertex International, Inc.",
     [0x0407] = "Swiss Audio SA",
     [0x0408] = "ToGetHome Inc.",
-    [0x0409] = "RYSE INC.",
     [0x040A] = "ZF OPENMATICS s.r.o.",
     [0x040B] = "Jana Care Inc.",
-    [0x040C] = "Senix Corporation",
     [0x040D] = "NorthStar Battery Company, LLC",
     [0x040E] = "SKF (U.K.) Limited",
     [0x040F] = "CO-AX Technology, Inc.",
@@ -1053,7 +1047,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0452] = "Svep Design Center AB",
     [0x0453] = "Qorvo Utrecht B.V.",
     [0x0454] = "Sphinx Electronics GmbH & Co KG",
-    [0x0455] = "Atomation",
     [0x0456] = "Nemik Consulting Inc",
     [0x0457] = "RF INNOVATION",
     [0x0458] = "Mini Solution Co., Ltd.",
@@ -1088,7 +1081,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0479] = "mywerk system GmbH",
     [0x047A] = "Sinosun Technology Co., Ltd.",
     [0x047B] = "MIYOSHI ELECTRONICS CORPORATION",
-    [0x047C] = "POWERMAT LTD",
     [0x047D] = "Occly LLC",
     [0x047E] = "OurHub Dev IvS",
     [0x047F] = "Pro-Mark, Inc.",
@@ -1215,7 +1207,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0504] = "PHYPLUS Inc",
     [0x0505] = "InPlay, Inc.",
     [0x0506] = "Hager",
-    [0x0507] = "Yellowcog",
     [0x0508] = "Axes System sp. z o. o.",
     [0x0509] = "Garage Smart, Inc.",
     [0x050A] = "Shake-on B.V.",
@@ -1244,7 +1235,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x0522] = "NS Tech, Inc.",
     [0x0523] = "MTG Co., Ltd.",
     [0x0524] = "Hangzhou iMagic Technology Co., Ltd",
-    [0x0525] = "HONGKONG NANO IC TECHNOLOGIES  CO., LIMITED",
+    [0x0525] = "HONGKONG NANO IC TECHNOLOGIES CO., LIMITED",
     [0x0526] = "Honeywell International Inc.",
     [0x0527] = "Albrecht JUNG",
     [0x0528] = "Lunera Lighting Inc.",
@@ -1304,7 +1295,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x0560] = "Sarita CareTech APS",
     [0x0561] = "Finder S.p.A.",
     [0x0562] = "Thalmic Labs Inc.",
-    [0x0563] = "Steinel Vertrieb GmbH",
+    [0x0563] = "Steinel GmbH",
     [0x0564] = "Beghelli Spa",
     [0x0566] = "CORE TRANSPORT TECHNOLOGIES NZ LIMITED",
     [0x0567] = "Xiamen Everesports Goods Co., Ltd",
@@ -1476,7 +1467,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0614] = "OnAsset Intelligence, Inc.",
     [0x0615] = "INTER ACTION Corporation",
     [0x0616] = "OS42 UG (haftungsbeschraenkt)",
-    [0x0617] = "WIZCONNECTED COMPANY LIMITED",
     [0x0618] = "Audio-Technica Corporation",
     [0x0619] = "Six Guys Labs, s.r.o.",
     [0x061A] = "R.W. Beckett Corporation",
@@ -1554,7 +1544,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0664] = "RHA TECHNOLOGIES LTD",
     [0x0665] = "Pure International Limited",
     [0x0666] = "WTO Werkzeug-Einrichtungen GmbH",
-    [0x0667] = "Spark Technology Labs Inc.",
     [0x0668] = "Bleb Technology srl",
     [0x0669] = "Livanova USA, Inc.",
     [0x066A] = "Brady Worldwide Inc.",
@@ -1643,7 +1632,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x06C4] = "Dream Labs GmbH",
     [0x06C5] = "Urban Compass, Inc",
     [0x06C6] = "Simm Tronic Limited",
-    [0x06C7] = "Somatix Inc",
     [0x06C8] = "Storz & Bickel GmbH & Co. KG",
     [0x06C9] = "MYLAPS B.V.",
     [0x06CA] = "Shenzhen Zhongguang Infotech Technology Development Co., Ltd",
@@ -1654,7 +1642,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x06D0] = "Etekcity Corporation",
     [0x06D1] = "Meyer Sound Laboratories, Incorporated",
     [0x06D2] = "CeoTronics AG",
-    [0x06D4] = "DYNAKODE TECHNOLOGY PRIVATE LIMITED",
     [0x06D5] = "Sensirion AG",
     [0x06D6] = "JCT Healthcare Pty Ltd",
     [0x06D7] = "FUBA Automotive Electronics GmbH",
@@ -1678,7 +1665,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x06E9] = "Zmartfun Electronics, Inc.",
     [0x06EA] = "SafeLine Sweden AB",
     [0x06EB] = "Houston Radar LLC",
-    [0x06EC] = "Sigur",
     [0x06ED] = "J Neades Ltd",
     [0x06EF] = "ALCARE Co., Ltd.",
     [0x06F0] = "Chargy Technologies, SL",
@@ -1707,7 +1693,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0707] = "Essity Hygiene and Health Aktiebolag",
     [0x0708] = "Be Interactive Co., Ltd",
     [0x0709] = "Carewear Corp.",
-    [0x070A] = "Huf Hülsbeck & Fürst GmbH & Co. KG",
     [0x070B] = "Element Products, Inc.",
     [0x070C] = "Beijing Winner Microelectronics Co.,Ltd",
     [0x070D] = "SmartSnugg Pty Ltd",
@@ -1807,7 +1792,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0770] = "InnoCon Medical ApS",
     [0x0771] = "Corvex Connected Safety",
     [0x0772] = "Thirdwayv Inc.",
-    [0x0773] = "Echoflex Solutions Inc.",
     [0x0774] = "C-MAX Asia Limited",
     [0x0775] = "4eBusiness GmbH",
     [0x0776] = "Cyber Transport Control GmbH",
@@ -1825,7 +1809,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0783] = "ESEMBER LIMITED LIABILITY COMPANY",
     [0x0784] = "audifon GmbH & Co. KG",
     [0x0785] = "O2 Micro, Inc.",
-    [0x0786] = "HLP Controls Pty Limited",
     [0x0788] = "BubblyNet, LLC",
     [0x0789] = "PCB Piezotronics, Inc.",
     [0x078A] = "The Wildflower Foundation",
@@ -1851,7 +1834,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x079E] = "Smartloxx GmbH",
     [0x079F] = "Pune Scientific LLP",
     [0x07A0] = "Regent Beleuchtungskorper AG",
-    [0x07A1] = "Apollo Neuroscience, Inc.",
     [0x07A2] = "Roku, Inc.",
     [0x07A4] = "Xiamen Mage Information Technology Co., Ltd.",
     [0x07A5] = "RAB Lighting, Inc.",
@@ -1874,10 +1856,8 @@ static const char * const bt_assigned_company_names[] = {
     [0x07B6] = "Soundbrenner Limited",
     [0x07B7] = "ETABLISSEMENTS GEORGES RENAULT",
     [0x07B8] = "iSwip",
-    [0x07B9] = "Epona Biotec Limited",
     [0x07BA] = "Battery-Biz Inc.",
     [0x07BB] = "EPIC S.R.L.",
-    [0x07BC] = "KD CIRCUITS LLC",
     [0x07BD] = "Genedrive Diagnostics Ltd",
     [0x07BE] = "Axentia Technologies AB",
     [0x07BF] = "REGULA Ltd.",
@@ -1890,13 +1870,12 @@ static const char * const bt_assigned_company_names[] = {
     [0x07C7] = "iaconicDesign Inc.",
     [0x07C8] = "WRLDS Creations AB",
     [0x07C9] = "Skullcandy, Inc.",
-    [0x07CA] = "Modul-System HH AB",
     [0x07CB] = "West Pharmaceutical Services, Inc.",
     [0x07CC] = "Barnacle Systems Inc.",
     [0x07CD] = "Smart Wave Technologies Canada Inc",
     [0x07CE] = "Shanghai Top-Chip Microelectronics Tech. Co., LTD",
     [0x07CF] = "NeoSensory, Inc.",
-    [0x07D0] = "Hangzhou Tuya Information  Technology Co., Ltd",
+    [0x07D0] = "Hangzhou Tuya Information Technology Co., Ltd",
     [0x07D1] = "Shanghai Panchip Microelectronics Co., Ltd",
     [0x07D2] = "React Accessibility Limited",
     [0x07D3] = "LIVNEX Co.,Ltd.",
@@ -1913,7 +1892,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x07DE] = "Unlimited Engineering SL",
     [0x07DF] = "Snap-on Incorporated",
     [0x07E0] = "Edifier International Limited",
-    [0x07E1] = "Lucie Labs",
     [0x07E2] = "Alfred Kaercher SE & Co. KG",
     [0x07E3] = "Airoha Technology Corp.",
     [0x07E4] = "Geeksme S.L.",
@@ -1937,7 +1915,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x07F6] = "Shenzhen TonliScience and Technology Development Co.,Ltd",
     [0x07F7] = "Cesar Systems Ltd.",
     [0x07F8] = "quip NYC Inc.",
-    [0x07F9] = "Direct Communication Solutions, Inc.",
     [0x07FA] = "Klipsch Group, Inc.",
     [0x07FB] = "Access Co., Ltd",
     [0x07FC] = "Renault SA",
@@ -1979,7 +1956,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0820] = "Brilliant Home Technology, Inc.",
     [0x0821] = "INOVA Geophysical, Inc.",
     [0x0822] = "adafruit industries",
-    [0x0823] = "Nexite Ltd",
     [0x0824] = "8Power Limited",
     [0x0825] = "CME PTE. LTD.",
     [0x0826] = "Hyundai Motor Company",
@@ -2092,7 +2068,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0895] = "Gimer medical",
     [0x0896] = "Nokian Renkaat Oyj",
     [0x0897] = "Current Lighting Solutions LLC",
-    [0x0898] = "Sensibo, Inc.",
     [0x0899] = "SFS unimarket AG",
     [0x089A] = "Private limited company \"Teltonika\"",
     [0x089B] = "Saucon Technologies",
@@ -2120,7 +2095,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x08B2] = "PF SCHWEISSTECHNOLOGIE GMBH",
     [0x08B3] = "IONIQ Skincare GmbH & Co. KG",
     [0x08B4] = "Sengled Co., Ltd.",
-    [0x08B5] = "TransferFi",
     [0x08B6] = "Boehringer Ingelheim Vetmedica GmbH",
     [0x08B7] = "ABB Inc",
     [0x08B8] = "Check Technology Solutions LLC",
@@ -2136,7 +2110,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x08C2] = "Lindinvent AB",
     [0x08C3] = "CHIPOLO d.o.o.",
     [0x08C5] = "J. Wagner GmbH",
-    [0x08C6] = "Integra Optics Inc",
     [0x08C7] = "Monadnock Systems Ltd.",
     [0x08C8] = "Liteboxer Technologies Inc.",
     [0x08C9] = "Noventa AG",
@@ -2187,7 +2160,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x08F7] = "MTD Products Inc & Affiliates",
     [0x08F8] = "instagrid GmbH",
     [0x08F9] = "Spacelabs Medical Inc.",
-    [0x08FA] = "Troo Corporation",
     [0x08FB] = "Darkglass Electronics Oy",
     [0x08FC] = "Hill-Rom",
     [0x08FD] = "BioIntelliSense, Inc.",
@@ -2206,7 +2178,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x090A] = "Zhuhai Hoksi Technology CO.,LTD",
     [0x090B] = "EMBR labs, INC",
     [0x090C] = "Radiawave Technologies Co.,Ltd.",
-    [0x090D] = "IOT Invent GmbH",
     [0x090E] = "OPTIMUSIOT TECH LLP",
     [0x090F] = "VC Inc.",
     [0x0910] = "ASR Microelectronics (Shanghai) Co., Ltd.",
@@ -2217,7 +2188,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0915] = "Honda Motor Co., Ltd.",
     [0x0916] = "Ambient Sensors LLC",
     [0x0917] = "ASR Microelectronics(ShenZhen)Co., Ltd.",
-    [0x0918] = "Technosphere Labs Pvt. Ltd.",
     [0x0919] = "NO SMD LIMITED",
     [0x091A] = "Albertronic BV",
     [0x091B] = "Luminostics, Inc.",
@@ -2228,7 +2198,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0921] = "KAHA PTE. LTD.",
     [0x0922] = "Shanghai MXCHIP Information Technology Co., Ltd.",
     [0x0923] = "JSB TECH PTE LTD",
-    [0x0924] = "Fundacion Tecnalia Research and Innovation",
     [0x0925] = "Yukai Engineering Inc.",
     [0x0926] = "Gooligum Technologies Pty Ltd",
     [0x0927] = "ROOQ GmbH",
@@ -2242,7 +2211,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x092F] = "C.O.B.O. SpA",
     [0x0930] = "James Walker RotaBolt Limited",
     [0x0931] = "BREATHINGS Co., Ltd.",
-    [0x0932] = "BarVision, LLC",
     [0x0933] = "SRAM",
     [0x0934] = "KiteSpring Inc.",
     [0x0935] = "Reconnect, Inc.",
@@ -2298,13 +2266,10 @@ static const char * const bt_assigned_company_names[] = {
     [0x0969] = "Woan Technology (Shenzhen) Co., Ltd.",
     [0x096A] = "dricos, Inc.",
     [0x096B] = "Guide ID B.V.",
-    [0x096C] = "9374-7319 Quebec inc",
     [0x096D] = "Gunwerks, LLC",
     [0x096E] = "Band Industries, inc.",
-    [0x096F] = "Lund Motion Products, Inc.",
     [0x0970] = "IBA Dosimetry GmbH",
     [0x0971] = "GA",
-    [0x0972] = "Closed Joint Stock Company \"Zavod Flometr\" (\"Zavod Flometr\" CJSC)",
     [0x0973] = "Popit Oy",
     [0x0974] = "ABEYE",
     [0x0975] = "BlueIOT(Beijing) Technology Co.,Ltd",
@@ -2323,7 +2288,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0982] = "ELPRO-BUCHS AG",
     [0x0983] = "Feedback Sports LLC",
     [0x0984] = "TeraTron GmbH",
-    [0x0985] = "Lumos Health Inc.",
     [0x0986] = "Cello Hill, LLC",
     [0x0987] = "TSE BRAKES, INC.",
     [0x0988] = "BHM-Tech Produktionsgesellschaft m.b.H",
@@ -2407,12 +2371,10 @@ static const char * const bt_assigned_company_names[] = {
     [0x09D9] = "VivoSensMedical GmbH",
     [0x09DA] = "Nagravision SA",
     [0x09DB] = "Bionic Avionics Inc.",
-    [0x09DC] = "AON2 Ltd.",
     [0x09DD] = "Innoware Development AB",
     [0x09DE] = "JLD Technology Solutions, LLC",
     [0x09DF] = "Magnus Technology Sdn Bhd",
     [0x09E1] = "Tag-N-Trac Inc",
-    [0x09E2] = "Wuhan Linptech Co.,Ltd.",
     [0x09E3] = "Friday Home Aps",
     [0x09E4] = "CPS AS",
     [0x09E5] = "Mobilogix",
@@ -2439,7 +2401,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x09FA] = "Listen Technologies Corporation",
     [0x09FB] = "TOITU CO., LTD.",
     [0x09FC] = "Confidex",
-    [0x09FD] = "Keep Technologies, Inc.",
     [0x09FE] = "Lichtvision Engineering GmbH",
     [0x09FF] = "AIRSTAR",
     [0x0A00] = "Ampler Bikes OU",
@@ -2452,7 +2413,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0A07] = "Reflow Pty Ltd",
     [0x0A08] = "Oras Oy",
     [0x0A0A] = "Volan Technology Inc.",
-    [0x0A0B] = "SIANA Systems",
     [0x0A0C] = "Shanghai Yidian Intelligent Technology Co., Ltd.",
     [0x0A0D] = "Blue Peacock GmbH",
     [0x0A0E] = "Roland Corporation",
@@ -2463,13 +2423,12 @@ static const char * const bt_assigned_company_names[] = {
     [0x0A13] = "Tec4med LifeScience GmbH",
     [0x0A14] = "CROXEL, INC.",
     [0x0A15] = "Syng Inc",
-    [0x0A16] = "RIDE VISION LTD",
     [0x0A17] = "Plume Design Inc",
     [0x0A18] = "Cambridge Animal Technologies Ltd",
     [0x0A19] = "Maxell, Ltd.",
     [0x0A1A] = "Link Labs, Inc.",
     [0x0A1B] = "Embrava Pty Ltd",
-    [0x0A1C] = "INPEAK S.C.",
+    [0x0A1C] = "INPEAK sp. z o.o.",
     [0x0A1D] = "API-K",
     [0x0A1E] = "CombiQ AB",
     [0x0A1F] = "DeVilbiss Healthcare LLC",
@@ -2480,7 +2439,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0A24] = "Atmosic Technologies, Inc.",
     [0x0A25] = "Eran Financial Services LLC",
     [0x0A26] = "Louis Vuitton",
-    [0x0A27] = "AYU DEVICES PRIVATE LIMITED",
     [0x0A28] = "NanoFlex Power Corporation",
     [0x0A29] = "Worthcloud Technology Co.,Ltd",
     [0x0A2A] = "Yamaha Corporation",
@@ -2498,7 +2456,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0A37] = "2587702 Ontario Inc.",
     [0x0A38] = "Bouffalo Lab (Nanjing)., Ltd.",
     [0x0A39] = "BLUETICKETING SRL",
-    [0x0A3A] = "Incotex Co. Ltd.",
     [0x0A3B] = "Galileo Technology Limited",
     [0x0A3C] = "Siteco GmbH",
     [0x0A3D] = "DELABIE",
@@ -2511,7 +2468,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0A46] = "Beijing HC-Infinite Technology Limited",
     [0x0A47] = "The Wand Company Ltd",
     [0x0A48] = "JRC Mobility Inc.",
-    [0x0A49] = "Venture Research Inc.",
     [0x0A4A] = "Map Large, Inc.",
     [0x0A4B] = "MistyWest Energy and Transport Ltd.",
     [0x0A4C] = "SiFli Technologies (shanghai) Inc.",
@@ -2544,7 +2500,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0A6A] = "Scribble Design Inc.",
     [0x0A6B] = "Olympic Ophthalmics, Inc.",
     [0x0A6C] = "Pokkels",
-    [0x0A6D] = "KUUKANJYOKIN Co.,Ltd.",
     [0x0A6E] = "Pac Sane Limited",
     [0x0A6F] = "Warner Bros.",
     [0x0A70] = "Ooma",
@@ -2585,7 +2540,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0A93] = "GiPStech S.r.l.",
     [0x0A94] = "OOBIK Inc.",
     [0x0A95] = "Pamex Inc.",
-    [0x0A97] = "SensTek",
     [0x0A98] = "Foil, Inc.",
     [0x0A99] = "Shanghai high-flying electronics technology Co.,Ltd",
     [0x0A9A] = "TEMKIN ASSOCIATES, LLC",
@@ -2642,7 +2596,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0ACE] = "KOBATA GAUGE MFG. CO., LTD.",
     [0x0ACF] = "CACI Technologies",
     [0x0AD0] = "Nordic Strong ApS",
-    [0x0AD1] = "EAGLE KINGDOM TECHNOLOGIES LIMITED",
     [0x0AD2] = "Lautsprecher Teufel GmbH",
     [0x0AD3] = "SSV Software Systems GmbH",
     [0x0AD4] = "Zhuhai Pantum Electronisc Co., Ltd",
@@ -2650,7 +2603,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0AD6] = "nymea GmbH",
     [0x0AD7] = "AL-KO Geraete GmbH",
     [0x0AD8] = "Franz Kaldewei GmbH&Co KG",
-    [0x0AD9] = "Shenzhen Aimore. Co.,Ltd",
     [0x0ADA] = "Codefabrik GmbH",
     [0x0ADB] = "Reelables, Inc.",
     [0x0ADC] = "Duravit AG",
@@ -2672,7 +2624,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0AEF] = "GLP German Light Products GmbH",
     [0x0AF0] = "Leupold & Stevens, Inc.",
     [0x0AF1] = "CRADERS,CO.,LTD",
-    [0x0AF2] = "Shanghai All Link Microelectronics Co.,Ltd",
     [0x0AF3] = "701x Inc.",
     [0x0AF4] = "Radioworks Microelectronics PTY LTD",
     [0x0AF5] = "Unitech Electronic Inc.",
@@ -2694,7 +2645,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0B06] = "FAZUA GmbH",
     [0x0B07] = "Workaround Gmbh",
     [0x0B08] = "Shenzhen Qianfenyi Intelligent Technology Co., LTD",
-    [0x0B09] = "soonisys",
     [0x0B0A] = "Belun Technology Company Limited",
     [0x0B0B] = "Sanistaal A/S",
     [0x0B0C] = "BluPeak",
@@ -2712,7 +2662,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0B18] = "DECATHLON SE",
     [0x0B19] = "WBS PROJECT H PTY LTD",
     [0x0B1A] = "Roca Sanitario, S.A.",
-    [0x0B1B] = "Enerpac Tool Group Corp.",
     [0x0B1C] = "Nanoleq AG",
     [0x0B1D] = "Accelerated Systems",
     [0x0B1E] = "PB INC.",
@@ -2724,7 +2673,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0B25] = "NIBROTECH LTD",
     [0x0B26] = "Baracoda Daily Healthtech.",
     [0x0B27] = "Lumi United Technology Co., Ltd",
-    [0x0B28] = "CHACON",
     [0x0B29] = "Tech-Venom Entertainment Private Limited",
     [0x0B2B] = "MAINBOT",
     [0x0B2C] = "ILLUMAGEAR, Inc.",
@@ -2782,7 +2730,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0B64] = "NingBo klite Electric Manufacture Co.,LTD",
     [0x0B65] = "The Apache Software Foundation",
     [0x0B66] = "MITSUBISHI ELECTRIC AUTOMATION (THAILAND) COMPANY LIMITED",
-    [0x0B67] = "CleanSpace Technology Pty Ltd",
     [0x0B68] = "Quha oy",
     [0x0B69] = "Addaday",
     [0x0B6A] = "Dymo",
@@ -2822,9 +2769,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x0B8D] = "Pertech Industries Inc",
     [0x0B8E] = "Gentle Energy Corp.",
     [0x0B8F] = "Senscomm Semiconductor Co., Ltd.",
-    [0x0B90] = "Ineos Automotive Limited",
     [0x0B91] = "Alfen ICU B.V.",
-    [0x0B92] = "Citisend Solutions, SL",
     [0x0B93] = "Hangzhou BroadLink Technology Co., Ltd.",
     [0x0B94] = "Dreem SAS",
     [0x0B96] = "Telecom Design",
@@ -2890,11 +2835,10 @@ static const char * const bt_assigned_company_names[] = {
     [0x0BD4] = "ndd Medizintechnik AG",
     [0x0BD5] = "Super B Lithium Power B.V.",
     [0x0BD6] = "Shenzhen Injoinic Technology Co., Ltd.",
-    [0x0BD7] = "VINFAST TRADING AND PRODUCTION JOINT STOCK COMPANY",
     [0x0BD8] = "PURA SCENTS, INC.",
     [0x0BDA] = "Aardex Ltd.",
     [0x0BDB] = "CHAR-BROIL, LLC",
-    [0x0BDC] = "Ledworks S.r.l.",
+    [0x0BDC] = "TWINKLY SRL",
     [0x0BDD] = "Coroflo Limited",
     [0x0BDE] = "Yale",
     [0x0BDF] = "WINKEY ENTERPRISE (HONG KONG) LIMITED",
@@ -2909,7 +2853,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0BE9] = "Shindengen Electric Manufacturing Co., Ltd.",
     [0x0BEA] = "Twenty Five Seven, prodaja in storitve, d.o.o.",
     [0x0BEB] = "Luna Health, Inc.",
-    [0x0BEC] = "Miracle-Ear, Inc.",
     [0x0BED] = "CORAL-TAIYI Co. Ltd.",
     [0x0BEE] = "LINKSYS USA, INC.",
     [0x0BEF] = "Safetytest GmbH",
@@ -2995,7 +2938,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0C43] = "Berlinger & Co. AG",
     [0x0C44] = "ONCELABS LLC",
     [0x0C45] = "Brose Verwaltung SE, Bamberg",
-    [0x0C46] = "Granwin IoT Technology (Guangzhou) Co.,Ltd",
     [0x0C47] = "Epsilon Electronics,lnc",
     [0x0C48] = "VALEO MANAGEMENT SERVICES",
     [0x0C49] = "twopounds gmbh",
@@ -3029,7 +2971,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0C65] = "WAKO CO,.LTD",
     [0x0C67] = "TRACKTING S.R.L.",
     [0x0C68] = "Emerja Corporation",
-    [0x0C69] = "BLITZ electric motors. LTD",
     [0x0C6A] = "CONSORCIO TRUST CONTROL - NETTEL",
     [0x0C6B] = "GILSON SAS",
     [0x0C6C] = "SNIFF LOGIC LTD",
@@ -3074,13 +3015,11 @@ static const char * const bt_assigned_company_names[] = {
     [0x0C95] = "Gemstone Lights Canada Ltd.",
     [0x0C96] = "H+B Hightech GmbH",
     [0x0C97] = "Deako",
-    [0x0C98] = "MiX Telematics International (PTY) LTD",
     [0x0C99] = "Vire Health Oy",
     [0x0C9A] = "ALF Inc.",
     [0x0C9B] = "NTT sonority, Inc.",
     [0x0C9C] = "Sunstone-RTLS Ipari Szolgaltato Korlatolt Felelossegu Tarsasag",
     [0x0C9D] = "Ribbiot, INC.",
-    [0x0C9E] = "ECCEL CORPORATION SAS",
     [0x0C9F] = "Dragonfly Energy Corp.",
     [0x0CA0] = "BIGBEN",
     [0x0CA1] = "YAMAHA MOTOR CO.,LTD.",
@@ -3109,7 +3048,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0CB9] = "seca GmbH & Co. KG",
     [0x0CBA] = "Ameso Tech (OPC) Private Limited",
     [0x0CBB] = "Emlid Tech Kft.",
-    [0x0CBC] = "TROX GmbH",
     [0x0CBD] = "Pricer AB",
     [0x0CBF] = "Forward Thinking Systems LLC.",
     [0x0CC0] = "Garnet Instruments Ltd.",
@@ -3142,14 +3080,14 @@ static const char * const bt_assigned_company_names[] = {
     [0x0CDB] = "Circus World Displays Limited",
     [0x0CDC] = "Ypsomed AG",
     [0x0CDD] = "Alif Semiconductor, Inc.",
-    [0x0CDF] = "SHENZHEN CHENYUN ELECTRONICS  CO., LTD",
+    [0x0CDF] = "SHENZHEN CHENYUN ELECTRONICS CO., LTD",
     [0x0CE0] = "VODALOGIC PTY LTD",
     [0x0CE1] = "Regal Beloit America, Inc.",
     [0x0CE2] = "CORVENT MEDICAL, INC.",
     [0x0CE3] = "Taiwan Fuhsing",
     [0x0CE4] = "Off-Highway Powertrain Services Germany GmbH",
     [0x0CE5] = "Amina Distribution AS",
-    [0x0CE6] = "McWong International, Inc.",
+    [0x0CE6] = "mwConnect",
     [0x0CE7] = "TAG HEUER SA",
     [0x0CE8] = "Dongguan Yougo Electronics Co.,Ltd.",
     [0x0CE9] = "PEAG, LLC dba JLab Audio",
@@ -3172,8 +3110,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0CFB] = "Tyromotion GmbH",
     [0x0CFC] = "ElectronX design",
     [0x0CFE] = "Thule Group AB",
-    [0x0CFF] = "Ergodriven Inc",
-    [0x0D00] = "Sparkpark AS",
     [0x0D01] = "KEEPEN",
     [0x0D02] = "Rocky Mountain ATV/MC Jake Wilson",
     [0x0D03] = "MakuSafe Corp",
@@ -3229,7 +3165,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0D36] = "XIHAO INTELLIGENGT TECHNOLOGY CO., LTD",
     [0x0D37] = "Zerene Inc.",
     [0x0D38] = "CycLock",
-    [0x0D39] = "Systemic Games, LLC",
     [0x0D3A] = "Frost Solutions, LLC",
     [0x0D3B] = "Lone Star Marine Pty Ltd",
     [0x0D3C] = "SIRONA Dental Systems GmbH",
@@ -3278,7 +3213,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0D69] = "AIR AROMA INTERNATIONAL PTY LTD",
     [0x0D6A] = "Helge Kaiser GmbH",
     [0x0D6B] = "Crane Payment Innovations, Inc.",
-    [0x0D6C] = "Ambient IoT Pty Ltd",
     [0x0D6D] = "DYNAMOX S/A",
     [0x0D6E] = "Look Cycle International",
     [0x0D6F] = "Closed Joint Stock Company NVP BOLID",
@@ -3504,7 +3438,7 @@ static const char * const bt_assigned_company_names[] = {
     [0x0E51] = "Dyaco International Inc.",
     [0x0E52] = "Aquana, LLC",
     [0x0E53] = "MINIRIG",
-    [0x0E54] = "Relief Technologies AS",
+    [0x0E54] = "After Technologies AS",
     [0x0E55] = "New Cosmos Electric Co., Ltd.",
     [0x0E56] = "INEPRO Metering B.V.",
     [0x0E57] = "Altina Inc.",
@@ -3524,16 +3458,13 @@ static const char * const bt_assigned_company_names[] = {
     [0x0E65] = "Daikin Industries, LTD",
     [0x0E66] = "Shenzhen Baseus Technology Co., Ltd.",
     [0x0E67] = "NEXT DEVICES LTDA",
-    [0x0E68] = "EarTex Ltd",
     [0x0E69] = "Megatronix (Beijing) Technology Co., Ltd",
     [0x0E6A] = "Hyena Inc.",
     [0x0E6B] = "Shenzhen Goodocom Information Technology Co., Ltd.",
     [0x0E6C] = "RIGH, INC.",
-    [0x0E6D] = "FEVOS LIMITED",
     [0x0E6F] = "OpConnect, Inc.",
     [0x0E70] = "Powerstick.com",
     [0x0E71] = "ENABLEWEAR LLC",
-    [0x0E72] = "TOR.AI LIMITED",
     [0x0E73] = "Adventures of the Persistently Impaired (and other tales) Limited",
     [0x0E74] = "Rocky Radios LLC",
     [0x0E75] = "Le Touch (Shenzhen) Electronics Co., Ltd.",
@@ -3584,12 +3515,10 @@ static const char * const bt_assigned_company_names[] = {
     [0x0EA2] = "QIKCONNEX LLC",
     [0x0EA3] = "OLIS ELECTRONICS, LLC",
     [0x0EA4] = "BiTECH Automotive (Wuhu) Co.,Ltd",
-    [0x0EA5] = "EasyReach Solutions Private Limited",
     [0x0EA6] = "AMG Lab LLC",
     [0x0EA7] = "BrickXter GmbH",
     [0x0EA8] = "Dongguan Trangjan Industrial Co., Ltd",
     [0x0EA9] = "Makichie Co., Ltd.",
-    [0x0EAA] = "Hive Soundz inc.",
     [0x0EAB] = "STEYR Sport GmbH",
     [0x0EAC] = "Dynetrex Solutions Inc.",
     [0x0EAD] = "OPTRON Co., Ltd.",
@@ -3603,8 +3532,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0EB5] = "Preseed Japan Corporation",
     [0x0EB6] = "Server Products, Inc.",
     [0x0EB7] = "Embedded Solutions LLC",
-    [0x0EB8] = "PARAGON ID",
-    [0x0EB9] = "egojin co,.ltd",
     [0x0EBA] = "THERMY LTD",
     [0x0EBB] = "Asahi Denso Co.,Ltd.",
     [0x0EBC] = "GP Acoustics International Limited",
@@ -3661,7 +3588,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0EEF] = "Q42 Internet B.V.",
     [0x0EF0] = "Seaward Electronic",
     [0x0EF1] = "Wuxi Does IOT Co., Ltd",
-    [0x0EF2] = "CAPTAIN BLINK",
     [0x0EF3] = "Monil AS",
     [0x0EF5] = "LS ELECTRIC Co., Ltd.",
     [0x0EF6] = "Shenzhen Cyber Innovation Technology Co., Ltd.",
@@ -3746,7 +3672,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0F45] = "Tactica Defense LLC",
     [0x0F46] = "Huizhou Meicanxin Electronics Technology Co.,Ltd",
     [0x0F47] = "Lodestar Technology Inc.",
-    [0x0F48] = "Shenzhen Xinfeiyi Technology Co., Ltd.",
     [0x0F49] = "IYO INC.",
     [0x0F4A] = "Mitsubishi Motors Corporation",
     [0x0F4B] = "desamisCo.,Ltd.",
@@ -3770,7 +3695,6 @@ static const char * const bt_assigned_company_names[] = {
     [0x0F5D] = "Leapcraft ApS",
     [0x0F5E] = "WUXI WEIDA INTELLIGENT ELECTRONICS CO.,LTD.",
     [0x0F5F] = "ROBSON SRL",
-    [0x0F60] = "Quilt Systems, Inc.",
     [0x0F61] = "HyolimXE Co., Ltd.",
     [0x0F62] = "Kehwin Technologies Co. Ltd.",
     [0x0F63] = "WATTER, Inc.",
@@ -4022,11 +3946,113 @@ static const char * const bt_assigned_company_names[] = {
     [0x10B9] = "CYNC Labs, Inc.",
     [0x10BA] = "Noble HiFi, LLC",
     [0x10BB] = "VERGESENSE INC",
+    [0x10BC] = "Harley-Davidson Motor Company",
+    [0x10BD] = "Variowell Development GmbH",
+    [0x10BE] = "UNIVERSAL REMOTE CONTROL, INC.",
+    [0x10BF] = "All Inspire Health, Inc.",
+    [0x10C0] = "Minda Corporation Ltd",
+    [0x10C1] = "Shenzhen ECO-NEWLEAF CO., LTD",
+    [0x10C2] = "SainStore Technology Co., Ltd.",
+    [0x10C3] = "TECH FASS s.r.o.",
+    [0x10C4] = "OPICA GmbH",
+    [0x10C5] = "Cardinal Scale Mfg",
+    [0x10C6] = "Piscisea Tech Inc",
+    [0x10C7] = "CHIYODA TECHNOL CORPORATION",
+    [0x10C8] = "mylife Diabetes Care AG",
+    [0x10C9] = "Tractian Technologies Inc.",
+    [0x10CA] = "FairPhone B.V",
+    [0x10CB] = "The90, Inc.",
+    [0x10CC] = "Linde GmbH",
+    [0x10CD] = "Kumho Tire",
+    [0x10CE] = "Inito Health Inc.",
+    [0x10CF] = "Tempur World, LLC",
+    [0x10D0] = "Band24, LLC",
+    [0x10D1] = "Acer Inc.",
+    [0x10D2] = "Hehku Company Oy",
+    [0x10D3] = "AGCO Corporation",
+    [0x10D4] = "Victor Hasselblad AB",
+    [0x10D5] = "IntelliDesign Pty Ltd",
+    [0x10D6] = "UltronSMART Inc.",
+    [0x10D7] = "Arashi Vision Inc.",
+    [0x10D8] = "Westfalen Aktiengesellschaft",
+    [0x10D9] = "Liebherr-Hausgeraete GmbH",
+    [0x10DA] = "SKAIChips Co.,Ltd",
+    [0x10DB] = "SZ Avinox Innovation Co., Ltd.",
+    [0x10DC] = "Spectra Precision (Kaiserslautern) GmbH",
+    [0x10DD] = "Triumph Designs Ltd",
+    [0x10DE] = "Gastron Co.,Ltd",
+    [0x10DF] = "Hawkeye Surgical Lighting LLC",
+    [0x10E0] = "Arnold & Richter Cine Technik GmbH & Co. Betriebs KG",
+    [0x10E1] = "Neurable, Inc",
+    [0x10E2] = "CAREHAWK INC.",
+    [0x10E3] = "Vybe Audio LLC",
+    [0x10E4] = "Smart Technologies ULC",
+    [0x10E5] = "Durin, inc.",
+    [0x10E6] = "KWANG YANG MOTOR CO., LTD.",
+    [0x10E7] = "Placenet Internet of Places S.L.",
+    [0x10E8] = "Liontron GmbH & Co. KG",
+    [0x10E9] = "Hankook Tire & Technology Co., Ltd.",
+    [0x10EA] = "Guangdong Youhong Medical Technology Co.,Ltd",
+    [0x10EB] = "Fontaine Fifth Wheel Company",
+    [0x10EC] = "ZELP LTD",
+    [0x10ED] = "BRITA SE",
+    [0x10EE] = "Shanghai XYLink Limited Corporation",
+    [0x10EF] = "Keto-Check Inc.",
+    [0x10F0] = "RFID N PRINT PTY LTD",
+    [0x10F1] = "Ralston Instruments, LLC",
+    [0x10F2] = "CHIGEE TECHNOLOGY CO., LTD.",
+    [0x10F3] = "EURODIMA GmbH & CoKG",
+    [0x10F4] = "SUPERARK LTD",
+    [0x10F5] = "Shenzhen DeepX Technology Co., Ltd.",
+    [0x10F6] = "Pressure Systems International, Inc.",
+    [0x10F7] = "HEX INNOVATE (UK) LIMITED",
+    [0x10F8] = "IONLINE INTERNET SERVICE PROVIDER",
+    [0x10F9] = "Even Realities Ltd.",
+    [0x10FA] = "QPlay Ltd",
+    [0x10FB] = "Hydratune Australia Pty Ltd",
+    [0x10FC] = "CITECH CO.,LTD.",
+    [0x10FD] = "Neurabody Inc.",
+    [0x10FE] = "Daisen Electronic Industrial Co., Ltd.",
+    [0x10FF] = "Sonus Faber spa",
+    [0x1100] = "miThings",
+    [0x1101] = "Nearfaces UG (haftungsbeschränkt)",
+    [0x1102] = "Temple Private Limited",
+    [0x1103] = "BRISANT SECURE LTD",
+    [0x1104] = "Daiichi Elektronik Sanayi ve Ticaret. A.S.",
+    [0x1105] = "Cirrus Design Corporation",
+    [0x1106] = "Flicfit inc.",
+    [0x1107] = "Optrel AG",
+    [0x1108] = "BEMER Int. AG",
+    [0x1109] = "Hamodaz Corporation",
+    [0x110A] = "OnRace Motorsports",
+    [0x110B] = "SIGMA CORPORATION",
+    [0x110C] = "rescuetrack GmbH",
+    [0x110D] = "ARETA AI INC.",
+    [0x110E] = "Gigawit Electronics LTD",
+    [0x110F] = "Nylint, LLC",
+    [0x1110] = "Hamaton Inc.,",
+    [0x1111] = "RAPSODO PTE. LTD.",
+    [0x1112] = "JustTec GmbH",
+    [0x1113] = "ONXMAPS, INC",
+    [0x1114] = "Metabowerke GmbH",
+    [0x1115] = "Thermia Aktiebolag",
+    [0x1116] = "ALLRA LIMITED",
+    [0x1117] = "Tive, Inc.",
+    [0x1118] = "Villeroy & Boch AG",
+    [0x1119] = "TSUKURUBAI, LIMITED LIABILITY COMPANY",
+    [0x111A] = "BOKE Drivers Co., Ltd.",
+    [0x111B] = "DIGITANIMAL S.L.",
+    [0x111C] = "Techavtomatica",
+    [0x111D] = "Commodore International Corporation",
+    [0x111E] = "DS TAGS Group B.V.",
+    [0x111F] = "iAppliance Inc.",
+    [0x1120] = "PI-CRYSTAL INC.",
+    [0x1121] = "ennos ag",
 };
 
 const char *bt_assigned_company_name(uint16_t company_id)
 {
-    if (company_id <= 0x10BB && bt_assigned_company_names[company_id] != 0)
+    if (company_id <= 0x1121 && bt_assigned_company_names[company_id] != 0)
         return bt_assigned_company_names[company_id];
     return "Unknown";
 }
@@ -4089,4 +4115,911 @@ const char *bt_assigned_ad_type_name(uint8_t ad_type)
     if (bt_assigned_ad_type_names[ad_type] != 0)
         return bt_assigned_ad_type_names[ad_type];
     return "Unknown";
+}
+
+/* 16-bit Service / Service Class UUIDs: merged GATT service_uuids.yaml +
+ * Classic service_class.yaml (both assign 16-bit UUIDs seen in AD 0x02/0x03). */
+static const char * const bt_assigned_service_uuid_names[] = {
+    [0x1000] = "ServiceDiscoveryServerServiceClassID",
+    [0x1001] = "BrowseGroupDescriptorServiceClassID",
+    [0x1101] = "SerialPort",
+    [0x1102] = "LANAccessUsingPPP",
+    [0x1103] = "Dial-Up Networking",
+    [0x1104] = "IrMCSync",
+    [0x1105] = "OBEXObjectPush",
+    [0x1106] = "OBEX File Transfer",
+    [0x1107] = "IrMCSyncCommand",
+    [0x1108] = "Headset",
+    [0x1109] = "CordlessTelephony",
+    [0x110A] = "Audio Source",
+    [0x110B] = "Audio Sink",
+    [0x110C] = "A/V Remote Control Target",
+    [0x110D] = "Advanced Audio Distribution",
+    [0x110E] = "A/V Remote Control",
+    [0x110F] = "A/V Remote Control Controller",
+    [0x1110] = "Intercom",
+    [0x1111] = "Fax",
+    [0x1112] = "Headset Audio Gateway",
+    [0x1113] = "WAP",
+    [0x1114] = "WAP_CLIENT",
+    [0x1115] = "PANU",
+    [0x1116] = "NAP",
+    [0x1117] = "GN",
+    [0x1118] = "DirectPrinting",
+    [0x1119] = "ReferencePrinting",
+    [0x111A] = "Imaging",
+    [0x111B] = "Imaging Responder",
+    [0x111C] = "Imaging Automatic Archive",
+    [0x111D] = "Imaging Referenced Objects",
+    [0x111E] = "Hands-Free",
+    [0x111F] = "AG Hands-Free",
+    [0x1120] = "DirectPrintingReferencedObjectsService",
+    [0x1121] = "ReflectedUI",
+    [0x1122] = "BasicPrinting",
+    [0x1123] = "PrintingStatus",
+    [0x1124] = "HID",
+    [0x1125] = "HardcopyCableReplacement",
+    [0x1126] = "HCR_Print",
+    [0x1127] = "HCR_Scan",
+    [0x1128] = "Common_ISDN_Access",
+    [0x112D] = "SIM Access",
+    [0x112E] = "Phonebook Access Client",
+    [0x112F] = "Phonebook Access Server",
+    [0x1130] = "Phonebook Access Profile",
+    [0x1131] = "Headset - HS",
+    [0x1132] = "Message Access Server",
+    [0x1133] = "Message Notification Server",
+    [0x1134] = "Message Access Profile",
+    [0x1135] = "GNSS",
+    [0x1136] = "GNSS_Server",
+    [0x1137] = "3D Display",
+    [0x1138] = "3D Glasses",
+    [0x1139] = "3D Synch Profile",
+    [0x113A] = "Multi Profile Specification",
+    [0x113B] = "MPS",
+    [0x113C] = "CTN Access Service",
+    [0x113D] = "CTN Notification Service",
+    [0x113E] = "Calendar Tasks and Notes Profile",
+    [0x1200] = "PnPInformation",
+    [0x1201] = "Generic Networking",
+    [0x1202] = "GenericFileTransfer",
+    [0x1203] = "Generic Audio",
+    [0x1204] = "GenericTelephony",
+    [0x1205] = "UPNP_Service",
+    [0x1206] = "UPNP_IP_Service",
+    [0x1300] = "ESDP_UPNP_IP_PAN",
+    [0x1301] = "ESDP_UPNP_IP_LAP",
+    [0x1302] = "ESDP_UPNP_L2CAP",
+    [0x1303] = "Video Source",
+    [0x1304] = "Video Sink",
+    [0x1305] = "Video Distribution",
+    [0x1400] = "HDP",
+    [0x1401] = "HDP Source",
+    [0x1402] = "HDP Sink",
+    [0x1800] = "GAP",
+    [0x1801] = "GATT",
+    [0x1802] = "Immediate Alert",
+    [0x1803] = "Link Loss",
+    [0x1804] = "Tx Power",
+    [0x1805] = "Current Time",
+    [0x1806] = "Reference Time Update",
+    [0x1807] = "Next DST Change",
+    [0x1808] = "Glucose",
+    [0x1809] = "Health Thermometer",
+    [0x180A] = "Device Information",
+    [0x180D] = "Heart Rate",
+    [0x180E] = "Phone Alert Status",
+    [0x180F] = "Battery",
+    [0x1810] = "Blood Pressure",
+    [0x1811] = "Alert Notification",
+    [0x1812] = "Human Interface Device",
+    [0x1813] = "Scan Parameters",
+    [0x1814] = "Running Speed and Cadence",
+    [0x1815] = "Automation IO",
+    [0x1816] = "Cycling Speed and Cadence",
+    [0x1818] = "Cycling Power",
+    [0x1819] = "Location and Navigation",
+    [0x181A] = "Environmental Sensing",
+    [0x181B] = "Body Composition",
+    [0x181C] = "User Data",
+    [0x181D] = "Weight Scale",
+    [0x181E] = "Bond Management",
+    [0x181F] = "Continuous Glucose Monitoring",
+    [0x1820] = "Internet Protocol Support",
+    [0x1821] = "Indoor Positioning",
+    [0x1822] = "Pulse Oximeter",
+    [0x1823] = "HTTP Proxy",
+    [0x1824] = "Transport Discovery",
+    [0x1825] = "Object Transfer",
+    [0x1826] = "Fitness Machine",
+    [0x1827] = "Mesh Provisioning",
+    [0x1828] = "Mesh Proxy",
+    [0x1829] = "Reconnection Configuration",
+    [0x183A] = "Insulin Delivery",
+    [0x183B] = "Binary Sensor",
+    [0x183C] = "Emergency Configuration",
+    [0x183D] = "Authorization Control",
+    [0x183E] = "Physical Activity Monitor",
+    [0x183F] = "Elapsed Time",
+    [0x1840] = "Generic Health Sensor",
+    [0x1843] = "Audio Input Control",
+    [0x1844] = "Volume Control",
+    [0x1845] = "Volume Offset Control",
+    [0x1846] = "Coordinated Set Identification",
+    [0x1847] = "Device Time",
+    [0x1848] = "Media Control",
+    [0x1849] = "Generic Media Control",
+    [0x184A] = "Constant Tone Extension",
+    [0x184B] = "Telephone Bearer",
+    [0x184C] = "Generic Telephone Bearer",
+    [0x184D] = "Microphone Control",
+    [0x184E] = "Audio Stream Control",
+    [0x184F] = "Broadcast Audio Scan",
+    [0x1850] = "Published Audio Capabilities",
+    [0x1851] = "Basic Audio Announcement",
+    [0x1852] = "Broadcast Audio Announcement",
+    [0x1853] = "Common Audio",
+    [0x1854] = "Hearing Access",
+    [0x1855] = "Telephony and Media Audio",
+    [0x1856] = "Public Broadcast Announcement",
+    [0x1857] = "Electronic Shelf Label",
+    [0x1858] = "Gaming Audio",
+    [0x1859] = "Mesh Proxy Solicitation",
+    [0x185A] = "Industrial Measurement Device",
+    [0x185B] = "Ranging",
+    [0x185C] = "HID ISO",
+    [0x185D] = "Cookware",
+    [0x185E] = "Voice Assistant",
+    [0x185F] = "Generic Voice Assistant",
+    [0x1860] = "Tire Pressure Monitoring System",
+};
+
+const char *bt_assigned_service_uuid_name(uint16_t uuid)
+{
+    if (uuid <= 0x1860 && bt_assigned_service_uuid_names[uuid] != 0)
+        return bt_assigned_service_uuid_names[uuid];
+    return "Unknown";
+}
+
+/* GAP Appearance values (appearance_values.yaml): value = category<<6 | subcategory. */
+static const char * const bt_appearance_category_names[] = {
+    [0x00] = "Unknown",
+    [0x01] = "Phone",
+    [0x02] = "Computer",
+    [0x03] = "Watch",
+    [0x04] = "Clock",
+    [0x05] = "Display",
+    [0x06] = "Remote Control",
+    [0x07] = "Eye-glasses",
+    [0x08] = "Tag",
+    [0x09] = "Keyring",
+    [0x0A] = "Media Player",
+    [0x0B] = "Barcode Scanner",
+    [0x0C] = "Thermometer",
+    [0x0D] = "Heart Rate Sensor",
+    [0x0E] = "Blood Pressure",
+    [0x0F] = "Human Interface Device",
+    [0x10] = "Glucose Meter",
+    [0x11] = "Running Walking Sensor",
+    [0x12] = "Cycling",
+    [0x13] = "Control Device",
+    [0x14] = "Network Device",
+    [0x15] = "Sensor",
+    [0x16] = "Light Fixtures",
+    [0x17] = "Fan",
+    [0x18] = "HVAC",
+    [0x19] = "Air Conditioning",
+    [0x1A] = "Humidifier",
+    [0x1B] = "Heating",
+    [0x1C] = "Access Control",
+    [0x1D] = "Motorized Device",
+    [0x1E] = "Power Device",
+    [0x1F] = "Light Source",
+    [0x20] = "Window Covering",
+    [0x21] = "Audio Sink",
+    [0x22] = "Audio Source",
+    [0x23] = "Motorized Vehicle",
+    [0x24] = "Domestic Appliance",
+    [0x25] = "Wearable Audio Device",
+    [0x26] = "Aircraft",
+    [0x27] = "AV Equipment",
+    [0x28] = "Display Equipment",
+    [0x29] = "Hearing aid",
+    [0x2A] = "Gaming",
+    [0x2B] = "Signage",
+    [0x31] = "Pulse Oximeter",
+    [0x32] = "Weight Scale",
+    [0x33] = "Personal Mobility Device",
+    [0x34] = "Continuous Glucose Monitor",
+    [0x35] = "Insulin Pump",
+    [0x36] = "Medication Delivery",
+    [0x37] = "Spirometer",
+    [0x51] = "Outdoor Sports Activity",
+    [0x52] = "Industrial Measurement Device",
+    [0x53] = "Industrial Tools",
+    [0x54] = "Cookware Device",
+};
+
+const char *bt_assigned_appearance_category(uint16_t appearance)
+{
+    unsigned int cat = (appearance >> 6u) & 0xFFu;
+    if (cat <= 0x54 && bt_appearance_category_names[cat] != 0)
+        return bt_appearance_category_names[cat];
+    return "Unknown";
+}
+
+const char *bt_assigned_appearance_subcategory(uint16_t appearance)
+{
+    unsigned int cat = (appearance >> 6u) & 0xFFu;
+    unsigned int sub = appearance & 0x3Fu;
+    switch (cat) {
+    case 0x02: /* Computer */
+        switch (sub) {
+        case 0x01: return "Desktop Workstation";
+        case 0x02: return "Server-class Computer";
+        case 0x03: return "Laptop";
+        case 0x04: return "Handheld PC/PDA (clamshell)";
+        case 0x05: return "Palm-size PC/PDA";
+        case 0x06: return "Wearable computer (watch size)";
+        case 0x07: return "Tablet";
+        case 0x08: return "Docking Station";
+        case 0x09: return "All in One";
+        case 0x0A: return "Blade Server";
+        case 0x0B: return "Convertible";
+        case 0x0C: return "Detachable";
+        case 0x0D: return "IoT Gateway";
+        case 0x0E: return "Mini PC";
+        case 0x0F: return "Stick PC";
+        default: return "";
+        }
+    case 0x03: /* Watch */
+        switch (sub) {
+        case 0x01: return "Sports Watch";
+        case 0x02: return "Smartwatch";
+        default: return "";
+        }
+    case 0x0C: /* Thermometer */
+        switch (sub) {
+        case 0x01: return "Ear Thermometer";
+        default: return "";
+        }
+    case 0x0D: /* Heart Rate Sensor */
+        switch (sub) {
+        case 0x01: return "Heart Rate Belt";
+        default: return "";
+        }
+    case 0x0E: /* Blood Pressure */
+        switch (sub) {
+        case 0x01: return "Arm Blood Pressure";
+        case 0x02: return "Wrist Blood Pressure";
+        default: return "";
+        }
+    case 0x0F: /* Human Interface Device */
+        switch (sub) {
+        case 0x01: return "Keyboard";
+        case 0x02: return "Mouse";
+        case 0x03: return "Joystick";
+        case 0x04: return "Gamepad";
+        case 0x05: return "Digitizer Tablet";
+        case 0x06: return "Card Reader";
+        case 0x07: return "Digital Pen";
+        case 0x08: return "Barcode Scanner";
+        case 0x09: return "Touchpad";
+        case 0x0A: return "Presentation Remote";
+        default: return "";
+        }
+    case 0x11: /* Running Walking Sensor */
+        switch (sub) {
+        case 0x01: return "In-Shoe Running Walking Sensor";
+        case 0x02: return "On-Shoe Running Walking Sensor";
+        case 0x03: return "On-Hip Running Walking Sensor";
+        default: return "";
+        }
+    case 0x12: /* Cycling */
+        switch (sub) {
+        case 0x01: return "Cycling Computer";
+        case 0x02: return "Speed Sensor";
+        case 0x03: return "Cadence Sensor";
+        case 0x04: return "Power Sensor";
+        case 0x05: return "Speed and Cadence Sensor";
+        default: return "";
+        }
+    case 0x13: /* Control Device */
+        switch (sub) {
+        case 0x01: return "Switch";
+        case 0x02: return "Multi-switch";
+        case 0x03: return "Button";
+        case 0x04: return "Slider";
+        case 0x05: return "Rotary Switch";
+        case 0x06: return "Touch Panel";
+        case 0x07: return "Single Switch";
+        case 0x08: return "Double Switch";
+        case 0x09: return "Triple Switch";
+        case 0x0A: return "Battery Switch";
+        case 0x0B: return "Energy Harvesting Switch";
+        case 0x0C: return "Push Button";
+        case 0x0D: return "Dial";
+        default: return "";
+        }
+    case 0x14: /* Network Device */
+        switch (sub) {
+        case 0x01: return "Access Point";
+        case 0x02: return "Mesh Device";
+        case 0x03: return "Mesh Network Proxy";
+        default: return "";
+        }
+    case 0x15: /* Sensor */
+        switch (sub) {
+        case 0x01: return "Motion Sensor";
+        case 0x02: return "Air quality Sensor";
+        case 0x03: return "Temperature Sensor";
+        case 0x04: return "Humidity Sensor";
+        case 0x05: return "Leak Sensor";
+        case 0x06: return "Smoke Sensor";
+        case 0x07: return "Occupancy Sensor";
+        case 0x08: return "Contact Sensor";
+        case 0x09: return "Carbon Monoxide Sensor";
+        case 0x0A: return "Carbon Dioxide Sensor";
+        case 0x0B: return "Ambient Light Sensor";
+        case 0x0C: return "Energy Sensor";
+        case 0x0D: return "Color Light Sensor";
+        case 0x0E: return "Rain Sensor";
+        case 0x0F: return "Fire Sensor";
+        case 0x10: return "Wind Sensor";
+        case 0x11: return "Proximity Sensor";
+        case 0x12: return "Multi-Sensor";
+        case 0x13: return "Flush Mounted Sensor";
+        case 0x14: return "Ceiling Mounted Sensor";
+        case 0x15: return "Wall Mounted Sensor";
+        case 0x16: return "Multisensor";
+        case 0x17: return "Energy Meter";
+        case 0x18: return "Flame Detector";
+        case 0x19: return "Vehicle Tire Pressure Sensor";
+        default: return "";
+        }
+    case 0x16: /* Light Fixtures */
+        switch (sub) {
+        case 0x01: return "Wall Light";
+        case 0x02: return "Ceiling Light";
+        case 0x03: return "Floor Light";
+        case 0x04: return "Cabinet Light";
+        case 0x05: return "Desk Light";
+        case 0x06: return "Troffer Light";
+        case 0x07: return "Pendant Light";
+        case 0x08: return "In-ground Light";
+        case 0x09: return "Flood Light";
+        case 0x0A: return "Underwater Light";
+        case 0x0B: return "Bollard with Light";
+        case 0x0C: return "Pathway Light";
+        case 0x0D: return "Garden Light";
+        case 0x0E: return "Pole-top Light";
+        case 0x0F: return "Spotlight";
+        case 0x10: return "Linear Light";
+        case 0x11: return "Street Light";
+        case 0x12: return "Shelves Light";
+        case 0x13: return "Bay Light";
+        case 0x14: return "Emergency Exit Light";
+        case 0x15: return "Light Controller";
+        case 0x16: return "Light Driver";
+        case 0x17: return "Bulb";
+        case 0x18: return "Low-bay Light";
+        case 0x19: return "High-bay Light";
+        default: return "";
+        }
+    case 0x17: /* Fan */
+        switch (sub) {
+        case 0x01: return "Ceiling Fan";
+        case 0x02: return "Axial Fan";
+        case 0x03: return "Exhaust Fan";
+        case 0x04: return "Pedestal Fan";
+        case 0x05: return "Desk Fan";
+        case 0x06: return "Wall Fan";
+        default: return "";
+        }
+    case 0x18: /* HVAC */
+        switch (sub) {
+        case 0x01: return "Thermostat";
+        case 0x02: return "Humidifier";
+        case 0x03: return "De-humidifier";
+        case 0x04: return "Heater";
+        case 0x05: return "Radiator";
+        case 0x06: return "Boiler";
+        case 0x07: return "Heat Pump";
+        case 0x08: return "Infrared Heater";
+        case 0x09: return "Radiant Panel Heater";
+        case 0x0A: return "Fan Heater";
+        case 0x0B: return "Air Curtain";
+        default: return "";
+        }
+    case 0x1B: /* Heating */
+        switch (sub) {
+        case 0x01: return "Radiator";
+        case 0x02: return "Boiler";
+        case 0x03: return "Heat Pump";
+        case 0x04: return "Infrared Heater";
+        case 0x05: return "Radiant Panel Heater";
+        case 0x06: return "Fan Heater";
+        case 0x07: return "Air Curtain";
+        default: return "";
+        }
+    case 0x1C: /* Access Control */
+        switch (sub) {
+        case 0x01: return "Access Door";
+        case 0x02: return "Garage Door";
+        case 0x03: return "Emergency Exit Door";
+        case 0x04: return "Access Lock";
+        case 0x05: return "Elevator";
+        case 0x06: return "Window";
+        case 0x07: return "Entrance Gate";
+        case 0x08: return "Door Lock";
+        case 0x09: return "Locker";
+        default: return "";
+        }
+    case 0x1D: /* Motorized Device */
+        switch (sub) {
+        case 0x01: return "Motorized Gate";
+        case 0x02: return "Awning";
+        case 0x03: return "Blinds or Shades";
+        case 0x04: return "Curtains";
+        case 0x05: return "Screen";
+        default: return "";
+        }
+    case 0x1E: /* Power Device */
+        switch (sub) {
+        case 0x01: return "Power Outlet";
+        case 0x02: return "Power Strip";
+        case 0x03: return "Plug";
+        case 0x04: return "Power Supply";
+        case 0x05: return "LED Driver";
+        case 0x06: return "Fluorescent Lamp Gear";
+        case 0x07: return "HID Lamp Gear";
+        case 0x08: return "Charge Case";
+        case 0x09: return "Power Bank";
+        default: return "";
+        }
+    case 0x1F: /* Light Source */
+        switch (sub) {
+        case 0x01: return "Incandescent Light Bulb";
+        case 0x02: return "LED Lamp";
+        case 0x03: return "HID Lamp";
+        case 0x04: return "Fluorescent Lamp";
+        case 0x05: return "LED Array";
+        case 0x06: return "Multi-Color LED Array";
+        case 0x07: return "Low voltage halogen";
+        case 0x08: return "Organic light emitting diode (OLED)";
+        default: return "";
+        }
+    case 0x20: /* Window Covering */
+        switch (sub) {
+        case 0x01: return "Window Shades";
+        case 0x02: return "Window Blinds";
+        case 0x03: return "Window Awning";
+        case 0x04: return "Window Curtain";
+        case 0x05: return "Exterior Shutter";
+        case 0x06: return "Exterior Screen";
+        default: return "";
+        }
+    case 0x21: /* Audio Sink */
+        switch (sub) {
+        case 0x01: return "Standalone Speaker";
+        case 0x02: return "Soundbar";
+        case 0x03: return "Bookshelf Speaker";
+        case 0x04: return "Standmounted Speaker";
+        case 0x05: return "Speakerphone";
+        default: return "";
+        }
+    case 0x22: /* Audio Source */
+        switch (sub) {
+        case 0x01: return "Microphone";
+        case 0x02: return "Alarm";
+        case 0x03: return "Bell";
+        case 0x04: return "Horn";
+        case 0x05: return "Broadcasting Device";
+        case 0x06: return "Service Desk";
+        case 0x07: return "Kiosk";
+        case 0x08: return "Broadcasting Room";
+        case 0x09: return "Auditorium";
+        default: return "";
+        }
+    case 0x23: /* Motorized Vehicle */
+        switch (sub) {
+        case 0x01: return "Car";
+        case 0x02: return "Large Goods Vehicle";
+        case 0x03: return "2-Wheeled Vehicle";
+        case 0x04: return "Motorbike";
+        case 0x05: return "Scooter";
+        case 0x06: return "Moped";
+        case 0x07: return "3-Wheeled Vehicle";
+        case 0x08: return "Light Vehicle";
+        case 0x09: return "Quad Bike";
+        case 0x0A: return "Minibus";
+        case 0x0B: return "Bus";
+        case 0x0C: return "Trolley";
+        case 0x0D: return "Agricultural Vehicle";
+        case 0x0E: return "Camper / Caravan";
+        case 0x0F: return "Recreational Vehicle / Motor Home";
+        default: return "";
+        }
+    case 0x24: /* Domestic Appliance */
+        switch (sub) {
+        case 0x01: return "Refrigerator";
+        case 0x02: return "Freezer";
+        case 0x03: return "Oven";
+        case 0x04: return "Microwave";
+        case 0x05: return "Toaster";
+        case 0x06: return "Washing Machine";
+        case 0x07: return "Dryer";
+        case 0x08: return "Coffee maker";
+        case 0x09: return "Clothes iron";
+        case 0x0A: return "Curling iron";
+        case 0x0B: return "Hair dryer";
+        case 0x0C: return "Vacuum cleaner";
+        case 0x0D: return "Robotic vacuum cleaner";
+        case 0x0E: return "Rice cooker";
+        case 0x0F: return "Clothes steamer";
+        default: return "";
+        }
+    case 0x25: /* Wearable Audio Device */
+        switch (sub) {
+        case 0x01: return "Earbud";
+        case 0x02: return "Headset";
+        case 0x03: return "Headphones";
+        case 0x04: return "Neck Band";
+        case 0x05: return "Left Earbud";
+        case 0x06: return "Right Earbud";
+        default: return "";
+        }
+    case 0x26: /* Aircraft */
+        switch (sub) {
+        case 0x01: return "Light Aircraft";
+        case 0x02: return "Microlight";
+        case 0x03: return "Paraglider";
+        case 0x04: return "Large Passenger Aircraft";
+        default: return "";
+        }
+    case 0x27: /* AV Equipment */
+        switch (sub) {
+        case 0x01: return "Amplifier";
+        case 0x02: return "Receiver";
+        case 0x03: return "Radio";
+        case 0x04: return "Tuner";
+        case 0x05: return "Turntable";
+        case 0x06: return "CD Player";
+        case 0x07: return "DVD Player";
+        case 0x08: return "Bluray Player";
+        case 0x09: return "Optical Disc Player";
+        case 0x0A: return "Set-Top Box";
+        default: return "";
+        }
+    case 0x28: /* Display Equipment */
+        switch (sub) {
+        case 0x01: return "Television";
+        case 0x02: return "Monitor";
+        case 0x03: return "Projector";
+        default: return "";
+        }
+    case 0x29: /* Hearing aid */
+        switch (sub) {
+        case 0x01: return "In-ear hearing aid";
+        case 0x02: return "Behind-ear hearing aid";
+        case 0x03: return "Cochlear Implant";
+        default: return "";
+        }
+    case 0x2A: /* Gaming */
+        switch (sub) {
+        case 0x01: return "Home Video Game Console";
+        case 0x02: return "Portable handheld console";
+        default: return "";
+        }
+    case 0x2B: /* Signage */
+        switch (sub) {
+        case 0x01: return "Digital Signage";
+        case 0x02: return "Electronic Label";
+        default: return "";
+        }
+    case 0x31: /* Pulse Oximeter */
+        switch (sub) {
+        case 0x01: return "Fingertip Pulse Oximeter";
+        case 0x02: return "Wrist Worn Pulse Oximeter";
+        default: return "";
+        }
+    case 0x33: /* Personal Mobility Device */
+        switch (sub) {
+        case 0x01: return "Powered Wheelchair";
+        case 0x02: return "Mobility Scooter";
+        default: return "";
+        }
+    case 0x35: /* Insulin Pump */
+        switch (sub) {
+        case 0x01: return "Insulin Pump, durable pump";
+        case 0x04: return "Insulin Pump, patch pump";
+        case 0x08: return "Insulin Pen";
+        default: return "";
+        }
+    case 0x37: /* Spirometer */
+        switch (sub) {
+        case 0x01: return "Handheld Spirometer";
+        default: return "";
+        }
+    case 0x51: /* Outdoor Sports Activity */
+        switch (sub) {
+        case 0x01: return "Location Display";
+        case 0x02: return "Location and Navigation Display";
+        case 0x03: return "Location Pod";
+        case 0x04: return "Location and Navigation Pod";
+        default: return "";
+        }
+    case 0x52: /* Industrial Measurement Device */
+        switch (sub) {
+        case 0x01: return "Torque Testing Device";
+        case 0x02: return "Caliper";
+        case 0x03: return "Dial Indicator";
+        case 0x04: return "Micrometer";
+        case 0x05: return "Height Gauge";
+        case 0x06: return "Force Gauge";
+        default: return "";
+        }
+    case 0x53: /* Industrial Tools */
+        switch (sub) {
+        case 0x01: return "Machine Tool Holder";
+        case 0x02: return "Generic Clamping Device";
+        case 0x03: return "Clamping Jaws/Jaw Chuck";
+        case 0x04: return "Clamping (Collet) Chuck";
+        case 0x05: return "Clamping Mandrel";
+        case 0x06: return "Vise";
+        case 0x07: return "Zero-Point Clamping System";
+        case 0x08: return "Torque Wrench";
+        case 0x09: return "Torque Screwdriver";
+        default: return "";
+        }
+    case 0x54: /* Cookware Device */
+        switch (sub) {
+        case 0x01: return "Pot and Jugs";
+        case 0x02: return "Pressure Cooker";
+        case 0x03: return "Slow Cooker";
+        case 0x04: return "Steam Cooker";
+        case 0x05: return "Saucepan";
+        case 0x06: return "Frying Pan";
+        case 0x07: return "Casserole";
+        case 0x08: return "Dutch Oven";
+        case 0x09: return "Grill Pan/Raclette Grill/Griddle Pan";
+        case 0x0A: return "Braising Pan";
+        case 0x0B: return "Wok Pan";
+        case 0x0C: return "Paella Pan";
+        case 0x0D: return "Crepe Pan";
+        case 0x0E: return "Tagine";
+        case 0x0F: return "Fondue";
+        case 0x10: return "Lid";
+        case 0x11: return "Wired Probe";
+        case 0x12: return "Wireless Probe";
+        case 0x13: return "Baking Molds";
+        case 0x14: return "Baking Tray";
+        default: return "";
+        }
+    default: return "";
+    }
+}
+
+void bt_assigned_appearance_format(uint16_t appearance, char *out, size_t cap)
+{
+    if (!out || cap == 0u)
+        return;
+    const char *cat = bt_assigned_appearance_category(appearance);
+    const char *sub = bt_assigned_appearance_subcategory(appearance);
+    if (sub && sub[0])
+        snprintf(out, cap, "%s: %s (0x%04X)", cat, sub, appearance);
+    else
+        snprintf(out, cap, "%s (0x%04X)", cat, appearance);
+}
+
+/* Class of Device (class_of_device.yaml). CoD is 24 bits: bits 23..13 major
+ * service classes, bits 12..8 major device class, bits 7..2 minor, bits 1..0
+ * format type (must be 00). */
+static const char * const bt_cod_service_names[] = {
+    [13] = "Limited Discoverable Mode",
+    [14] = "LE audio",
+    [15] = "Reserved for Future Use",
+    [16] = "Positioning (Location identification)",
+    [17] = "Networking (LAN, Ad hoc, ...)",
+    [18] = "Rendering (Printing, Speakers, ...)",
+    [19] = "Capturing (Scanner, Microphone, ...)",
+    [20] = "Object Transfer (v-Inbox, v-Folder, ...)",
+    [21] = "Audio (Speaker, Microphone, Headset service, ...)",
+    [22] = "Telephony (Cordless telephony, Modem, Headset service, ...)",
+    [23] = "Information (WEB-server, WAP-server, ...)",
+};
+
+static const char * const bt_cod_major_names[] = {
+    [0] = "Miscellaneous",
+    [1] = "Computer (desktop, notebook, PDA, organizer, ...)",
+    [2] = "Phone (cellular, cordless, pay phone, modem, ...)",
+    [3] = "LAN/Network Access Point",
+    [4] = "Audio/Video (headset, speaker, stereo, video display, VCR, ...)",
+    [5] = "Peripheral (mouse, joystick, keyboard, ...)",
+    [6] = "Imaging (printer, scanner, camera, display, ...)",
+    [7] = "Wearable",
+    [8] = "Toy",
+    [9] = "Health",
+    [31] = "Uncategorized (device code not specified)\\n",
+};
+
+const char *bt_cod_major_service_name(unsigned int bit)
+{
+    if (bit < (sizeof(bt_cod_service_names) / sizeof(bt_cod_service_names[0])) &&
+        bt_cod_service_names[bit] != 0)
+        return bt_cod_service_names[bit];
+    return (const char *)0;
+}
+
+const char *bt_cod_major_device_name(unsigned int major)
+{
+    if (major < (sizeof(bt_cod_major_names) / sizeof(bt_cod_major_names[0])) &&
+        bt_cod_major_names[major] != 0)
+        return bt_cod_major_names[major];
+    return "Unknown";
+}
+
+const char *bt_cod_minor_device_name(unsigned int major, unsigned int minor)
+{
+    switch (major) {
+    case 1: /* Computer (desktop, notebook, PDA, organizer, ...) */
+        switch (minor) {
+        case 0: return "Uncategorized (code for device not assigned)";
+        case 1: return "Desktop Workstation";
+        case 2: return "Server-class Computer";
+        case 3: return "Laptop";
+        case 4: return "Handheld PC/PDA (clamshell)";
+        case 5: return "Palm-size PC/PDA";
+        case 6: return "Wearable Computer (watch size)";
+        case 7: return "Tablet";
+        default: break;
+        }
+        return "Unknown";
+    case 2: /* Phone (cellular, cordless, pay phone, modem, ...) */
+        switch (minor) {
+        case 0: return "Uncategorized (code for device not assigned)";
+        case 1: return "Cellular";
+        case 2: return "Cordless";
+        case 3: return "Smartphone";
+        case 4: return "Wired Modem or Voice Gateway";
+        case 5: return "Common ISDN Access";
+        default: break;
+        }
+        return "Unknown";
+    case 3: /* LAN/Network Access Point */
+        switch (minor) {
+        case 0: return "Fully available";
+        case 1: return "1% to 17% utilized";
+        case 2: return "17% to 33% utilized";
+        case 3: return "33% to 50% utilized";
+        case 4: return "50% to 67% utilized";
+        case 5: return "67% to 83% utilized";
+        case 6: return "83% to 99% utilized";
+        case 7: return "No service available";
+        default: break;
+        }
+        return "Unknown";
+    case 4: /* Audio/Video (headset, speaker, stereo, video display, VCR, ...) */
+        switch (minor) {
+        case 0: return "Uncategorized (code not assigned)";
+        case 1: return "Wearable Headset Device";
+        case 2: return "Hands-free Device";
+        case 3: return "Reserved for Future Use";
+        case 4: return "Microphone";
+        case 5: return "Loudspeaker";
+        case 6: return "Headphones";
+        case 7: return "Portable Audio";
+        case 8: return "Car Audio";
+        case 9: return "Set-top box";
+        case 10: return "HiFi Audio Device";
+        case 11: return "VCR";
+        case 12: return "Video Camera";
+        case 13: return "Camcorder";
+        case 14: return "Video Monitor";
+        case 15: return "Video Display and Loudspeaker";
+        case 16: return "Video Conferencing";
+        case 17: return "Reserved for Future Use";
+        case 18: return "Gaming/Toy";
+        case 19: return "Hearing Aid";
+        case 20: return "Glasses";
+        default: break;
+        }
+        return "Unknown";
+    case 5: /* Peripheral (mouse, joystick, keyboard, ...) */
+        switch (minor) {
+        case 0: return "Uncategorized (code not assigned)";
+        case 1: return "Keyboard";
+        case 2: return "Pointing Device";
+        case 3: return "Combo Keyboard/Pointing Device";
+        default: break;
+        }
+        return "Unknown";
+    case 6: /* Imaging (printer, scanner, camera, display, ...) */
+        switch (minor) {
+        case 0: return "Uncategorized (default)";
+        default: break;
+        }
+        /* minor_bits variant (Imaging): individual capability bits */
+        switch (minor) {
+        case 4: return "Display";
+        case 5: return "Camera";
+        case 6: return "Scanner";
+        case 7: return "Printer";
+        default: break;
+        }
+        return "Unknown";
+    case 7: /* Wearable */
+        switch (minor) {
+        case 1: return "Wristwatch";
+        case 2: return "Pager";
+        case 3: return "Jacket";
+        case 4: return "Helmet";
+        case 5: return "Glasses";
+        case 6: return "Pin (e.g., lapel pin, broach, badge)";
+        default: break;
+        }
+        return "Unknown";
+    case 8: /* Toy */
+        switch (minor) {
+        case 1: return "Robot";
+        case 2: return "Vehicle";
+        case 3: return "Doll/Action Figure";
+        case 4: return "Controller";
+        case 5: return "Game";
+        default: break;
+        }
+        return "Unknown";
+    case 9: /* Health */
+        switch (minor) {
+        case 0: return "Undefined";
+        case 1: return "Blood Pressure Monitor";
+        case 2: return "Thermometer";
+        case 3: return "Weighing Scale";
+        case 4: return "Glucose Meter";
+        case 5: return "Pulse Oximeter";
+        case 6: return "Heart/Pulse Rate Monitor";
+        case 7: return "Health Data Display";
+        case 8: return "Step Counter";
+        case 9: return "Body Composition Analyzer";
+        case 10: return "Peak Flow Monitor";
+        case 11: return "Medication Monitor";
+        case 12: return "Knee Prosthesis";
+        case 13: return "Ankle Prosthesis";
+        case 14: return "Generic Health Manager";
+        case 15: return "Personal Mobility Device";
+        default: break;
+        }
+        return "Unknown";
+    default: return "Unknown";
+    }
+}
+
+void bt_cod_format(uint32_t cod, char *out, size_t cap)
+{
+    if (!out || cap == 0u)
+        return;
+    cod &= 0xFFFFFFu;
+    unsigned int major = (cod >> 8u) & 0x1Fu;
+    unsigned int minor = (cod >> 2u) & 0x3Fu;
+    const char *maj = bt_cod_major_device_name(major);
+    const char *min = bt_cod_minor_device_name(major, minor);
+    char services[160];
+    services[0] = '\0';
+    size_t pos = 0u;
+    for (unsigned int bit = 13u; bit <= 23u; bit++) {
+        if ((cod >> bit) & 1u) {
+            const char *s = bt_cod_major_service_name(bit);
+            if (!s)
+                continue;
+            int w = snprintf(services + pos,
+                             pos < sizeof(services) ? sizeof(services) - pos : 0u,
+                             "%s%s", pos ? ", " : "", s);
+            if (w > 0)
+                pos += (size_t)w;
+        }
+    }
+    if (services[0])
+        snprintf(out, cap, "%s / %s (services: %s)", maj, min, services);
+    else
+        snprintf(out, cap, "%s / %s", maj, min);
 }

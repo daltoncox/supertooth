@@ -31,6 +31,10 @@ typedef struct {
     size_t count;
     const _Atomic unsigned int *shutdown;
     unsigned long dropped;
+    /* Exhaustive replay: submit blocks while full instead of overwriting the
+     * oldest entry. Set via collector_set_blocking(); 0 preserves the
+     * overwrite-oldest live behavior. */
+    int blocking;
 } collector_t;
 
 int  collector_init(collector_t *c, size_t item_size, size_t capacity,
@@ -39,8 +43,21 @@ void collector_destroy(collector_t *c);
 
 /* Multi-producer. Copies @p item (item_size bytes) into the ring. On overflow
  * the oldest entry is discarded (overwrite-oldest) and dropped is incremented.
- * Returns 0 on success, -1 on bad arguments. */
+ * In blocking mode (see collector_set_blocking) a full queue instead waits
+ * for room, escaping on shutdown; returns -1 then. Returns 0 on success, -1
+ * on bad arguments. */
 int  collector_submit(collector_t *c, const void *item);
+
+/* Select blocking submit for exhaustive replay (see above). Safe to call any
+ * time; the submit path reads it under the queue mutex. */
+void collector_set_blocking(collector_t *c, int blocking);
+
+/* Live entry count (for quiescence checks). */
+size_t collector_count(const collector_t *c);
+
+/* Entries discarded by overwrite-oldest since init (always 0 in blocking
+ * mode until shutdown races it). */
+unsigned long collector_dropped(const collector_t *c);
 
 /* Single-consumer. Blocks until an item is available or @p shutdown is set.
  * Returns 0 and fills @p out_item on success, -1 when shutdown is requested and

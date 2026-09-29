@@ -127,6 +127,65 @@ static void print_adv_data(const uint8_t *data, unsigned int len)
             printf("Manuf    : %s (0x%04X)\n", bt_assigned_company_name(cid), cid);
         }
 
+        /* Resolve service UUIDs to names inline. */
+        if ((ad_type >= 0x02u && ad_type <= 0x07u) ||
+            ad_type == 0x14u || ad_type == 0x15u || ad_type == 0x1Fu)
+        {
+            unsigned int uuid_len = 2u;
+            if (ad_type == 0x04u || ad_type == 0x05u || ad_type == 0x1Fu)
+                uuid_len = 4u;
+            else if (ad_type == 0x06u || ad_type == 0x07u || ad_type == 0x15u)
+                uuid_len = 16u;
+            for (unsigned int j = val_begin; j + uuid_len <= val_end; j += uuid_len)
+            {
+                if (uuid_len == 2u)
+                {
+                    uint16_t uuid = (uint16_t)data[j] | ((uint16_t)data[j + 1u] << 8u);
+                    printf("Service  : %s (0x%04X)\n",
+                           bt_assigned_service_uuid_name(uuid), uuid);
+                }
+                else if (uuid_len == 4u)
+                {
+                    uint32_t uuid = (uint32_t)data[j] | ((uint32_t)data[j + 1u] << 8u) |
+                                    ((uint32_t)data[j + 2u] << 16u) | ((uint32_t)data[j + 3u] << 24u);
+                    printf("Service  : 0x%08X\n", uuid);
+                }
+                else
+                {
+                    printf("Service  : %02X%02X%02X%02X-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X\n",
+                           data[j+15u], data[j+14u], data[j+13u], data[j+12u],
+                           data[j+11u], data[j+10u], data[j+9u], data[j+8u],
+                           data[j+7u], data[j+6u], data[j+5u], data[j+4u],
+                           data[j+3u], data[j+2u], data[j+1u], data[j]);
+                }
+            }
+        }
+        if (ad_type == 0x01u && (val_end - val_begin) >= 1u)
+        {
+            char flags[64];
+            ble_adv_flags_format(data[val_begin], flags, sizeof(flags));
+            printf("Flags    : %s (0x%02X)\n", flags, data[val_begin]);
+        }
+        if (ad_type == 0x0Au && (val_end - val_begin) >= 1u)
+            printf("Tx Power : %d dBm\n", (int)(int8_t)data[val_begin]);
+        if (ad_type == 0x19u && (val_end - val_begin) >= 2u)
+        {
+            uint16_t app = (uint16_t)data[val_begin] |
+                           ((uint16_t)data[val_begin + 1u] << 8u);
+            char app_str[48];
+            bt_assigned_appearance_format(app, app_str, sizeof(app_str));
+            printf("Appear   : %s\n", app_str);
+        }
+        if (ad_type == 0x0Du && (val_end - val_begin) >= 3u)
+        {
+            uint32_t cod = (uint32_t)data[val_begin] |
+                           ((uint32_t)data[val_begin + 1u] << 8u) |
+                           ((uint32_t)data[val_begin + 2u] << 16u);
+            char cod_str[96];
+            bt_cod_format(cod, cod_str, sizeof(cod_str));
+            printf("CoD      : %s (0x%06X)\n", cod_str, cod);
+        }
+
         i += 1u + ad_len;
     }
 }

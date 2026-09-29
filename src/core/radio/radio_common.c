@@ -1,9 +1,19 @@
 #include "radio_common.h"
 
-#include "hackrf.h"
+#include "file.h"
 
+#if HAVE_HACKRF
+#include "hackrf.h"
+#endif
+#if HAVE_BLADERF
+#include "bladerf.h"
+#endif
+
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 struct radio_device
 {
@@ -15,10 +25,196 @@ const char *radio_device_type_name(radio_device_type_t type)
 {
     switch (type)
     {
+#if HAVE_HACKRF
     case RADIO_DEVICE_HACKRF:
         return "hackrf";
+#endif
+    case RADIO_DEVICE_FILE:
+        return "file";
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        return "bladerf";
+#endif
     default:
         return NULL;
+    }
+}
+
+int radio_device_type_is_live(radio_device_type_t type)
+{
+    switch (type)
+    {
+#if HAVE_HACKRF
+    case RADIO_DEVICE_HACKRF:
+        return 1;
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        return 1;
+#endif
+    default:
+        return 0;
+    }
+}
+
+void radio_gain_default(radio_device_type_t type, radio_gain_spec_t *out)
+{
+    if (!out)
+        return;
+    memset(out, 0, sizeof(*out));
+    out->present = 0;
+    out->hackrf_lna = RADIO_HACKRF_LNA_DEFAULT;
+    out->hackrf_vga = RADIO_HACKRF_VGA_DEFAULT;
+    out->hackrf_amp = 0;
+    out->bladerf_gain_db = RADIO_BLADERF_GAIN_DEFAULT;
+    (void)type;
+}
+
+/* Strict integer parse: no trailing junk, no overflow. */
+static int parse_int_strict(const char *s, long *out)
+{
+    char *end = NULL;
+    long v;
+
+    if (!s || !*s || !out)
+        return -1;
+    v = strtol(s, &end, 10);
+    if (end == s || *end != '\0')
+        return -1;
+    *out = v;
+    return 0;
+}
+
+int radio_parse_gain_spec(radio_device_type_t type, const char *str,
+                          radio_gain_spec_t *out,
+                          char *err, size_t err_len)
+{
+#define GAIN_FAIL(fmt, ...)                                             \
+    do {                                                                \
+        if (err && err_len > 0u)                                        \
+            snprintf(err, err_len, fmt, ##__VA_ARGS__);                 \
+        return -1;                                                      \
+    } while (0)
+
+    radio_gain_spec_t tmp;
+
+    if (!str || !out)
+        GAIN_FAIL("empty gain spec");
+    radio_gain_default(type, &tmp);
+
+    switch (type)
+    {
+    case RADIO_DEVICE_HACKRF:
+    {
+        /* "LNA,VGA[,AMP]": split on commas without mutating the input. */
+        const char *c1 = strchr(str, ',');
+        const char *c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+        char part[32];
+        long lna = 0, vga = 0, amp = 0;
+        size_t len;
+
+        if (!c1)
+            GAIN_FAIL("expected LNA,VGA[,AMP] (e.g. 24,18,0)");
+        if (c2 && strchr(c2 + 1, ','))
+            GAIN_FAIL("expected LNA,VGA[,AMP] (e.g. 24,18,0)");
+
+        len = (size_t)(c1 - str);
+        if (len == 0u || len >= sizeof(part))
+            GAIN_FAIL("bad LNA value");
+        memcpy(part, str, len);
+        part[len] = '\0';
+        if (parse_int_strict(part, &lna) != 0)
+            GAIN_FAIL("bad LNA value '%s'", part);
+
+        len = c2 ? (size_t)(c2 - (c1 + 1)) : strlen(c1 + 1);
+        if (len == 0u || len >= sizeof(part))
+            GAIN_FAIL("bad VGA value");
+        memcpy(part, c1 + 1, len);
+        part[len] = '\0';
+        if (parse_int_strict(part, &vga) != 0)
+            GAIN_FAIL("bad VGA value '%s'", part);
+
+        if (c2)
+        {
+            if (parse_int_strict(c2 + 1, &amp) != 0)
+                GAIN_FAIL("bad AMP value '%s'", c2 + 1);
+        }
+
+        if (lna < RADIO_HACKRF_LNA_MIN || lna > RADIO_HACKRF_LNA_MAX ||
+            (lna % 8) != 0)
+            GAIN_FAIL("LNA %ld invalid (use 0,8,16,24,32,40)", lna);
+        if (vga < RADIO_HACKRF_VGA_MIN || vga > RADIO_HACKRF_VGA_MAX ||
+            (vga % 2) != 0)
+            GAIN_FAIL("VGA %ld invalid (use an even value 0-62)", vga);
+        if (amp != 0 && amp != 1)
+            GAIN_FAIL("AMP %ld out of range (0=off, 1=on)", amp);
+
+        tmp.present = 1;
+        tmp.hackrf_lna = (int)lna;
+        tmp.hackrf_vga = (int)vga;
+        tmp.hackrf_amp = (int)amp;
+        *out = tmp;
+        return 0;
+    }
+    case RADIO_DEVICE_BLADERF:
+    {
+        long g = 0;
+        if (parse_int_strict(str, &g) != 0)
+            GAIN_FAIL("expected GAIN_DB (e.g. 30)");
+        if (g < RADIO_BLADERF_GAIN_MIN || g > RADIO_BLADERF_GAIN_MAX)
+            GAIN_FAIL("gain %ld out of range (%d-%d dB)", g,
+                      RADIO_BLADERF_GAIN_MIN, RADIO_BLADERF_GAIN_MAX);
+        tmp.present = 1;
+        tmp.bladerf_gain_db = (int)g;
+        *out = tmp;
+        return 0;
+    }
+    case RADIO_DEVICE_FILE:
+        /* Gains are meaningless for replay; accept anything, ignore it. */
+        tmp.present = 1;
+        *out = tmp;
+        return 0;
+    default:
+        GAIN_FAIL("unknown device type");
+    }
+#undef GAIN_FAIL
+}
+
+void radio_print_gain_usage(void)
+{
+    fprintf(stderr, "  %-30s RX gain: hackrf LNA,VGA[,AMP] | bladerf GAIN_DB (default: unset = device default)\n",
+            "-g, --gain SPEC");
+}
+
+void radio_print_gain_help(radio_device_type_t type)
+{
+    switch (type)
+    {
+    case RADIO_DEVICE_HACKRF:
+        fprintf(stderr,
+                "HackRF gain (-g LNA,VGA[,AMP]):\n"
+                "  LNA  0,8,16,24,32,40 dB (default %d)\n"
+                "  VGA  even 0-62 dB in 2 dB steps (default %d)\n"
+                "  AMP  0=off (default), 1=on (+14 dB)\n"
+                "  Examples: -g 24,18  -g 32,28,1\n",
+                RADIO_HACKRF_LNA_DEFAULT,
+                RADIO_HACKRF_VGA_DEFAULT);
+        break;
+    case RADIO_DEVICE_BLADERF:
+        fprintf(stderr,
+                "bladeRF gain (-g GAIN_DB):\n"
+                "  Overall RX gain %d-%d dB, manual gain control (default %d)\n"
+                "  Example: -g 30\n",
+                RADIO_BLADERF_GAIN_MIN, RADIO_BLADERF_GAIN_MAX,
+                RADIO_BLADERF_GAIN_DEFAULT);
+        break;
+    case RADIO_DEVICE_FILE:
+        fprintf(stderr,
+                "File replay ignores -g (gains are meaningless for a capture).\n");
+        break;
+    default:
+        fprintf(stderr, "Unknown device type for -g.\n");
+        break;
     }
 }
 
@@ -43,9 +239,22 @@ int radio_open(radio_device_t **out_device,
 
     switch (device_type)
     {
+#if HAVE_HACKRF
     case RADIO_DEVICE_HACKRF:
         result = hackrf_radio_open(&device->impl, device_id, dispatcher,
                                    debug_enabled);
+        break;
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        result = bladerf_radio_open(&device->impl, device_id, dispatcher,
+                                    debug_enabled);
+        break;
+#endif
+    case RADIO_DEVICE_FILE:
+        /* For file replay the "device id" is the capture path. */
+        result = file_radio_open(&device->impl, device_id, dispatcher,
+                                 debug_enabled);
         break;
     default:
         break;
@@ -68,8 +277,16 @@ int radio_configure(radio_device_t *device, const radio_stream_config_t *config)
 
     switch (device->device_type)
     {
+#if HAVE_HACKRF
     case RADIO_DEVICE_HACKRF:
         return hackrf_radio_configure(device->impl, config);
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        return bladerf_radio_configure(device->impl, config);
+#endif
+    case RADIO_DEVICE_FILE:
+        return file_radio_configure(device->impl, config);
     default:
         return -1;
     }
@@ -82,8 +299,16 @@ int radio_start_rx(radio_device_t *device)
 
     switch (device->device_type)
     {
+#if HAVE_HACKRF
     case RADIO_DEVICE_HACKRF:
         return hackrf_radio_start_rx(device->impl);
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        return bladerf_radio_start_rx(device->impl);
+#endif
+    case RADIO_DEVICE_FILE:
+        return file_radio_start_rx(device->impl);
     default:
         return -1;
     }
@@ -96,8 +321,16 @@ int radio_stop_rx(radio_device_t *device)
 
     switch (device->device_type)
     {
+#if HAVE_HACKRF
     case RADIO_DEVICE_HACKRF:
         return hackrf_radio_stop_rx(device->impl);
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        return bladerf_radio_stop_rx(device->impl);
+#endif
+    case RADIO_DEVICE_FILE:
+        return file_radio_stop_rx(device->impl);
     default:
         return -1;
     }
@@ -110,14 +343,65 @@ void radio_close(radio_device_t *device)
 
     switch (device->device_type)
     {
+#if HAVE_HACKRF
     case RADIO_DEVICE_HACKRF:
         hackrf_radio_close(device->impl);
+        break;
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        bladerf_radio_close(device->impl);
+        break;
+#endif
+    case RADIO_DEVICE_FILE:
+        file_radio_close(device->impl);
         break;
     default:
         break;
     }
 
     free(device);
+}
+
+int radio_is_finished(radio_device_t *device)
+{
+    if (!device)
+        return 0;
+
+    switch (device->device_type)
+    {
+    case RADIO_DEVICE_FILE:
+        return file_radio_is_finished(device->impl);
+#if HAVE_HACKRF
+    case RADIO_DEVICE_HACKRF:
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+#endif
+    default:
+        return 0;
+    }
+}
+
+void radio_set_replay_mode(radio_device_t *device, int exhaustive)
+{
+    if (!device)
+        return;
+
+    switch (device->device_type)
+    {
+    case RADIO_DEVICE_FILE:
+        file_radio_set_exhaustive(device->impl, exhaustive);
+        break;
+#if HAVE_HACKRF
+    case RADIO_DEVICE_HACKRF:
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+#endif
+    default:
+        break;
+    }
 }
 
 int radio_get_max_sample_rate_for_type(radio_device_type_t type,
@@ -128,8 +412,18 @@ int radio_get_max_sample_rate_for_type(radio_device_type_t type,
 
     switch (type)
     {
+#if HAVE_HACKRF
     case RADIO_DEVICE_HACKRF:
         return hackrf_radio_get_max_sample_rate(NULL, out_rate_hz);
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        return bladerf_radio_get_max_sample_rate(NULL, out_rate_hz);
+#endif
+    case RADIO_DEVICE_FILE:
+        /* Replay of an existing capture is not bound by ADC limits. */
+        *out_rate_hz = RADIO_MAX_SAMPLE_RATE_HZ;
+        return RADIO_SUCCESS;
     default:
         return -1;
     }
@@ -147,8 +441,17 @@ int radio_list_devices(radio_device_type_t device_type,
 
     switch (device_type)
     {
+#if HAVE_HACKRF
     case RADIO_DEVICE_HACKRF:
         return hackrf_list_devices(out_identifiers, out_count);
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        return bladerf_list_devices(out_identifiers, out_count);
+#endif
+    case RADIO_DEVICE_FILE:
+        /* Captures are user paths, not enumerable hardware. */
+        return RADIO_SUCCESS;
     default:
         return -1;
     }
@@ -166,8 +469,120 @@ void radio_free_device_list(char ***identifiers, size_t count)
     *identifiers = NULL;
 }
 
+static int device_entry_cmp(const void *a, const void *b)
+{
+    const radio_device_entry_t *ea = (const radio_device_entry_t *)a;
+    const radio_device_entry_t *eb = (const radio_device_entry_t *)b;
+    const char *na = radio_device_type_name(ea->type);
+    const char *nb = radio_device_type_name(eb->type);
+    int name_cmp = strcmp(na ? na : "", nb ? nb : "");
+    if (name_cmp != 0)
+        return name_cmp;
+    return strcmp(ea->id ? ea->id : "", eb->id ? eb->id : "");
+}
+
+int radio_enumerate_devices(radio_device_entry_t **out_entries,
+                            size_t *out_count)
+{
+    radio_device_entry_t *entries = NULL;
+    size_t count = 0u;
+    size_t capacity = 0u;
+
+    if (!out_entries || !out_count)
+        return -1;
+
+    *out_entries = NULL;
+    *out_count = 0u;
+
+    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT; t++)
+    {
+        radio_device_type_t type = (radio_device_type_t)t;
+        char **identifiers = NULL;
+        size_t n = 0u;
+
+        if (!radio_device_type_is_live(type) || !radio_device_type_name(type))
+            continue;
+        if (radio_list_devices(type, &identifiers, &n) != RADIO_SUCCESS)
+        {
+            radio_free_device_list(&identifiers, n);
+            continue;
+        }
+
+        for (size_t i = 0u; i < n; i++)
+        {
+            char *id;
+            if (!identifiers[i] || identifiers[i][0] == '\0')
+                continue;
+            if (count == capacity)
+            {
+                size_t grown = capacity == 0u ? 8u : capacity * 2u;
+                radio_device_entry_t *resized =
+                    (radio_device_entry_t *)realloc(entries,
+                                                    grown * sizeof(*resized));
+                if (!resized)
+                {
+                    radio_free_device_list(&identifiers, n);
+                    goto fail;
+                }
+                entries = resized;
+                capacity = grown;
+            }
+            id = (char *)malloc(strlen(identifiers[i]) + 1u);
+            if (!id)
+            {
+                radio_free_device_list(&identifiers, n);
+                goto fail;
+            }
+            strcpy(id, identifiers[i]);
+            entries[count].type = type;
+            entries[count].id = id;
+            count++;
+        }
+        radio_free_device_list(&identifiers, n);
+    }
+
+    if (count > 1u)
+        qsort(entries, count, sizeof(*entries), device_entry_cmp);
+
+    *out_entries = entries;
+    *out_count = count;
+    return RADIO_SUCCESS;
+
+fail:
+    for (size_t i = 0u; i < count; i++)
+        free(entries[i].id);
+    free(entries);
+    return -1;
+}
+
+void radio_free_device_entries(radio_device_entry_t **entries, size_t count)
+{
+    radio_device_entry_t *list;
+
+    if (!entries || !*entries)
+        return;
+
+    list = *entries;
+    for (size_t i = 0u; i < count; i++)
+        free(list[i].id);
+    free(list);
+    *entries = NULL;
+}
+
 int radio_device_exists(radio_device_type_t device_type, const char *device_id)
 {
+    /* For file replay "existence" is just path readability. */
+    if (device_type == RADIO_DEVICE_FILE)
+    {
+        struct stat st;
+        if (!device_id || device_id[0] == '\0')
+            return RADIO_DEVICE_NOT_FOUND;
+        if (stat(device_id, &st) == 0 && S_ISREG(st.st_mode) &&
+            access(device_id, R_OK) == 0)
+            return RADIO_SUCCESS;
+        return RADIO_DEVICE_NOT_FOUND;
+    }
+
     char **identifiers = NULL;
     size_t count = 0u;
     int result = radio_list_devices(device_type, &identifiers, &count);
