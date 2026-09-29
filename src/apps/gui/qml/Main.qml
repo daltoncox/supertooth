@@ -42,7 +42,7 @@ ApplicationWindow {
     }
 
     Binding {
-        target: header
+        target: sidebar
         property: "playing"
         value: receiverController.running
     }
@@ -57,17 +57,7 @@ ApplicationWindow {
             onItemSelected: function (index) {
                 stack.currentIndex = index
             }
-        }
-
-        ColumnLayout {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 0
-
-            Header {
-                id: header
-                Layout.fillWidth: true
-onPlayPauseToggled: {
+            onPlayPauseToggled: {
                 // Channel params are passed in the session's native grid:
                 // LE RF units for LE sessions, BR/EDR units otherwise.
                 var isBle = captureView.sessionTypeIndex === 1
@@ -77,8 +67,8 @@ onPlayPauseToggled: {
                                     : captureView.backendBottomChannel
                 console.log("Supertooth: play/pause toggled; running =",
                             receiverController.running,
-                            "inputType =", header.inputTypeIndex,
-                            "deviceID =", header.deviceID,
+                            "inputType =", captureView.inputType,
+                            "deviceID =", captureView.deviceID,
                             "sessionType =", captureView.sessionTypeIndex,
                             "enforceCrc =", captureView.enforceCrc,
                             "channels =", count,
@@ -89,8 +79,8 @@ onPlayPauseToggled: {
                 } else {
                     frameListModel.clear()
                     deviceListModel.clear()
-                    receiverController.start(header.inputTypeIndex,
-                                             header.deviceID,
+                    receiverController.start(captureView.inputType,
+                                             captureView.deviceID,
                                              captureView.sessionTypeIndex,
                                              captureView.enforceCrc,
                                              count,
@@ -99,30 +89,29 @@ onPlayPauseToggled: {
                                              captureView.acErrors)
                 }
             }
-            }
+        }
 
-            StackLayout {
-                id: stack
+        StackLayout {
+            id: stack
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: sidebar.selectedIndex
+
+            FrameListView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: sidebar.selectedIndex
-
-                FrameListView {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    frameModel: frameListModel
-                }
-                DeviceListView {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    deviceModel: deviceListModel
-                }
-                CaptureView {
-                    id: captureView
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    running: receiverController.running
-                }
+                frameModel: frameListModel
+            }
+            DeviceListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                deviceModel: deviceListModel
+            }
+            CaptureView {
+                id: captureView
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                running: receiverController.running
             }
         }
     }

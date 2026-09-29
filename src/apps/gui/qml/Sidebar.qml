@@ -4,8 +4,10 @@ import QtQuick.Controls
 Rectangle {
     id: sidebar
 
-    property int selectedIndex: 0
+    property int selectedIndex: 2
+    property bool playing: false
     signal itemSelected(int index)
+    signal playPauseToggled()
 
     width: 64
     color: "black"
@@ -22,6 +24,28 @@ Rectangle {
             width: 48
             height: 48
 	    antialiasing: true
+        }
+
+        // Transport control below the app icon.
+        Button {
+            id: playPauseButton
+            topInset: 0
+            bottomInset: 0
+            leftInset: 0
+            rightInset: 0
+            width: 48
+            height: 48
+
+            Image {
+                anchors.centerIn: parent
+                source: sidebar.playing ? "/assets/images/stop.svg" : "/assets/images/play.svg"
+                width: 30
+                height: 30
+            }
+
+            onClicked: {
+                sidebar.playPauseToggled()
+            }
         }
 
         // View Icon Buttons

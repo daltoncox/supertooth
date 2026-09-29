@@ -49,7 +49,6 @@ qt_add_qml_module(appSupertooth
     QML_FILES
         qml/Main.qml
         qml/Sidebar.qml
-        qml/Header.qml
         qml/views/FrameListView.qml
         qml/views/DeviceListView.qml
         qml/views/CaptureView.qml

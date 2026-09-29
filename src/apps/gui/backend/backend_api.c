@@ -63,6 +63,167 @@ void backend_set_debug(int on)
     g_gui_debug = on ? 1 : 0;
 }
 
+/* Inverse of backend_device_for_input(): BACKEND_INPUT_* for a live radio
+ * type, or -1 when the type is not a compiled-in live radio. */
+static int backend_input_for_device(radio_device_type_t type)
+{
+    switch (type)
+    {
+#if HAVE_HACKRF
+    case RADIO_DEVICE_HACKRF:
+        return BACKEND_INPUT_HACKRF;
+#endif
+#if HAVE_BLADERF
+    case RADIO_DEVICE_BLADERF:
+        return BACKEND_INPUT_BLADERF;
+#endif
+    default:
+        return -1;
+    }
+}
+
+int backend_live_input_types(int *out_types, int max)
+{
+    int n = 0;
+
+    if (!out_types || max <= 0)
+        return 0;
+    for (int t = 0; t < (int)RADIO_DEVICE_TYPE_COUNT && n < max; t++)
+    {
+        radio_device_type_t type = (radio_device_type_t)t;
+        if (!radio_device_type_is_live(type) || !radio_device_type_name(type))
+            continue;
+        int input = backend_input_for_device(type);
+        if (input < 0)
+            continue;
+        out_types[n++] = input;
+    }
+    return n;
+}
+
+int backend_input_type_label(int input_type, char *out, size_t out_len)
+{
+    const char *label = NULL;
+
+    if (!out || out_len == 0u)
+        return -1;
+    switch (input_type)
+    {
+    case BACKEND_INPUT_HACKRF:
+        label = "HackRF";
+        break;
+    case BACKEND_INPUT_BLADERF:
+        label = "bladeRF";
+        break;
+    case BACKEND_INPUT_FILE:
+        label = "File";
+        break;
+    default:
+        return -1;
+    }
+    snprintf(out, out_len, "%s", label);
+    return 0;
+}
+
+int backend_list_devices(int input_type, char ***out_identifiers,
+                         size_t *out_count)
+{
+    if (!out_identifiers || !out_count)
+        return -1;
+    *out_identifiers = NULL;
+    *out_count = 0u;
+    if (input_type == BACKEND_INPUT_FILE)
+        return 0;
+    return radio_list_devices(backend_device_for_input(input_type),
+                              out_identifiers, out_count);
+}
+
+void backend_free_device_list(char ***identifiers, size_t count)
+{
+    radio_free_device_list(identifiers, count);
+}
+
+unsigned int backend_default_bredr_count(int input_type)
+{
+    return session_default_bredr_count(backend_device_for_input(input_type));
+}
+
+unsigned int backend_default_ble_count(int input_type)
+{
+    return session_default_ble_count(backend_device_for_input(input_type));
+}
+
+unsigned int backend_max_bredr_count(int input_type)
+{
+    radio_device_type_t dev = backend_device_for_input(input_type);
+    uint32_t max_rate = session_device_max_rate_hz(dev);
+    unsigned int count = max_rate / 1000000u;
+
+    if (count > BREDR_SESSION_MAX_CHANNELS)
+        count = BREDR_SESSION_MAX_CHANNELS;
+    count = session_snap_bredr_count(count);
+    if (count < 2u)
+        count = 2u;
+    return count;
+}
+
+int backend_supported_counts(int input_type, int le_grid,
+                             unsigned *out, int max)
+{
+    radio_device_type_t dev = backend_device_for_input(input_type);
+    unsigned int lo, hi;
+    int n = 0;
+
+    if (!out || max <= 0)
+        return 0;
+    if (le_grid)
+    {
+        lo = 1u;
+        hi = BLE_RF_CHANNEL_COUNT;
+    }
+    else
+    {
+        lo = 2u;
+        hi = BREDR_SESSION_MAX_CHANNELS;
+    }
+    for (unsigned int c = lo; c <= hi && n < max; c++)
+    {
+        session_layout_status_t st;
+        /* BR/EDR grid mirrors the CLI/backend contract: even counts plus
+         * 79 ("all"). Odd counts can slip through the rate validator via
+         * the 4 MHz floor but are rejected by the CLI parser and rounded
+         * down by the backend clamp, so they must never be offered. */
+        if (!le_grid && (c & 1u) && c != BREDR_SESSION_MAX_CHANNELS)
+            continue;
+        if (le_grid)
+            st = session_validate_layout(dev, 1, 0, SESSION_REF_BLE,
+                                         0u, c);
+        else
+            st = session_validate_layout(dev, 1, 1, SESSION_REF_BREDR,
+                                         0u, c);
+        if (st == SESSION_LAYOUT_OK)
+            out[n++] = c;
+    }
+    return n;
+}
+
+unsigned int backend_max_ble_count(int input_type)
+{
+    radio_device_type_t dev = backend_device_for_input(input_type);
+    uint32_t max_rate = session_device_max_rate_hz(dev);
+    unsigned int count = max_rate / 2000000u;
+
+    if (count < 1u)
+        count = 1u;
+    if (count > BLE_SESSION_MAX_CHANNELS)
+        count = BLE_SESSION_MAX_CHANNELS;
+    while (count > 1u &&
+           session_validate_layout(dev, 1, 0, SESSION_REF_BLE,
+                                   0u, count) != SESSION_LAYOUT_OK)
+        count--;
+    return count;
+}
+
 /* ---------------------------------------------------------------------------
  * Local formatting helpers
  * ---------------------------------------------------------------------------*/

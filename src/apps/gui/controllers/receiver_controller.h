@@ -43,7 +43,7 @@ public:
 
     /**
      * Start a capture session.
-     * @param inputType   BACKEND_INPUT_HACKRF (0) or BACKEND_INPUT_FILE (1).
+     * @param inputType   BACKEND_INPUT_HACKRF (0) or BACKEND_INPUT_BLADERF (2).
      * @param deviceId    HackRF identifier, or empty for default device.
      * @param sessionType BACKEND_SESSION_HYBRID (0), _BLE (1) or _BREDR (2).
      * @param enforceCrc  true to drop LE frames whose CRC fails (applies to

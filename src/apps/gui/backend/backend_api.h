@@ -21,10 +21,15 @@
 extern "C" {
 #endif
 
-/* Input-type indices mirror Header.qml inputTypeSelector. */
+/* Input-type indices for the config-page device-type selector.
+ * File replay (1) exists for backend plumbing but is hidden from the GUI. */
 #define BACKEND_INPUT_HACKRF 0
 #define BACKEND_INPUT_FILE   1
 #define BACKEND_INPUT_BLADERF 2
+
+/* Maximum entries ever returned by backend_live_input_types(). */
+#define BACKEND_MAX_LIVE_INPUTS 4
+#define BACKEND_INPUT_LABEL_LEN 32
 
 /* Session-type indices mirror CaptureView.qml sessionTypeSelector. */
 #define BACKEND_SESSION_HYBRID 0
@@ -159,13 +164,13 @@ void backend_session_set_stopped_callback(backend_session_t *session,
  * bottom_le_rf (0..39). The radio tunes a whole-MHz LO at the window
  * center; only advertising RF channels (0/12/39 -> LE 37/38/39) are
  * decoded, data channels stay idle. Values are clamped defensively
- * (backend devices are HackRF-class: <= 10 LE channels / 20 Msps).
+ * to what the selected radio can sustain.
  * Blocks until backend_session_request_stop() is called (call from a
  * worker thread). For each decoded frame, @p on_row is invoked on the
  * session worker thread with a populated row.
  *
- * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_FILE.
- * @param device_id   HackRF identifier (NULL = default). Ignored for FILE.
+ * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_BLADERF.
+ * @param device_id   Radio identifier (NULL = default).
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_ble(backend_session_t *session,
@@ -186,8 +191,8 @@ int backend_session_run_ble(backend_session_t *session,
  * called (call from a worker thread). For each decoded frame, @p on_row is
  * invoked on the session worker thread with a populated row.
  *
- * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_FILE.
- * @param device_id   HackRF identifier (NULL = default). Ignored for FILE.
+ * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_BLADERF.
+ * @param device_id   Radio identifier (NULL = default).
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_bredr(backend_session_t *session,
@@ -209,8 +214,8 @@ int backend_session_run_bredr(backend_session_t *session,
  * (call from a worker thread). Both BR/EDR and BLE decoded frames are
  * delivered through @p on_row.
  *
- * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_FILE.
- * @param device_id   HackRF identifier (NULL = default). Ignored for FILE.
+ * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_BLADERF.
+ * @param device_id   Radio identifier (NULL = default).
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_hybrid(backend_session_t *session,
@@ -240,6 +245,61 @@ void backend_session_request_stop(backend_session_t *session);
  */
 int backend_get_default_device(char *out_type_name, size_t type_len,
                                char *out_id, size_t id_len);
+
+/**
+ * List the live radio input types compiled into this build (HackRF and/or
+ * bladeRF when their backends are enabled; file replay is never included).
+ * Shared with the QML device-type selector so a radio disabled via
+ * -DENABLE_HACKRF=OFF / -DENABLE_BLADERF=OFF never appears in the GUI.
+ * @param out_types  Output array of BACKEND_INPUT_* values (capacity @p max).
+ * @param max        Capacity of @p out_types.
+ * @return Number of live input types written (0 when none compiled in).
+ */
+int backend_live_input_types(int *out_types, int max);
+
+/**
+ * Human-readable label for a BACKEND_INPUT_* value ("HackRF", "bladeRF",
+ * "File"). Used by the QML device-type selector.
+ * @return 0 on success, non-zero for unknown input types.
+ */
+int backend_input_type_label(int input_type, char *out, size_t out_len);
+
+/**
+ * Enumerate device identifiers for a BACKEND_INPUT_* value. Thin wrapper
+ * over radio_list_devices() so Qt code never mirrors radio_device_type_t.
+ * On success the caller owns the array and must release it with
+ * backend_free_device_list(). File input has no enumeration (success with
+ * count 0).
+ * @return 0 on success, negative on failure.
+ */
+int backend_list_devices(int input_type, char ***out_identifiers,
+                         size_t *out_count);
+void backend_free_device_list(char ***identifiers, size_t count);
+
+/**
+ * Per-device capture-window sizing, shared with the CLI defaults
+ * (session_default_bredr/ble_count). Lets the QML spectrum clamp to what
+ * the selected radio can sustain instead of hardcoded HackRF-class limits.
+ */
+unsigned int backend_default_bredr_count(int input_type);
+unsigned int backend_default_ble_count(int input_type);
+unsigned int backend_max_bredr_count(int input_type);
+unsigned int backend_max_ble_count(int input_type);
+
+/**
+ * Valid capture-window channel counts for an input type, ascending.
+ * Same validity the CLI enforces via session_validate_layout(): the
+ * lane-split set the channelizer can stage (BR/EDR grid: even 2..20,
+ * then 24,28,32,36,40,42,48,54,60,64,72, plus 79 at 80 Msps) clipped to
+ * what the radio can sustain — not every even count in range (e.g. 22
+ * has no lane split). LE grid: the 2 MHz-span counts the lane planner
+ * accepts, likewise device-clipped.
+ * @param le_grid  Non-zero for the LE grid, zero for the BR/EDR grid.
+ * @param out      Output array (capacity @p max).
+ * @return Number of counts written (0 when none valid).
+ */
+int backend_supported_counts(int input_type, int le_grid,
+                             unsigned *out, int max);
 
 /**
  * Snapshot the current device/connection entities from the core registries

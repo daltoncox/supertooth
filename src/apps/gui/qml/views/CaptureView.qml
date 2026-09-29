@@ -2,11 +2,17 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+import Supertooth
+
 Rectangle {
     id: root
 
     // 0 = Hybrid (default), 1 = LE, 2 = BR/EDR. Mirrors BACKEND_SESSION_*.
     property int sessionTypeIndex: 0
+    // BACKEND_INPUT_* of the selected radio (0 = HackRF, 2 = bladeRF).
+    // File replay is hidden from the GUI.
+    property int inputType: 0
+    property string deviceID: ""
     // Drop LE frames whose CRC fails. Applies to LE and hybrid sessions.
     // Default on, matching the CLI's --enforce-crc default.
     property bool enforceCrc: true
@@ -15,31 +21,45 @@ Rectangle {
     property int acErrors: 0
     property bool running: false
 
+    // Device-type selector model, populated from the compiled-in live
+    // radios (see RadioDeviceModel.availableInputTypes). Parallel arrays:
+    // labels drive the ComboBox, values are the BACKEND_INPUT_* to store.
+    property var inputTypeLabels: []
+    property var inputTypeValues: []
+
     // Channel layout. Hybrid and BR/EDR-only sessions always capture on
-    // the BR/EDR grid: numChannels = BR/EDR channels (even, 2..maxChannels),
+    // the BR/EDR grid: numChannels = BR/EDR channels (even, 2..maxBredr),
     // window = numChannels MHz, LO at a half-MHz frequency (e.g. 2411.5).
     // LE-only sessions capture on the LE grid: numChannels = LE channels
-    // to capture (2..maxBleChannels) from bottomLeIndex, window =
+    // to capture (2..maxBle) from bottomLeIndex, window =
     // numChannels*2 MHz, LO at a whole-MHz frequency.
-    // CaptureView is the single source of truth — all writes (SpinBoxes,
-    // spectrum drags) go through setWindowBredr/setWindowBle so clamping
-    // is applied uniformly.
+    // CaptureView is the single source of truth — all writes (spectrum
+    // drags) go through setWindowBredr/setWindowBle so clamping is
+    // applied uniformly.
     property int bottomChannel: 0       // BR/EDR channel index (hybrid/BR/EDR)
     property int bottomLeIndex: 0       // LE RF channel index (LE-only)
     property int numChannels: 20
-    readonly property int maxChannels: 20        // RECEIVER_BREDR_MAX_CHANNELS
-    readonly property int maxBleChannels: 10     // BLE_SESSION_MAX_CHANNELS
-    readonly property int windowMaxChannels: bleLocked ? maxBleChannels : maxChannels
+    // Per-radio ceilings, shared with the CLI defaults (bladeRF sustains
+    // wider windows than HackRF). Refreshed on device-type switch.
+    property int maxBredrChannels: 20
+    property int maxBleChannels: 10
+    // Valid window counts per grid, ascending — the same lane-split set
+    // the CLI enforces (not every even count stages: e.g. 22 has no lane
+    // split). Drag/resize counts snap down into these. Refreshed on
+    // device-type switch.
+    property var supportedBredrCounts: []
+    property var supportedBleCounts: []
+    readonly property int windowMaxChannels: bleLocked ? maxBleChannels : maxBredrChannels
 
     readonly property bool bleLocked: sessionTypeIndex === 1
 
     // Derived helpers shared with the spectrum + summary labels.
     readonly property real windowLeftMhz: bleLocked ? 2401 + 2 * bottomLeIndex
-                                                    : 2401.5 + bottomChannel
+                                                     : 2401.5 + bottomChannel
     // Capture-window width in MHz: numChannels for the BR/EDR grid (1 MHz
     // per channel), numChannels*2 for the LE grid (2 MHz per channel).
     readonly property real windowMhz: bleLocked ? numChannels * 2
-                                                : numChannels
+                                                 : numChannels
     // Sample rate mirrors run_bredr.c: 4 Msps for a 2 MHz window,
     // else window MHz * 1 Msps.
     readonly property real sampleRateHz: windowMhz === 2 ? 4e6 : windowMhz * 1e6
@@ -52,16 +72,16 @@ Rectangle {
     // wide from bottomLeIndex; when BR/EDR-locked the edges never land on
     // LE centers so the window spans numChannels/2 LE channels.
     readonly property int leFirstRf: bleLocked ? bottomLeIndex
-                                               : Math.max(0, Math.ceil((bottomChannel - 0.5) / 2))
+                                                : Math.max(0, Math.ceil((bottomChannel - 0.5) / 2))
     readonly property int leLastRf: bleLocked ? bottomLeIndex + numChannels - 1
-                                              : leFirstRf + numChannels / 2 - 1
+                                               : leFirstRf + numChannels / 2 - 1
     // BR/EDR: native range when BR/EDR-locked; when LE-locked, the
     // channels whose centers fall strictly inside the window (channels
     // centered exactly on an edge are half out of band).
     readonly property int brFirstCh: bleLocked ? Math.min(78, bottomLeIndex * 2)
-                                               : bottomChannel
+                                                : bottomChannel
     readonly property int brLastCh: bleLocked ? Math.min(78, bottomLeIndex * 2 + windowMhz - 2)
-                                              : bottomChannel + numChannels - 1
+                                               : bottomChannel + numChannels - 1
 
     function rfToLeLabel(rf) {
         if (rf === 0) return "37"
@@ -79,9 +99,9 @@ Rectangle {
                                           : rfToLeLabel(leFirstRf) + "–" + rfToLeLabel(leLastRf)
 
     readonly property string captureSummary: numChannels + " ch · BR " + brRangeText
-                                             + " · LE " + leRangeText
-                                             + " · " + (sampleRateHz / 1e6) + " Msps"
-                                             + " · LO " + (loFreqHz / 1e6) + " MHz"
+                                              + " · LE " + leRangeText
+                                              + " · " + (sampleRateHz / 1e6) + " Msps"
+                                              + " · LO " + (loFreqHz / 1e6) + " MHz"
 
     // ---- Backend-ready values ---------------------------------------------
     // Hybrid and BR/EDR sessions take numChannels BR/EDR processors and a
@@ -103,13 +123,31 @@ Rectangle {
     }
 
     // ---- Window clamping (mirrors run_bredr.c validation) --------------
+    // Counts snap down into the supported lane-split set so the window the
+    // user sees is the window the session actually tunes — the same set
+    // the CLI accepts (see backend_supported_counts).
+    function snapToList(c, list) {
+        c = Math.round(c)
+        var best = -1
+        for (var i = 0; i < list.length; i++) {
+            if (list[i] <= c)
+                best = list[i]
+            else
+                break
+        }
+        return best >= 0 ? best : (list.length > 0 ? list[0] : c)
+    }
     function clampCount(c) {
         if (bleLocked) {
+            if (supportedBleCounts.length > 0)
+                return Math.max(2, snapToList(c, supportedBleCounts))
             c = Math.round(c)
             return Math.max(2, Math.min(maxBleChannels, c))
         }
+        if (supportedBredrCounts.length > 0)
+            return snapToList(c, supportedBredrCounts)
         c = Math.round(c / 2) * 2
-        return Math.max(2, Math.min(maxChannels, c))
+        return Math.max(2, Math.min(maxBredrChannels, c))
     }
     function setWindowBredr(bottom, count) {
         var c = clampCount(count)
@@ -124,14 +162,78 @@ Rectangle {
         if (k !== bottomLeIndex) bottomLeIndex = k
     }
 
-    // Re-align the window on session-type switch: reset to the new grid's
-    // defaults — the lowest bottom channel (0) and the maximum channel
-    // count (maxBleChannels/maxChannels).
-    onBleLockedChanged: {
-        if (bleLocked)
-            setWindowBle(0, maxBleChannels)
+    // ---- Device selection -------------------------------------------------
+    RadioDeviceModel {
+        id: radioDeviceModel
+    }
+
+    function updateDeviceCounts() {
+        maxBredrChannels = radioDeviceModel.maxBredrCount(root.inputType)
+        maxBleChannels = radioDeviceModel.maxBleCount(root.inputType)
+        supportedBredrCounts = radioDeviceModel.supportedBredrCounts(root.inputType)
+        supportedBleCounts = radioDeviceModel.supportedBleCounts(root.inputType)
+    }
+
+    function resetWindowToDefaults() {
+        if (root.bleLocked)
+            setWindowBle(0, radioDeviceModel.defaultBleCount(root.inputType))
         else
-            setWindowBredr(0, maxChannels)
+            setWindowBredr(0, radioDeviceModel.defaultBredrCount(root.inputType))
+    }
+
+    function refreshDevices() {
+        var previousId = deviceIdSelector.currentText
+        radioDeviceModel.refresh(root.inputType, true)
+        var idx = radioDeviceModel.indexFromIdentifier(previousId)
+        if (idx >= 0) {
+            deviceIdSelector.currentIndex = idx
+            root.deviceID = previousId
+        } else if (radioDeviceModel.rowCount() > 0) {
+            deviceIdSelector.currentIndex = 0
+            root.deviceID = deviceIdSelector.currentText
+        } else {
+            deviceIdSelector.currentIndex = -1
+            root.deviceID = ""
+        }
+    }
+
+    function selectInputType(value) {
+        var idx = root.inputTypeValues.indexOf(value)
+        if (idx >= 0)
+            inputTypeSelector.currentIndex = idx
+        if (value === root.inputType) {
+            refreshDevices()
+            return
+        }
+        root.inputType = value
+        updateDeviceCounts()
+        resetWindowToDefaults()
+        refreshDevices()
+    }
+
+    Component.onCompleted: {
+        var inputs = radioDeviceModel.availableInputTypes()
+        var labels = []
+        var values = []
+        for (var i = 0; i < inputs.length; i++) {
+            labels.push(inputs[i].label)
+            values.push(inputs[i].inputType)
+        }
+        root.inputTypeLabels = labels
+        root.inputTypeValues = values
+        if (values.length > 0) {
+            root.inputType = values[0]
+            inputTypeSelector.currentIndex = 0
+        }
+        updateDeviceCounts()
+        resetWindowToDefaults()
+        refreshDevices()
+    }
+
+    // Re-align the window on session-type switch: reset to the new grid's
+    // device-specific defaults.
+    onBleLockedChanged: {
+        resetWindowToDefaults()
     }
 
     color: "#1e1e1e"
@@ -140,12 +242,6 @@ Rectangle {
         anchors.fill: parent
         anchors.margins: 12
         spacing: 8
-
-        Label {
-            text: qsTr("Channel Spectrum")
-            color: "#cccccc"
-            font.bold: true
-        }
 
         // Tuner / spectrum strip. Full 2402-2480 MHz band: LE channels on
         // top (advertising 37/38/39 highlighted), BR/EDR channels below,
@@ -161,6 +257,7 @@ Rectangle {
             bleLocked: root.bleLocked
             numChannels: root.numChannels
             maxChannels: root.windowMaxChannels
+            validCounts: root.bleLocked ? root.supportedBleCounts : root.supportedBredrCounts
             running: root.running
             brRangeText: root.brRangeText
             leRangeText: root.leRangeText
@@ -173,266 +270,189 @@ Rectangle {
             }
         }
 
-        // ---- Capture-window controls -------------------------------------
+        Label {
+            text: root.captureSummary
+            color: "#858585"
+            font.family: "Google Sans Code"
+            font.pixelSize: 11
+            Layout.fillWidth: true
+        }
+
+        // ---- Center bar: session + device selection ----------------------
         RowLayout {
             Layout.fillWidth: true
-            spacing: 16
+            spacing: 12
 
-            ColumnLayout {
-                spacing: 2
+            ComboBox {
+                id: sessionTypeSelector
+                enabled: !root.running
+                Layout.preferredWidth: 140
+                model: ["Hybrid", "LE", "BR/EDR"]
+                currentIndex: root.sessionTypeIndex
 
-                Label {
-                    text: qsTr("Channels")
-                    color: "#cccccc"
-                    font.bold: true
-                }
-
-                SpinBox {
-                    id: numChannelsSpin
-                    enabled: !root.running
-                    from: 2
-                    to: root.bleLocked ? root.maxBleChannels : root.maxChannels
-                    stepSize: root.bleLocked ? 1 : 2
-                    editable: false
-
-                    Component.onCompleted: value = root.numChannels
-
-                    // No binding on `value` — a binding would be broken by
-                    // user interaction. Sync down explicitly and write back
-                    // only on user edits via valueModified.
-                    onValueModified: {
-                        if (root.bleLocked)
-                            root.setWindowBle(root.bottomLeIndex, value)
-                        else
-                            root.setWindowBredr(root.bottomChannel, value)
-                        if (value !== root.numChannels)
-                            value = root.numChannels
-                    }
-                    Connections {
-                        target: root
-                        function onNumChannelsChanged() {
-                            // Defer until the SpinBox's `to`/`stepSize`
-                            // bindings have re-evaluated for the new grid.
-                            // Otherwise writing `value` while `to` is still
-                            // the previous grid's max clamps it (e.g. 10
-                            // after switching back to BR/EDR), leaving the
-                            // selector out of sync with numChannels.
-                            Qt.callLater(function () {
-                                if (numChannelsSpin.value !== root.numChannels)
-                                    numChannelsSpin.value = root.numChannels
-                            })
-                        }
-                    }
-
-                    textFromValue: function (value) { return value + " ch" }
-                    valueFromText: function (text) {
-                        return parseInt(text.replace(" ch", ""))
-                    }
+                onActivated: function (index) {
+                    root.sessionTypeIndex = index
                 }
             }
 
-            ColumnLayout {
-                spacing: 2
+            ComboBox {
+                id: inputTypeSelector
+                enabled: !root.running && root.inputTypeValues.length > 0
+                Layout.preferredWidth: 140
+                model: root.inputTypeLabels
 
-                Label {
-                    text: root.bleLocked ? qsTr("Bottom (LE)") : qsTr("Bottom (BR/EDR)")
-                    color: "#cccccc"
-                    font.bold: true
-                }
-
-                SpinBox {
-                    id: bottomChannelSpin
-                    enabled: !root.running
-                    from: 0
-                    // Can't start lower than the window can fit in the band.
-                    to: root.bleLocked ? 40 - root.numChannels
-                                       : 78 - (root.numChannels - 1)
-                    stepSize: 1
-                    editable: false
-
-                    Component.onCompleted: value = root.bleLocked ? root.bottomLeIndex
-                                                                  : root.bottomChannel
-
-                    onValueModified: {
-                        if (root.bleLocked)
-                            root.setWindowBle(value, root.numChannels)
-                        else
-                            root.setWindowBredr(value, root.numChannels)
-                        var cur = root.bleLocked ? root.bottomLeIndex : root.bottomChannel
-                        if (value !== cur)
-                            value = cur
-                    }
-                    Connections {
-                        target: root
-                        // All writes are deferred until the SpinBox's
-                        // `to`/`stepSize` bindings have re-evaluated for the
-                        // new grid. Writing while `to` still reflects the old
-                        // grid can clamp `value` (e.g. a BR/EDR bottom clamped
-                        // by the transient LE max), leaving the selector stale.
-                        function onBottomChannelChanged() {
-                            Qt.callLater(function () {
-                                if (!root.bleLocked && bottomChannelSpin.value !== root.bottomChannel)
-                                    bottomChannelSpin.value = root.bottomChannel
-                            })
-                        }
-                        function onBottomLeIndexChanged() {
-                            Qt.callLater(function () {
-                                if (root.bleLocked && bottomChannelSpin.value !== root.bottomLeIndex)
-                                    bottomChannelSpin.value = root.bottomLeIndex
-                            })
-                        }
-                        function onBleLockedChanged() {
-                            Qt.callLater(function () {
-                                var target = root.bleLocked ? root.bottomLeIndex
-                                                            : root.bottomChannel
-                                // QQuickSpinBox::setValue early-returns (and
-                                // skips updateDisplayText()) when the value is
-                                // unchanged. The reset sets bottom to its default
-                                // (0) on every switch, so with the value already
-                                // at the default the grid-dependent label would
-                                // stay stale. Round-trip the value to force the
-                                // display to re-render with the new formatter.
-                                if (bottomChannelSpin.value === target) {
-                                    var nudge = target < bottomChannelSpin.to ? 1 : -1
-                                    bottomChannelSpin.value = target + nudge
-                                }
-                                bottomChannelSpin.value = target
-                            })
-                        }
-                    }
-
-                    // Qt's SpinBox only recomputes displayText (via
-                    // textFromValue) when `value` changes, not when the
-                    // formatter or other state changes. So the formatter
-                    // itself may close over bleLocked; see onBleLockedChanged
-                    // below for forcing a re-render when the reset leaves the
-                    // value unchanged.
-                    textFromValue: function (value) {
-                        return root.bleLocked
-                               ? "LE " + root.rfToLeLabel(value) + " (" + (2402 + 2 * value) + " MHz)"
-                               : value + " (" + (2402 + value) + " MHz)"
-                    }
-                    valueFromText: function (text) {
-                        var m = text.match(/LE (\d+)/)
-                        return m ? parseInt(m[1]) : parseInt(text.split(" ")[0])
-                    }
+                onActivated: function (index) {
+                    root.selectInputType(root.inputTypeValues[index])
                 }
             }
 
-            Item { Layout.fillWidth: true }
+            ComboBox {
+                id: deviceIdSelector
+                enabled: !root.running
+                Layout.fillWidth: true
 
-            ColumnLayout {
-                spacing: 2
-                Layout.alignment: Qt.AlignRight
+                model: radioDeviceModel
+                textRole: "display"
 
-                Label {
-                    text: qsTr("Capture")
-                    color: "#cccccc"
-                    font.bold: true
-                    horizontalAlignment: Text.AlignRight
-                    Layout.alignment: Qt.AlignRight
+                onActivated: function (index) {
+                    root.deviceID = deviceIdSelector.currentText
+                }
+            }
+
+            Button {
+                id: refreshButton
+                topInset: 0
+                bottomInset: 0
+                leftInset: 0
+                rightInset: 0
+
+                enabled: !root.running
+                Layout.preferredWidth: 40
+                Layout.preferredHeight: 40
+
+                Image {
+                    source: "/assets/images/refresh.svg"
+                    anchors.centerIn: parent
+                    width: 24
+                    height: 24
+                    opacity: refreshButton.enabled ? 1.0 : 0.4
                 }
 
-                Label {
-                    text: root.captureSummary
-                    color: "#9cdcfe"
-                    font.family: "Google Sans Code"
-                    horizontalAlignment: Text.AlignRight
-                    Layout.alignment: Qt.AlignRight
+                onClicked: {
+                    root.refreshDevices()
                 }
             }
         }
 
-        Label {
-            text: root.running
-                  ? qsTr("Stop the running session to change the channel layout.")
-                  : qsTr("Drag the highlighted window to retune; drag either edge to resize. Hybrid always captures the BR/EDR grid (1 MHz steps, half-MHz LO) with LE fanning out inside the window.")
-            color: "#858585"
+        // ---- Protocol-specific settings ----------------------------------
+        RowLayout {
             Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-        }
+            spacing: 12
 
-        // ---- Existing session/CRC controls --------------------------------
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
-            color: "#000000"
-            Layout.topMargin: 8
-        }
+            // BR/EDR panel (left). Both panels share the taller column's
+            // height so the boxes always match.
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.max(bredrCol.implicitHeight, leCol.implicitHeight) + 16
 
-        Label {
-            text: qsTr("Session Type")
-            color: "#cccccc"
-            font.bold: true
-            Layout.topMargin: 8
-        }
+                Rectangle {
+                    anchors.fill: parent
+                    color: "#252525"
+                }
 
-        ComboBox {
-            id: sessionTypeSelector
-            enabled: !root.running
-            model: ["Hybrid", "LE", "BR/EDR"]
-            currentIndex: root.sessionTypeIndex
+                ColumnLayout {
+                    id: bredrCol
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 6
 
-            onActivated: function (index) {
-                root.sessionTypeIndex = index
+                    Label {
+                        text: qsTr("BR/EDR")
+                        color: "#cccccc"
+                        font.bold: true
+                    }
+
+                    Label {
+                        text: qsTr("Access-Code Errors")
+                        color: "#cccccc"
+                    }
+
+                    SpinBox {
+                        id: acErrorsSpin
+                        enabled: !root.running && root.sessionTypeIndex !== 1
+                        from: 0
+                        to: 8
+                        stepSize: 1
+                        value: root.acErrors
+
+                        onValueChanged: root.acErrors = value
+                    }
+                }
+
+                Rectangle {
+                    id: bredrDim
+                    anchors.fill: parent
+                    color: "black"
+                    opacity: 0.6
+                    visible: root.sessionTypeIndex === 1
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: bredrDim.visible
+                    onPressed: function (mouse) { mouse.accepted = true }
+                }
             }
-        }
 
-        Label {
-            text: root.running
-                  ? qsTr("Stop the running session to change protocol.")
-                  : qsTr("Select which receiver pipeline to run. Hybrid captures BR/EDR + LE from one stream.")
-            color: "#858585"
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-        }
+            // LE panel (right). Height matches the BR/EDR panel (see above).
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.max(bredrCol.implicitHeight, leCol.implicitHeight) + 16
 
-        Label {
-            text: qsTr("CRC Enforcement")
-            color: "#cccccc"
-            font.bold: true
-            Layout.topMargin: 8
-        }
+                Rectangle {
+                    anchors.fill: parent
+                    color: "#252525"
+                }
 
-        Switch {
-            id: enforceCrcSwitch
-            enabled: !root.running
-            checked: root.enforceCrc
-            text: checked ? qsTr("On — drop LE frames that fail CRC") : qsTr("Off — show all LE frames")
+                ColumnLayout {
+                    id: leCol
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 6
 
-            onToggled: root.enforceCrc = checked
-        }
+                    Label {
+                        text: qsTr("LE")
+                        color: "#cccccc"
+                        font.bold: true
+                    }
 
-        Label {
-            text: qsTr("When on, LE frames whose CRC doesn't pass are dropped before display. Applies to LE and hybrid sessions. Helps suppress spurious devices from bit errors.")
-            color: "#858585"
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
-        }
+                    Label {
+                        text: qsTr("CRC Enforcement")
+                        color: "#cccccc"
+                    }
 
-        Label {
-            text: qsTr("Access-Code Errors")
-            color: "#cccccc"
-            font.bold: true
-            Layout.topMargin: 8
-        }
+                    Switch {
+                        id: enforceCrcSwitch
+                        enabled: !root.running && root.sessionTypeIndex !== 2
+                        checked: root.enforceCrc
+                        text: checked ? qsTr("On") : qsTr("Off")
 
-        SpinBox {
-            id: acErrorsSpin
-            enabled: !root.running
-            from: 0
-            to: 8
-            stepSize: 1
-            value: root.acErrors
+                        onToggled: root.enforceCrc = checked
+                    }
+                }
 
-            onValueChanged: root.acErrors = value
-        }
-
-        Label {
-            text: qsTr("Maximum bit errors tolerated when matching a BR/EDR access code. 0 (default) requires a byte-perfect match and suppresses spurious devices from bit errors; raise it in noisy captures if too few packets are detected.")
-            color: "#858585"
-            Layout.fillWidth: true
-            wrapMode: Text.WordWrap
+                Rectangle {
+                    id: leDim
+                    anchors.fill: parent
+                    color: "black"
+                    opacity: 0.6
+                    visible: root.sessionTypeIndex === 2
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: leDim.visible
+                    onPressed: function (mouse) { mouse.accepted = true }
+                }
+            }
         }
 
         Item {

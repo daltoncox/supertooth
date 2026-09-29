@@ -50,6 +50,12 @@ Item {
     property int numChannels: 20
     // Max channels of the active grid supported by the pipeline.
     property int maxChannels: 20
+    // Valid window counts for the active grid, ascending (the lane-split
+    // set the CLI enforces, clipped to the selected radio). Drag counts
+    // snap down into these; empty falls back to even clamping. The owner
+    // (CaptureView) re-snaps authoritatively, so this only keeps emitted
+    // values clean mid-drag.
+    property var validCounts: []
     // True while a session is running — locks the tuner.
     property bool running: false
     // Range labels drawn inside the tuner box (computed by CaptureView).
@@ -125,6 +131,19 @@ Item {
 
     // ---- Clamping (pure — applied before emitting windowEdited) -----------
     function clampCount(count) {
+        if (root.validCounts.length > 0) {
+            count = Math.round(count)
+            var best = -1
+            for (var i = 0; i < root.validCounts.length; i++) {
+                if (root.validCounts[i] <= count)
+                    best = root.validCounts[i]
+                else
+                    break
+            }
+            if (best >= 0)
+                return best
+            return root.validCounts[0]
+        }
         if (root.bleLocked) {
             return Math.max(2, Math.min(maxChannels, Math.round(count)))
         }

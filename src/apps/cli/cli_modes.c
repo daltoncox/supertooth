@@ -266,6 +266,42 @@ static int resolve_device(const char *prog, int list_devices, const char *device
     return 0;
 }
 
+/* Print every valid --channels count for @p dtype on the BR/EDR grid:
+ * even counts (plus 79/"all") that the lane planner can stage and the
+ * radio can sustain — the same validity session_validate_layout()
+ * enforces, so the list can never drift from the tuner. */
+static void print_valid_bredr_counts(radio_device_type_t dtype, int ble_fanout)
+{
+    fprintf(stderr, "Valid options for %s:",
+            session_device_type_name(dtype));
+    for (unsigned int c = 2u; c <= BREDR_SESSION_MAX_CHANNELS; c++)
+    {
+        if ((c & 1u) && c != BREDR_SESSION_MAX_CHANNELS)
+            continue;
+        if (session_validate_layout(dtype, ble_fanout, 1, SESSION_REF_BREDR,
+                                    0u, c) != SESSION_LAYOUT_OK)
+            continue;
+        fprintf(stderr, " %u", c);
+    }
+    fprintf(stderr, "\n");
+}
+
+/* Print every valid --channels count for @p dtype on the LE grid (same
+ * validity the session enforces). */
+static void print_valid_ble_counts(radio_device_type_t dtype)
+{
+    fprintf(stderr, "Valid options for %s:",
+            session_device_type_name(dtype));
+    for (unsigned int c = 1u; c <= BLE_SESSION_MAX_CHANNELS; c++)
+    {
+        if (session_validate_layout(dtype, 1, 0, SESSION_REF_BLE,
+                                    0u, c) != SESSION_LAYOUT_OK)
+            continue;
+        fprintf(stderr, " %u", c);
+    }
+    fprintf(stderr, "\n");
+}
+
 /* Default the BR/EDR window to what the selected radio can sustain (the
  * pre-parse default assumed the build default), then validate the
  * bottom/range/layout. @p ble_fanout selects the session layout kind:
@@ -333,10 +369,9 @@ static int resolve_bredr_window(const char *prog, int device_selected,
     }
     case SESSION_LAYOUT_NO_LANE_SPLIT:
         fprintf(stderr,
-                "Invalid --channels %u: no even <=20-channel lane split "
-                "(nearest supported: %u).\n",
-                g_num_bredr_channels,
-                session_snap_bredr_count(g_num_bredr_channels));
+                "Invalid --channels %u: no lane split stages that width.\n",
+                g_num_bredr_channels);
+        print_valid_bredr_counts(dtype, ble_fanout);
         return -1;
     case SESSION_LAYOUT_BAD_RANGE:
     default:
@@ -990,8 +1025,9 @@ int ble_main(int argc, char *argv[])
             }
             case SESSION_LAYOUT_NO_LANE_SPLIT:
                 fprintf(stderr,
-                        "Invalid --channels %u: no even <=20 MHz lane split.\n",
+                        "Invalid --channels %u: no lane split stages that span.\n",
                         ble_num_le_channels);
+                print_valid_ble_counts(dtype);
                 return EXIT_FAILURE;
             case SESSION_LAYOUT_BAD_RANGE:
             default:
