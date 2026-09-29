@@ -86,18 +86,21 @@ jobs:
           path: ./*.deb
 
   build-macos-arm64:
-    # Apple Silicon only. macos-14 is an arm64 (M1) runner; do not switch to
-    # macos-latest without confirming it is still arm64.
-    runs-on: macos-14
+    # Apple Silicon only. macos-latest is currently arm64; if GitHub moves it
+    # to a different arch, pin back to an explicit arm64 runner (e.g. macos-15).
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Install build dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_UPGRADE: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
-          brew update
-          brew install cmake pkg-config hackrf libbladerf qt@6 autoconf automake libtool
+          brew install --quiet cmake pkg-config hackrf libbladerf qt@6 autoconf automake libtool
           echo "$(brew --prefix qt@6)/bin" >> "$GITHUB_PATH"
 
       - name: Build liquid-dsp from source
