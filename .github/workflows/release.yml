@@ -97,7 +97,7 @@ jobs:
       - name: Install build dependencies
         run: |
           brew update
-          brew install cmake pkg-config hackrf bladerf qt@6 autoconf automake libtool
+          brew install cmake pkg-config hackrf libbladerf qt@6 autoconf automake libtool
           echo "$(brew --prefix qt@6)/bin" >> "$GITHUB_PATH"
 
       - name: Build liquid-dsp from source

@@ -75,7 +75,7 @@ if(ENABLE_HACKRF AND NOT HACKRF_FOUND)
 endif()
 
 if(ENABLE_BLADERF AND NOT BLADERF_FOUND)
-    message(FATAL_ERROR "bladeRF library not found. Please install with: brew install bladerf (or configure with -DENABLE_BLADERF=OFF)")
+    message(FATAL_ERROR "bladeRF library not found. Please install with: brew install libbladerf (or configure with -DENABLE_BLADERF=OFF)")
 endif()
 
 if(NOT ENABLE_HACKRF AND NOT ENABLE_BLADERF)
