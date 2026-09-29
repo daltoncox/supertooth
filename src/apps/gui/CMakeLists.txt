@@ -50,10 +50,10 @@ qt_add_qml_module(appSupertooth
         qml/Main.qml
         qml/Sidebar.qml
         qml/components/LabeledComboBox.qml
+        qml/components/ChannelSpectrum.qml
         qml/views/FrameListView.qml
         qml/views/DeviceListView.qml
-        qml/views/CaptureView.qml
-        qml/views/ChannelSpectrum.qml
+        qml/views/ConfigView.qml
 )
 
 if(APPLE)

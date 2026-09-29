@@ -60,41 +60,41 @@ ApplicationWindow {
             onPlayPauseToggled: {
                 // Channel params are passed in the session's native grid:
                 // LE RF units for LE sessions, BR/EDR units otherwise.
-                var isBle = captureView.sessionTypeIndex === 1
-                var count = isBle ? captureView.backendLeChannelCount
-                                  : captureView.backendChannelCount
-                var bottom = isBle ? captureView.bottomLeIndex
-                                    : captureView.backendBottomChannel
+                var isBle = configView.sessionTypeIndex === 1
+                var count = isBle ? configView.backendLeChannelCount
+                                  : configView.backendChannelCount
+                var bottom = isBle ? configView.bottomLeIndex
+                                    : configView.backendBottomChannel
                 console.log("Supertooth: play/pause toggled; running =",
                             receiverController.running,
-                            "inputType =", captureView.inputType,
-                            "deviceID =", captureView.deviceID,
-                            "sessionType =", captureView.sessionTypeIndex,
-                            "enforceCrc =", captureView.enforceCrc,
+                            "inputType =", configView.inputType,
+                            "deviceID =", configView.deviceID,
+                            "sessionType =", configView.sessionTypeIndex,
+                            "enforceCrc =", configView.enforceCrc,
                             "channels =", count,
                             "bottom =", bottom,
-                            "bleAdv =", captureView.backendBleAdvChannel,
-                            "lna =", captureView.hackrfLna,
-                            "vga =", captureView.hackrfVga,
-                            "amp =", captureView.hackrfAmp,
-                            "bladerfGain =", captureView.bladerfGain)
+                            "bleAdv =", configView.backendBleAdvChannel,
+                            "lna =", configView.hackrfLna,
+                            "vga =", configView.hackrfVga,
+                            "amp =", configView.hackrfAmp,
+                            "bladerfGain =", configView.bladerfGain)
                 if (receiverController.running) {
                     receiverController.stop()
                 } else {
                     frameListModel.clear()
                     deviceListModel.clear()
-                    receiverController.start(captureView.inputType,
-                                             captureView.deviceID,
-                                             captureView.sessionTypeIndex,
-                                             captureView.enforceCrc,
+                    receiverController.start(configView.inputType,
+                                             configView.deviceID,
+                                             configView.sessionTypeIndex,
+                                             configView.enforceCrc,
                                              count,
                                              bottom,
-                                             captureView.backendBleAdvChannel,
-                                             captureView.acErrors,
-                                             captureView.hackrfLna,
-                                             captureView.hackrfVga,
-                                             captureView.hackrfAmp ? 1 : 0,
-                                             captureView.bladerfGain)
+                                             configView.backendBleAdvChannel,
+                                             configView.acErrors,
+                                             configView.hackrfLna,
+                                             configView.hackrfVga,
+                                             configView.hackrfAmp ? 1 : 0,
+                                             configView.bladerfGain)
                 }
             }
         }
@@ -115,8 +115,8 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 deviceModel: deviceListModel
             }
-            CaptureView {
-                id: captureView
+            ConfigView {
+                id: configView
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 running: receiverController.running

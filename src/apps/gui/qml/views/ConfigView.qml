@@ -46,7 +46,7 @@ Rectangle {
     // LE-only sessions capture on the LE grid: numChannels = LE channels
     // to capture (2..maxBle) from bottomLeIndex, window =
     // numChannels*2 MHz, LO at a whole-MHz frequency.
-    // CaptureView is the single source of truth — all writes (spectrum
+    // ConfigView is the single source of truth — all writes (spectrum
     // drags) go through setWindowBredr/setWindowBle so clamping is
     // applied uniformly.
     property int bottomChannel: 0       // BR/EDR channel index (hybrid/BR/EDR)

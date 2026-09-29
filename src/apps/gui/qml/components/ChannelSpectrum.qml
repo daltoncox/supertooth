@@ -31,7 +31,7 @@ import QtQuick.Controls
 //
 // Pure presentation: this view never assigns its own properties (doing so
 // would break the owner's bindings into it). Edits are reported via the
-// windowEdited signal (in whichever grid is active); CaptureView owns the
+// windowEdited signal (in whichever grid is active); ConfigView owns the
 // channel state and is the single source of truth.
 Item {
     id: root
@@ -53,12 +53,12 @@ Item {
     // Valid window counts for the active grid, ascending (the lane-split
     // set the CLI enforces, clipped to the selected radio). Drag counts
     // snap down into these; empty falls back to even clamping. The owner
-    // (CaptureView) re-snaps authoritatively, so this only keeps emitted
+    // (ConfigView) re-snaps authoritatively, so this only keeps emitted
     // values clean mid-drag.
     property var validCounts: []
     // True while a session is running — locks the tuner.
     property bool running: false
-    // Range labels drawn inside the tuner box (computed by CaptureView).
+    // Range labels drawn inside the tuner box (computed by ConfigView).
     property string brRangeText: ""
     property string leRangeText: ""
 
@@ -229,8 +229,8 @@ Item {
                         ctx.fillText(le.label, (lx0 + lx1) / 2, m.leTop + m.leH / 2)
                     }
                 }
-                ctx.fillStyle = "#5a5a5a"
-                ctx.font = "8px 'Google Sans Code'"
+                ctx.fillStyle = "#858585"
+                ctx.font = "10px 'Google Sans Code'"
                 ctx.textAlign = "right"
                 ctx.textBaseline = "middle"
                 ctx.fillText("LE", root.margin - 8, m.leTop + m.leH / 2)
@@ -255,8 +255,8 @@ Item {
                         ctx.fillText(String(b), (bx0 + bx1) / 2, m.brTop + m.brH / 2)
                     }
                 }
-                ctx.fillStyle = "#5a5a5a"
-                ctx.font = "8px 'Google Sans Code'"
+                ctx.fillStyle = "#858585"
+                ctx.font = "10px 'Google Sans Code'"
                 ctx.textAlign = "right"
                 ctx.textBaseline = "middle"
                 ctx.fillText("BR/EDR", root.margin - 8, m.brTop + m.brH / 2)

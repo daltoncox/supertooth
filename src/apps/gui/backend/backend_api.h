@@ -31,7 +31,7 @@ extern "C" {
 #define BACKEND_MAX_LIVE_INPUTS 4
 #define BACKEND_INPUT_LABEL_LEN 32
 
-/* Session-type indices mirror CaptureView.qml sessionTypeSelector. */
+/* Session-type indices mirror ConfigView.qml sessionTypeSelector. */
 #define BACKEND_SESSION_HYBRID 0
 #define BACKEND_SESSION_BLE    1
 #define BACKEND_SESSION_BREDR  2
