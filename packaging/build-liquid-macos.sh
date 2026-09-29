@@ -62,9 +62,16 @@ if [[ -z "$PREFIX" ]]; then
     PREFIX="$(brew --prefix 2>/dev/null || echo /opt/homebrew)"
 fi
 
-for tool in curl autoconf automake libtool cc make; do
+for tool in curl autoconf automake cc make; do
     command -v "$tool" >/dev/null || { echo "Error: missing required tool: $tool"; exit 1; }
 done
+# Homebrew's libtool package provides glibtoolize (and libtool); Apple's
+# /usr/bin/libtool is the cctools linker wrapper, NOT GNU libtool, so it
+# must not satisfy this check. bootstrap.sh needs one of the GNU tools.
+if ! command -v libtoolize >/dev/null && ! command -v glibtoolize >/dev/null; then
+    echo "Error: missing required tool: glibtoolize (install with: brew install libtool)"
+    exit 1
+fi
 
 # Refuse to collide with a Homebrew-installed bottle of the same library.
 if [[ -L "$PREFIX/lib/libliquid.dylib" ]] && [[ "$(readlink "$PREFIX/lib/libliquid.dylib")" == *Cellar* ]]; then

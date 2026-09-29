@@ -25,7 +25,7 @@ if(ENABLE_HACKRF AND HACKRF_FOUND)
 endif()
 
 if(ENABLE_BLADERF AND BLADERF_FOUND)
-    find_library(BLADERF_LIBRARY_PATH NAMES bladerf libbladerf
+    find_library(BLADERF_LIBRARY_PATH NAMES bladeRF libbladeRF bladerf libbladerf
         PATHS ${BLADERF_LIBRARY_DIRS}
         NO_DEFAULT_PATH)
     if(BLADERF_LIBRARY_PATH)
@@ -35,9 +35,9 @@ endif()
 
 if(NOT LIQUID_FOUND)
     find_library(LIQUID_LIBRARIES NAMES liquid
-        PATHS /opt/homebrew/lib /usr/local/lib)
+        PATHS /opt/liquid-dsp/lib /opt/liquid-dsp/lib64 /opt/homebrew/lib /usr/local/lib)
     find_path(LIQUID_INCLUDE_DIRS liquid/liquid.h
-        PATHS /opt/homebrew/include /usr/local/include)
+        PATHS /opt/liquid-dsp/include /opt/homebrew/include /usr/local/include)
 
     if(LIQUID_LIBRARIES AND LIQUID_INCLUDE_DIRS)
         set(LIQUID_FOUND TRUE)
@@ -58,7 +58,8 @@ if(ENABLE_HACKRF AND NOT HACKRF_FOUND)
 endif()
 
 if(ENABLE_BLADERF AND NOT BLADERF_FOUND)
-    find_library(BLADERF_LIBRARIES NAMES bladerf libbladerf
+    # NOTE: upstream soname uses capital RF (libbladeRF).
+    find_library(BLADERF_LIBRARIES NAMES bladeRF libbladeRF bladerf libbladerf
         PATHS /opt/homebrew/lib /usr/local/lib)
     find_path(BLADERF_INCLUDE_DIRS libbladeRF.h
         PATHS /opt/homebrew/include /usr/local/include)
@@ -82,7 +83,7 @@ if(NOT ENABLE_HACKRF AND NOT ENABLE_BLADERF)
 endif()
 
 if(NOT LIQUID_FOUND)
-    message(FATAL_ERROR "Liquid DSP library not found. Please install with: brew install liquid-dsp")
+    message(FATAL_ERROR "Liquid DSP library not found. Build from source: bash packaging/build-liquid-linux.sh (Linux) or bash packaging/build-liquid-macos.sh (macOS)")
 endif()
 
 find_package(Threads REQUIRED)

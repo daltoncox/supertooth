@@ -29,11 +29,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             cmake build-essential pkg-config \
-            libhackrf-dev libliquid-dev \
+            libhackrf-dev libbladerf-dev \
+            libfftw3-dev autoconf automake libtool curl \
             libgl1-mesa-dev libxcb*-dev libfontconfig1-dev \
             libxkbcommon-x11-dev libdbus-1-dev \
             libpulse-dev libsdl2-dev \
             python3-venv patchelf fakeroot
+
+      - name: Build liquid-dsp from source
+        # Stock distro liquid-dsp (apt libliquid-dev, built with the default
+        # LIQUID_LOG_LEVEL_COMPILE=0) compiles a liquid_log_trace() call into
+        # every SIMD dotprod execute dispatcher. Build v1.8.2 from source
+        # with -O2 -ffast-math and TRACE logging compiled out instead, into
+        # the isolated /opt/liquid-dsp prefix (see
+        # packaging/build-liquid-linux.sh).
+        run: |
+          sudo bash packaging/build-liquid-linux.sh --prefix /opt/liquid-dsp
 
       - name: Install Qt 6.8.0
         run: |
@@ -47,9 +58,11 @@ jobs:
 
       - name: Configure
         run: |
+          export PKG_CONFIG_PATH="/opt/liquid-dsp/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cmake -S . -B build \
-            -DCMAKE_PREFIX_PATH=/opt/Qt/6.8.0/${{ matrix.qt_arch }} \
+            -DCMAKE_PREFIX_PATH="/opt/liquid-dsp;/opt/Qt/6.8.0/${{ matrix.qt_arch }}" \
             -DBUILD_GUI=ON \
+            -DENABLE_BLADERF=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DSUPERTOOTH_VERSION=${{ github.ref_name }}
 
@@ -66,6 +79,7 @@ jobs:
             --output "./supertooth_linux_${{ matrix.arch }}.deb"
 
       - name: Upload .deb
+        if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v4
         with:
           name: supertooth-deb-${{ matrix.arch }}
@@ -83,7 +97,7 @@ jobs:
       - name: Install build dependencies
         run: |
           brew update
-          brew install cmake pkg-config hackrf qt@6 autoconf automake libtool
+          brew install cmake pkg-config hackrf bladerf qt@6 autoconf automake libtool
           echo "$(brew --prefix qt@6)/bin" >> "$GITHUB_PATH"
 
       - name: Build liquid-dsp from source
@@ -100,6 +114,7 @@ jobs:
           cmake -S . -B build \
             -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
             -DBUILD_GUI=ON \
+            -DENABLE_BLADERF=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DSUPERTOOTH_VERSION=${{ github.ref_name }} \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -117,6 +132,7 @@ jobs:
             --output "./supertooth_macos_arm64.dmg"
 
       - name: Upload .dmg
+        if: ${{ !env.ACT }}
         uses: actions/upload-artifact@v4
         with:
           name: supertooth-dmg-arm64

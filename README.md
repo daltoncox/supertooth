@@ -54,7 +54,7 @@ The CLI ships inside the bundle alongside the GUI:
 |---|---|---|---|
 | `liquid-dsp` | Required (None) | - | - | 
 | `libhackrf` | ENABLE_HACKRF | ON | yes |
-| `libbladerf` | ENABLE_BLADERF | OFF | no |
+| `libbladerf` | ENABLE_BLADERF | OFF | yes |
 | `Qt 6.8+` | BUILD_GUI | OFF | yes |
 | - | BUILD_TESTS | OFF | no |
 
