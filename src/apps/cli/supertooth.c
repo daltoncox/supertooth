@@ -9,6 +9,7 @@
 int ble_main(int argc, char *argv[]);
 int bredr_main(int argc, char *argv[]);
 int hybrid_main(int argc, char *argv[]);
+int devices_main(int argc, char *argv[]);
 int record_main(int argc, char *argv[]);
 
 static void print_top_level_help(const char *prog)
@@ -24,6 +25,8 @@ static void print_top_level_help(const char *prog)
     printf("  %-16s BR/EDR multichannel receiver with piconet tracking\n",
            "bredr");
     printf("\nOther modes:\n");
+    printf("  %-16s list available radio devices (same as -d in the modes above)\n",
+           "devices");
     printf("  %-16s record raw IQ to a WAV file in the current directory (no decoding)\n",
            "record");
     printf("\nOther Options:\n");
@@ -64,7 +67,10 @@ int main(int argc, char *argv[])
      * overwrites argv[0] with its "supertooth <mode>" display name, so
      * getopt parsing is unaffected. "ble" remains a hidden alias for "le",
      * and "classic" remains a hidden alias for "bredr": both work but are
-     * intentionally omitted from the help above. */
+     * intentionally omitted from the help above. Likewise "-d"/"--devices"
+     * (plus the "--device" singular alias) are hidden top-level aliases
+     * for "devices": they forward to devices_main so bare "-d" lists
+     * everything, exactly like bare "-d" inside the decode/record modes. */
     if (strcmp(mode, "hybrid") == 0)
         return hybrid_main(argc - 1, argv + 1);
     if (strcmp(mode, "le") == 0 || strcmp(mode, "ble") == 0)
@@ -73,9 +79,22 @@ int main(int argc, char *argv[])
         return bredr_main(argc - 1, argv + 1);
     if (strcmp(mode, "record") == 0)
         return record_main(argc - 1, argv + 1);
+    if (strcmp(mode, "devices") == 0)
+        return devices_main(argc - 1, argv + 1);
+    if (strcmp(mode, "-d") == 0 ||
+        (strncmp(mode, "-d", 2) == 0 && mode[2] != '\0' &&
+         mode[2] != '-') ||
+        strcmp(mode, "--devices") == 0 || strcmp(mode, "--device") == 0 ||
+        strncmp(mode, "--devices=", 10) == 0 ||
+        strncmp(mode, "--device=", 9) == 0)
+        /* No mode word to strip here: argv[1] already holds the devices
+         * option, so pass argv through untouched and let devices_main
+         * parse from argv[1] (stripping would hide the "-d" token as
+         * argv[0], which getopt skips as the program name). */
+        return devices_main(argc, argv);
 
     fprintf(stderr, "Unknown mode: %s\n\n", mode);
-    fprintf(stderr, "please select an operating mode: hybrid, le, bredr, record\n");
+    fprintf(stderr, "please select an operating mode: hybrid, le, bredr, devices, record\n");
     fprintf(stderr, "Run '%s -h' to list operating modes.\n", prog);
     return EXIT_FAILURE;
 }

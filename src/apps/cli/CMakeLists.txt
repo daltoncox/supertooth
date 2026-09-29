@@ -26,7 +26,7 @@ target_include_directories(cli_common PUBLIC
     ${CLI_INCLUDE_DIRS}
 )
 
-# Multiplexed CLI: `supertooth <hybrid|ble|bredr|record> [options]`.
+# Multiplexed CLI: `supertooth <hybrid|le|bredr|devices|record> [options]`.
 add_executable(supertooth
     supertooth.c
 )

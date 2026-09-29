@@ -16,6 +16,7 @@
  *   int ble_main(int argc, char *argv[]);     // runs as `supertooth le`
  *   int bredr_main(int argc, char *argv[]);   // also runs as `supertooth classic`
  *   int hybrid_main(int argc, char *argv[]);
+ *   int devices_main(int argc, char *argv[]);
  *   int record_main(int argc, char *argv[]);
  */
 
@@ -1815,6 +1816,81 @@ int hybrid_main(int argc, char *argv[])
     free(g_session);
     g_session = NULL;
     return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+/* -------------------------------------------------------------------------
+ * Devices mode
+ * -------------------------------------------------------------------------*/
+
+/* Standalone `supertooth devices`: lists available radio devices, mirroring
+ * what bare `-d` does inside the decode/record modes. `-d`/`--devices`
+ * (plus the `--device` singular alias used by the other modes) accept the
+ * same optional selection (`<n>|<type>|<type>:<id>`) that `-d` accepts in
+ * the particular modes; a selection resolves to that single device while
+ * the bare form lists everything. */
+static void devices_print_usage(const char *argv0)
+{
+    fprintf(stderr, "Usage: %s [options]\n", argv0);
+    fprintf(stderr, "\nDevice Options:\n");
+    fprintf(stderr, "  %-30s List available devices, or show one by number, type, or <type>:<id>\n",
+            "-d, --devices <selection>");
+    app_print_other_usage_lines();
+}
+
+int devices_main(int argc, char *argv[])
+{
+    argv[0] = (char *)"supertooth devices";
+    static const struct option long_opts[] = {
+        {"devices", optional_argument, NULL, 'd'},
+        {"device", optional_argument, NULL, 'd'},
+        {"version", no_argument, NULL, 'V'},
+        {"help", no_argument, NULL, 'h'},
+        {0, 0, 0, 0}
+    };
+
+    int list_devices = 0;
+    const char *device_spec = NULL;
+    app_device_spec_t spec_parsed = { .type = RADIO_DEVICE_HACKRF, .id = NULL };
+    int opt;
+
+    spec_parsed.type = app_default_device_type();
+
+    while ((opt = getopt_long(argc, argv, "d::Vh", long_opts, NULL)) != -1)
+    {
+        switch (opt)
+        {
+        case 'd':
+            consume_device_arg(optarg, argc, argv, &list_devices, &device_spec);
+            break;
+        case 'V':
+            printf("supertooth devices %s\n", supertooth_get_version());
+            return EXIT_SUCCESS;
+        case 'h':
+            devices_print_usage(argv[0]);
+            return EXIT_SUCCESS;
+        default:
+            devices_print_usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+    }
+    if (optind != argc)
+    {
+        devices_print_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    /* Bare `supertooth devices` (or bare -d/--devices) lists everything,
+     * exactly like bare `-d` in the particular modes. */
+    if (!list_devices || !device_spec)
+        return app_print_available_devices(argv[0]);
+
+    /* `-d <selection>` resolves the same way it does in the particular
+     * modes, then shows just that device. */
+    if (app_resolve_device_arg(argv[0], device_spec, &spec_parsed) != 0)
+        return EXIT_FAILURE;
+    printf("%s:%s\n",
+           radio_device_type_name(spec_parsed.type), spec_parsed.id);
+    return EXIT_SUCCESS;
 }
 
 /* -------------------------------------------------------------------------
