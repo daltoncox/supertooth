@@ -61,7 +61,9 @@ void ReceiverController::setRunning(bool running)
 bool ReceiverController::start(int inputType, const QString &deviceId,
                                 int sessionType, bool enforceCrc,
                                 int channelCount, int bottomChannel,
-                                int bleChannel, int acErrors)
+                                int bleChannel, int acErrors,
+                                int hackrfLna, int hackrfVga, int hackrfAmp,
+                                int bladerfGain)
 {
     qCInfo(lcSession).nospace().noquote()
         << "start() requested: inputType=" << inputType
@@ -72,6 +74,10 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         << " bottomChannel=" << bottomChannel
         << " bleChannel=" << bleChannel
         << " acErrors=" << acErrors
+        << " lna=" << hackrfLna
+        << " vga=" << hackrfVga
+        << " amp=" << hackrfAmp
+        << " bladerfGain=" << bladerfGain
         << " running=" << m_running;
 
     if (m_running)
@@ -133,11 +139,21 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
         << ", device=" << (idStr.isEmpty() ? QString("<default>") : idStr)
         << ", channels=" << channelCount
         << ", bottom=" << bottomChannel
-        << ", bleCh=" << bleChannel << ")";
+        << ", bleCh=" << bleChannel
+        << ", lna=" << hackrfLna
+        << ", vga=" << hackrfVga
+        << ", amp=" << hackrfAmp
+        << ", bladerfGain=" << bladerfGain << ")";
+
+    backend_gain_t gain;
+    gain.hackrf_lna = hackrfLna;
+    gain.hackrf_vga = hackrfVga;
+    gain.hackrf_amp = hackrfAmp ? 1 : 0;
+    gain.bladerf_gain_db = bladerfGain;
 
     m_thread = std::make_unique<std::thread>(
         [session, sessionType, inputType, idStr, enforceCrc,
-         channelCount, bottomChannel, bleChannel, self]() {
+         channelCount, bottomChannel, bleChannel, gain, self]() {
             QByteArray idBytes = idStr.toUtf8();
             const char *idPtr = idBytes.isEmpty() ? nullptr
                                                   : idBytes.constData();
@@ -156,6 +172,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
                                                  (unsigned int)channelCount,
                                                  inputType, idPtr,
                                                  enforceCrc ? 1 : 0,
+                                                 &gain,
                                                  &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_ble returned"
                                   << result;
@@ -167,6 +184,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
                                                    (unsigned int)channelCount,
                                                    (unsigned int)bottomChannel,
                                                    inputType, idPtr,
+                                                   &gain,
                                                    &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_bredr returned"
                                   << result;
@@ -180,6 +198,7 @@ bool ReceiverController::start(int inputType, const QString &deviceId,
                                                     (uint8_t)bleChannel,
                                                     inputType, idPtr,
                                                     enforceCrc ? 1 : 0,
+                                                    &gain,
                                                     &rowTrampoline, self);
                 qCInfo(lcSession) << "worker: backend_session_run_hybrid returned"
                                   << result;

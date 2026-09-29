@@ -58,6 +58,15 @@ int main(void)
                                       &out, err, sizeof(err)) != 0);
     TEST_ASSERT(radio_parse_gain_spec(RADIO_DEVICE_HACKRF, "xx,18", &out,
                                       err, sizeof(err)) != 0);
+    /* Hardware grid: LNA in 8 dB steps, VGA even. */
+    TEST_ASSERT(radio_parse_gain_spec(RADIO_DEVICE_HACKRF, "25,18", &out,
+                                      err, sizeof(err)) != 0);
+    TEST_ASSERT(radio_parse_gain_spec(RADIO_DEVICE_HACKRF, "24,19", &out,
+                                      err, sizeof(err)) != 0);
+    TEST_ASSERT(radio_parse_gain_spec(RADIO_DEVICE_HACKRF, "0,0", &out,
+                                      NULL, 0) == 0);
+    TEST_ASSERT(radio_parse_gain_spec(RADIO_DEVICE_HACKRF, "40,62,1", &out,
+                                      NULL, 0) == 0);
     TEST_ASSERT(err[0] != '\0');
 
     /* bladeRF: single dB value. */

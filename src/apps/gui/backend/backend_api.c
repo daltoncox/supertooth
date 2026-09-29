@@ -63,6 +63,50 @@ void backend_set_debug(int on)
     g_gui_debug = on ? 1 : 0;
 }
 
+/* Resolve the GUI gain selection into a session-ready radio_gain_spec_t.
+ * NULL = device defaults (present == 0, session fills per-device values).
+ * Non-NULL = explicit selection (present == 1), defensively clamped to the
+ * hardware grid so QML ints can never fail a session start: HackRF LNA is
+ * snapped down to an 8 dB step in 0..40, VGA is snapped down to an even
+ * value in 0..62, AMP is normalized to 0/1, bladeRF gain is clamped to
+ * 0..60 dB. Only the fields for the selected input type are read. */
+static void backend_resolve_gain(int input_type, const backend_gain_t *gui,
+                                 radio_gain_spec_t *out)
+{
+    radio_device_type_t dev = backend_device_for_input(input_type);
+    radio_gain_default(dev, out);
+    if (!gui)
+        return;
+    out->present = 1;
+    if (dev == RADIO_DEVICE_HACKRF)
+    {
+        int lna = gui->hackrf_lna;
+        int vga = gui->hackrf_vga;
+        if (lna < RADIO_HACKRF_LNA_MIN)
+            lna = RADIO_HACKRF_LNA_MIN;
+        if (lna > RADIO_HACKRF_LNA_MAX)
+            lna = RADIO_HACKRF_LNA_MAX;
+        lna = (lna / 8) * 8;
+        if (vga < RADIO_HACKRF_VGA_MIN)
+            vga = RADIO_HACKRF_VGA_MIN;
+        if (vga > RADIO_HACKRF_VGA_MAX)
+            vga = RADIO_HACKRF_VGA_MAX;
+        vga = (vga / 2) * 2;
+        out->hackrf_lna = lna;
+        out->hackrf_vga = vga;
+        out->hackrf_amp = gui->hackrf_amp ? 1 : 0;
+    }
+    else if (dev == RADIO_DEVICE_BLADERF)
+    {
+        int g = gui->bladerf_gain_db;
+        if (g < RADIO_BLADERF_GAIN_MIN)
+            g = RADIO_BLADERF_GAIN_MIN;
+        if (g > RADIO_BLADERF_GAIN_MAX)
+            g = RADIO_BLADERF_GAIN_MAX;
+        out->bladerf_gain_db = g;
+    }
+}
+
 /* Inverse of backend_device_for_input(): BACKEND_INPUT_* for a live radio
  * type, or -1 when the type is not a compiled-in live radio. */
 static int backend_input_for_device(radio_device_type_t type)
@@ -1035,6 +1079,7 @@ int backend_session_run_ble(backend_session_t *session,
                             int input_type,
                             const char *device_id,
                             int enforce_crc,
+                            const backend_gain_t *gain,
                             backend_row_fn on_row,
                             void *user)
 {
@@ -1048,6 +1093,8 @@ int backend_session_run_ble(backend_session_t *session,
     session->enforce_crc = enforce_crc ? 1 : 0;
 
     radio_device_type_t dev_type = backend_device_for_input(input_type);
+    radio_gain_spec_t gain_spec;
+    backend_resolve_gain(input_type, gain, &gain_spec);
 
     /* Defensive clamping of the LE window: 40 RF channels (0..39), up to
      * BLE_SESSION_MAX_CHANNELS processors. */
@@ -1064,6 +1111,7 @@ int backend_session_run_ble(backend_session_t *session,
         .device_type = dev_type,
         .device_id = device_id,
         .debug = g_gui_debug,
+        .gain = gain_spec,
     };
     if (session_init(s, &cfg) != 0)
         return -1;
@@ -1082,6 +1130,7 @@ int backend_session_run_bredr(backend_session_t *session,
                               unsigned int bottom_channel,
                               int input_type,
                               const char *device_id,
+                              const backend_gain_t *gain,
                               backend_row_fn on_row,
                               void *user)
 {
@@ -1093,6 +1142,8 @@ int backend_session_run_bredr(backend_session_t *session,
     session->packet_count = 0ul;
 
     radio_device_type_t dev_type = backend_device_for_input(input_type);
+    radio_gain_spec_t gain_spec;
+    backend_resolve_gain(input_type, gain, &gain_spec);
 
     /* Defensive clamping, mirroring run_bredr validation. The on-air
      * band is channels 0..78. Counts snap down to the nearest supported
@@ -1113,6 +1164,7 @@ int backend_session_run_bredr(backend_session_t *session,
         .device_type = dev_type,
         .device_id = device_id,
         .debug = g_gui_debug,
+        .gain = gain_spec,
     };
     if (session_init(session->session, &cfg) != 0)
         return -1;
@@ -1133,6 +1185,7 @@ int backend_session_run_hybrid(backend_session_t *session,
                                int input_type,
                                const char *device_id,
                                int enforce_crc,
+                               const backend_gain_t *gain,
                                backend_row_fn on_row,
                                void *user)
 {
@@ -1145,6 +1198,8 @@ int backend_session_run_hybrid(backend_session_t *session,
     session->enforce_crc = enforce_crc ? 1 : 0;
 
     radio_device_type_t dev_type = backend_device_for_input(input_type);
+    radio_gain_spec_t gain_spec;
+    backend_resolve_gain(input_type, gain, &gain_spec);
 
     /* Hybrid always captures the BR/EDR grid: channel_count MHz (even
      * count) from bottom_channel. BLE fans out inside the window from the
@@ -1167,6 +1222,7 @@ int backend_session_run_hybrid(backend_session_t *session,
         .device_type = dev_type,
         .device_id = device_id,
         .debug = g_gui_debug,
+        .gain = gain_spec,
     };
     if (session_init(session->session, &cfg) != 0)
         return -1;

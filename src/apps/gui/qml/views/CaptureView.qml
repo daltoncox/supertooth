@@ -19,6 +19,19 @@ Rectangle {
     // Maximum BR/EDR access-code bit errors tolerated by the bitstream decoder.
     // 0 (default) = strict, byte-perfect access-code match.
     property int acErrors: 0
+    // RX gains. HackRF: LNA 0,8,...,40 (default 24), VGA even 0-62
+    // (default 18), AMP off by default. bladeRF: overall gain 0-60 dB
+    // (default 30). Only the fields for the selected inputType are used.
+    // Reset to defaults on radio-type switch (see selectInputType).
+    property int hackrfLna: 24
+    property int hackrfVga: 18
+    property bool hackrfAmp: false
+    property int bladerfGain: 30
+    // Dropdown option lists for the gain boxes. LNA/AMP are small enough
+    // to inline in their models below; VGA (even 0-62) and bladeRF (0-60)
+    // are built once on startup.
+    property var vgaOptions: []
+    property var bladerfGainOptions: []
     property bool running: false
 
     // Device-type selector model, populated from the compiled-in live
@@ -206,12 +219,28 @@ Rectangle {
             return
         }
         root.inputType = value
+        resetGainsToDefaults()
         updateDeviceCounts()
         resetWindowToDefaults()
         refreshDevices()
     }
 
+    function resetGainsToDefaults() {
+        root.hackrfLna = 24
+        root.hackrfVga = 18
+        root.hackrfAmp = false
+        root.bladerfGain = 30
+    }
+
     Component.onCompleted: {
+        var vga = []
+        for (var v = 0; v <= 62; v += 2)
+            vga.push(v)
+        root.vgaOptions = vga
+        var gains = []
+        for (var g = 0; g <= 60; g++)
+            gains.push(g)
+        root.bladerfGainOptions = gains
         var inputs = radioDeviceModel.availableInputTypes()
         var labels = []
         var values = []
@@ -276,17 +305,22 @@ Rectangle {
             font.family: "Google Sans Code"
             font.pixelSize: 11
             Layout.fillWidth: true
+            horizontalAlignment: Text.AlignHCenter
         }
 
         // ---- Center bar: session + device selection ----------------------
+        // Top margin leaves headroom for the floating box labels, which
+        // paint just above the row (see LabeledComboBox).
         RowLayout {
             Layout.fillWidth: true
+            Layout.topMargin: 6
             spacing: 12
 
-            ComboBox {
+            LabeledComboBox {
                 id: sessionTypeSelector
                 enabled: !root.running
-                Layout.preferredWidth: 140
+                Layout.preferredWidth: 120
+                label: qsTr("Mode")
                 model: ["Hybrid", "LE", "BR/EDR"]
                 currentIndex: root.sessionTypeIndex
 
@@ -295,10 +329,11 @@ Rectangle {
                 }
             }
 
-            ComboBox {
+            LabeledComboBox {
                 id: inputTypeSelector
                 enabled: !root.running && root.inputTypeValues.length > 0
-                Layout.preferredWidth: 140
+                Layout.preferredWidth: 120
+                label: qsTr("Device")
                 model: root.inputTypeLabels
 
                 onActivated: function (index) {
@@ -306,16 +341,83 @@ Rectangle {
                 }
             }
 
-            ComboBox {
+            LabeledComboBox {
                 id: deviceIdSelector
                 enabled: !root.running
                 Layout.fillWidth: true
+                Layout.minimumWidth: 140
+                label: qsTr("Identifier")
 
                 model: radioDeviceModel
                 textRole: "display"
 
                 onActivated: function (index) {
                     root.deviceID = deviceIdSelector.currentText
+                }
+            }
+
+            // ---- RX gains (right side, before refresh) -------------------
+            // HackRF: LNA/VGA/AMP dropdowns. bladeRF: single gain dropdown.
+            // Each label floats on its box's top border (LabeledComboBox).
+            // Only the active radio's controls are visible; the device
+            // selector above holds Layout.fillWidth so it shrinks to fit.
+            RowLayout {
+                spacing: 4
+                visible: root.inputType === 0
+
+                LabeledComboBox {
+                    id: lnaGain
+                    enabled: !root.running
+                    Layout.preferredWidth: 88
+                    label: qsTr("LNA")
+                    model: [0, 8, 16, 24, 32, 40]
+                    currentIndex: model.indexOf(root.hackrfLna)
+
+                    onActivated: function (index) {
+                        root.hackrfLna = lnaGain.model[index]
+                    }
+                }
+                LabeledComboBox {
+                    id: vgaGain
+                    enabled: !root.running
+                    Layout.preferredWidth: 88
+                    label: qsTr("VGA")
+                    model: root.vgaOptions
+                    currentIndex: model.indexOf(root.hackrfVga)
+
+                    onActivated: function (index) {
+                        root.hackrfVga = vgaGain.model[index]
+                    }
+                }
+                LabeledComboBox {
+                    id: ampGain
+                    enabled: !root.running
+                    Layout.preferredWidth: 100
+                    label: qsTr("AMP")
+                    model: ["Off", "On"]
+                    currentIndex: root.hackrfAmp ? 1 : 0
+
+                    onActivated: function (index) {
+                        root.hackrfAmp = (index === 1)
+                    }
+                }
+            }
+
+            RowLayout {
+                spacing: 4
+                visible: root.inputType === 2
+
+                LabeledComboBox {
+                    id: bladerfGainBox
+                    enabled: !root.running
+                    Layout.preferredWidth: 88
+                    label: qsTr("Gain")
+                    model: root.bladerfGainOptions
+                    currentIndex: model.indexOf(root.bladerfGain)
+
+                    onActivated: function (index) {
+                        root.bladerfGain = bladerfGainBox.model[index]
+                    }
                 }
             }
 

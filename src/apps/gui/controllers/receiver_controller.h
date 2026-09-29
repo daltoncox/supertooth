@@ -61,12 +61,22 @@ public:
      * @param acErrors   Maximum BR/EDR access-code bit errors tolerated by the
      *                   bitstream decoder (0 = strict, byte-perfect match).
      *                   Defaults to 0; applies to BR/EDR and hybrid sessions.
+     * @param hackrfLna  HackRF LNA gain dB (0,8,16,24,32,40; default 24).
+     *                   Only used for HackRF input; clamped to the grid.
+     * @param hackrfVga  HackRF VGA gain dB (even 0-62; default 18).
+     *                   Only used for HackRF input; clamped to the grid.
+     * @param hackrfAmp  HackRF AMP enabled (0=off, 1=on; default 0).
+     *                   Only used for HackRF input.
+     * @param bladerfGain bladeRF overall RX gain dB (0-60; default 30).
+     *                   Only used for bladeRF input; clamped.
      * @return true if the session was started (or already running).
      */
     Q_INVOKABLE bool start(int inputType, const QString &deviceId,
                            int sessionType, bool enforceCrc,
                            int channelCount, int bottomChannel,
-                           int bleChannel, int acErrors);
+                           int bleChannel, int acErrors,
+                           int hackrfLna, int hackrfVga, int hackrfAmp,
+                           int bladerfGain);
     /** Request the running session to stop and join the worker thread. */
     Q_INVOKABLE void stop();
 

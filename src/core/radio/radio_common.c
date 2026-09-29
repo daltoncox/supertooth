@@ -140,12 +140,12 @@ int radio_parse_gain_spec(radio_device_type_t type, const char *str,
                 GAIN_FAIL("bad AMP value '%s'", c2 + 1);
         }
 
-        if (lna < RADIO_HACKRF_LNA_MIN || lna > RADIO_HACKRF_LNA_MAX)
-            GAIN_FAIL("LNA %ld out of range (%d-%d)", lna,
-                      RADIO_HACKRF_LNA_MIN, RADIO_HACKRF_LNA_MAX);
-        if (vga < RADIO_HACKRF_VGA_MIN || vga > RADIO_HACKRF_VGA_MAX)
-            GAIN_FAIL("VGA %ld out of range (%d-%d)", vga,
-                      RADIO_HACKRF_VGA_MIN, RADIO_HACKRF_VGA_MAX);
+        if (lna < RADIO_HACKRF_LNA_MIN || lna > RADIO_HACKRF_LNA_MAX ||
+            (lna % 8) != 0)
+            GAIN_FAIL("LNA %ld invalid (use 0,8,16,24,32,40)", lna);
+        if (vga < RADIO_HACKRF_VGA_MIN || vga > RADIO_HACKRF_VGA_MAX ||
+            (vga % 2) != 0)
+            GAIN_FAIL("VGA %ld invalid (use an even value 0-62)", vga);
         if (amp != 0 && amp != 1)
             GAIN_FAIL("AMP %ld out of range (0=off, 1=on)", amp);
 
@@ -193,13 +193,11 @@ void radio_print_gain_help(radio_device_type_t type)
     case RADIO_DEVICE_HACKRF:
         fprintf(stderr,
                 "HackRF gain (-g LNA,VGA[,AMP]):\n"
-                "  LNA  %d-%d dB in 8 dB steps (default %d)\n"
-                "  VGA  %d-%d dB in 2 dB steps (default %d)\n"
+                "  LNA  0,8,16,24,32,40 dB (default %d)\n"
+                "  VGA  even 0-62 dB in 2 dB steps (default %d)\n"
                 "  AMP  0=off (default), 1=on (+14 dB)\n"
                 "  Examples: -g 24,18  -g 32,28,1\n",
-                RADIO_HACKRF_LNA_MIN, RADIO_HACKRF_LNA_MAX,
                 RADIO_HACKRF_LNA_DEFAULT,
-                RADIO_HACKRF_VGA_MIN, RADIO_HACKRF_VGA_MAX,
                 RADIO_HACKRF_VGA_DEFAULT);
         break;
     case RADIO_DEVICE_BLADERF:

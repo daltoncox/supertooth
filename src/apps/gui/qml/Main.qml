@@ -73,7 +73,11 @@ ApplicationWindow {
                             "enforceCrc =", captureView.enforceCrc,
                             "channels =", count,
                             "bottom =", bottom,
-                            "bleAdv =", captureView.backendBleAdvChannel)
+                            "bleAdv =", captureView.backendBleAdvChannel,
+                            "lna =", captureView.hackrfLna,
+                            "vga =", captureView.hackrfVga,
+                            "amp =", captureView.hackrfAmp,
+                            "bladerfGain =", captureView.bladerfGain)
                 if (receiverController.running) {
                     receiverController.stop()
                 } else {
@@ -86,7 +90,11 @@ ApplicationWindow {
                                              count,
                                              bottom,
                                              captureView.backendBleAdvChannel,
-                                             captureView.acErrors)
+                                             captureView.acErrors,
+                                             captureView.hackrfLna,
+                                             captureView.hackrfVga,
+                                             captureView.hackrfAmp ? 1 : 0,
+                                             captureView.bladerfGain)
                 }
             }
         }

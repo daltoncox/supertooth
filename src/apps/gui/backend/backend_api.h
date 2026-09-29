@@ -158,6 +158,18 @@ void backend_session_set_stopped_callback(backend_session_t *session,
                                           backend_stopped_fn on_stopped,
                                           void *user);
 
+/* RX gain selection for the GUI session runners below. Plain ints (no core
+ * headers) so the Qt/C++ side can construct it from QML SpinBox values.
+ * Only the fields for the selected input type are used; the rest are
+ * ignored. NULL gain pointer = device defaults (same as omitting -g). */
+typedef struct
+{
+    int hackrf_lna;      /* HackRF LNA: 0,8,16,24,32,40 (default 24) */
+    int hackrf_vga;      /* HackRF VGA: even 0-62 (default 18) */
+    int hackrf_amp;      /* HackRF AMP: 0=off, 1=on (default 0) */
+    int bladerf_gain_db; /* bladeRF overall RX gain 0-60 dB (default 30) */
+} backend_gain_t;
+
 /**
  * Start a blocking BLE receive session on the given LE channel window:
  * le_channel_count consecutive LE RF channels (1..40) starting at
@@ -171,6 +183,7 @@ void backend_session_set_stopped_callback(backend_session_t *session,
  *
  * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_BLADERF.
  * @param device_id   Radio identifier (NULL = default).
+ * @param gain        RX gains (NULL = device defaults).
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_ble(backend_session_t *session,
@@ -179,6 +192,7 @@ int backend_session_run_ble(backend_session_t *session,
                             int input_type,
                             const char *device_id,
                             int enforce_crc,
+                            const backend_gain_t *gain,
                             backend_row_fn on_row,
                             void *user);
 
@@ -193,6 +207,7 @@ int backend_session_run_ble(backend_session_t *session,
  *
  * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_BLADERF.
  * @param device_id   Radio identifier (NULL = default).
+ * @param gain        RX gains (NULL = device defaults).
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_bredr(backend_session_t *session,
@@ -200,6 +215,7 @@ int backend_session_run_bredr(backend_session_t *session,
                               unsigned int bottom_channel,
                               int input_type,
                               const char *device_id,
+                              const backend_gain_t *gain,
                               backend_row_fn on_row,
                               void *user);
 
@@ -216,6 +232,7 @@ int backend_session_run_bredr(backend_session_t *session,
  *
  * @param input_type  BACKEND_INPUT_HACKRF or BACKEND_INPUT_BLADERF.
  * @param device_id   Radio identifier (NULL = default).
+ * @param gain        RX gains (NULL = device defaults).
  * @return 0 on clean stop, negative on failure to start.
  */
 int backend_session_run_hybrid(backend_session_t *session,
@@ -225,6 +242,7 @@ int backend_session_run_hybrid(backend_session_t *session,
                                int input_type,
                                const char *device_id,
                                int enforce_crc,
+                               const backend_gain_t *gain,
                                backend_row_fn on_row,
                                void *user);
 
