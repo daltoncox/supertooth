@@ -303,6 +303,50 @@ static void print_valid_ble_counts(radio_device_type_t dtype)
     fprintf(stderr, "\n");
 }
 
+/* -c takes an optional value, so "-c20"/"--channels=20" bind the value
+ * but a detached "-c 20" would not. Accept that form too: returns the
+ * value to parse (consuming the next argv entry when detached), or NULL
+ * when the option was given with no value. */
+static const char *take_optional_count_arg(const char *inline_arg,
+                                           int argc, char *argv[])
+{
+    if (inline_arg)
+        return inline_arg;
+    if (optind < argc && argv[optind] && argv[optind][0] != '-')
+        return argv[optind++];
+    return NULL;
+}
+
+/* Report a rejected --channels argument on the BR/EDR grid. The set of
+ * counts the tuner accepts depends on the radio, so list the valid ones
+ * instead of quoting a fixed range. @p arg is NULL when the option was
+ * given without a value. */
+static void report_bredr_channels_error(const char *arg,
+                                        radio_device_type_t dtype,
+                                        int ble_fanout,
+                                        void (*usage)(const char *),
+                                        const char *prog)
+{
+    if (arg)
+        fprintf(stderr, "Invalid --channels value: %s\n", arg);
+    else
+        fprintf(stderr, "--channels requires a channel count.\n");
+    print_valid_bredr_counts(dtype, ble_fanout);
+    usage(prog);
+}
+
+/* Same, on the LE grid. */
+static void report_ble_channels_error(const char *arg, radio_device_type_t dtype,
+                                      void (*usage)(const char *), const char *prog)
+{
+    if (arg)
+        fprintf(stderr, "Invalid --channels value: %s\n", arg);
+    else
+        fprintf(stderr, "--channels requires a channel count.\n");
+    print_valid_ble_counts(dtype);
+    usage(prog);
+}
+
 /* Default the BR/EDR window to what the selected radio can sustain (the
  * pre-parse default assumed the build default), then validate the
  * bottom/range/layout. @p ble_fanout selects the session layout kind:
@@ -868,7 +912,7 @@ int ble_main(int argc, char *argv[])
     argv[0] = (char *)"supertooth le";
     static const struct option long_opts[] = {
         {"view", required_argument, NULL, 'v'},
-        {"channels", required_argument, NULL, 'c'},
+        {"channels", optional_argument, NULL, 'c'},
         {"bottom", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
         {"gain", required_argument, NULL, 'g'},
@@ -888,6 +932,9 @@ int ble_main(int argc, char *argv[])
     const char *gain_raw = NULL;
     radio_gain_spec_t gain_spec;
     int opt;
+    const char *count_arg = NULL;
+    int channels_error = 0;
+    const char *channels_bad_arg = NULL;
     int resolve_rc;
     unsigned int bottom_rf;
     unsigned int span_mhz;
@@ -912,7 +959,7 @@ int ble_main(int argc, char *argv[])
      * device was selected. */
     ble_num_le_channels = session_default_ble_count(spec_parsed.type);
 
-    while ((opt = getopt_long(argc, argv, "v:c:b:d::g:Vh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:c::b:d::g:Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -921,12 +968,15 @@ int ble_main(int argc, char *argv[])
                 return EXIT_FAILURE;
             break;
         case 'c':
-            if (parse_le_channel_count(optarg, &ble_num_le_channels) != 0)
+            count_arg = take_optional_count_arg(optarg, argc, argv);
+            if (parse_le_channel_count(count_arg, &ble_num_le_channels) != 0)
             {
-                fprintf(stderr, "Invalid --channels value: %s (expected 1-%u)\n",
-                        optarg, BLE_SESSION_MAX_CHANNELS);
-                ble_print_usage(argv[0]);
-                return EXIT_FAILURE;
+                /* Deferred: the valid counts depend on the radio, which
+                 * is only known once the options (notably -d) are parsed
+                 * and the default device is picked. */
+                channels_error = 1;
+                channels_bad_arg = count_arg;
+                break;
             }
             ble_channels_explicit = 1;
             break;
@@ -979,6 +1029,13 @@ int ble_main(int argc, char *argv[])
         return EXIT_SUCCESS;
     if (resolve_rc < 0)
         return EXIT_FAILURE;
+
+    if (channels_error)
+    {
+        report_ble_channels_error(channels_bad_arg, spec_parsed.type,
+                                  ble_print_usage, argv[0]);
+        return EXIT_FAILURE;
+    }
 
     /* When the user did not pass -c, default to what the *selected* radio
      * can sustain (the pre-parse default assumed the build default). */
@@ -1271,7 +1328,7 @@ int bredr_main(int argc, char *argv[])
     static const struct option long_opts[] = {
         {"view",           required_argument, NULL, 'v'},
         {"lap",            required_argument, NULL, 'l'},
-        {"channels",       required_argument, NULL, 'c'},
+        {"channels",       optional_argument, NULL, 'c'},
         {"bottom", required_argument, NULL, 'b'},
         {"device",         optional_argument, NULL, 'd'},
         {"gain",           required_argument, NULL, 'g'},
@@ -1302,7 +1359,10 @@ int bredr_main(int argc, char *argv[])
     int result;
     int resolve_rc;
     int opt;
+    const char *count_arg = NULL;
 
+    int channels_error = 0;
+    const char *channels_bad_arg = NULL;
     spec_parsed.type = app_default_device_type();
 
     /* Default the channel count to what the radio can actually sustain and
@@ -1311,7 +1371,7 @@ int bredr_main(int argc, char *argv[])
     g_num_bredr_channels =
         session_default_bredr_count(spec_parsed.type);
 
-    while ((opt = getopt_long(argc, argv, "v:l:a:c:b:d::g:Vh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:l:a:c::b:d::g:Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -1329,13 +1389,16 @@ int bredr_main(int argc, char *argv[])
                 bredr_lap_filter_enabled = 1;
                 break;
             case 'c':
-        if (parse_bredr_channel_count(optarg, &g_num_bredr_channels) != 0)
-        {
-            fprintf(stderr, "Invalid --channels value: %s (expected even 2-78, 79 or \"all\")\n",
-                    optarg);
-            bredr_print_usage(argv[0]);
-            return EXIT_FAILURE;
-        }
+                count_arg = take_optional_count_arg(optarg, argc, argv);
+                if (parse_bredr_channel_count(count_arg, &g_num_bredr_channels) != 0)
+                {
+                    /* Deferred: the valid counts depend on the radio, which
+                     * is only known once the options (notably -d) are
+                     * parsed and the default device is picked. */
+                    channels_error = 1;
+                    channels_bad_arg = count_arg;
+                    break;
+                }
                 g_channels_explicit = 1;
                 break;
             case 'b':
@@ -1393,6 +1456,14 @@ int bredr_main(int argc, char *argv[])
         return EXIT_SUCCESS;
     if (resolve_rc < 0)
         return EXIT_FAILURE;
+
+    if (channels_error)
+    {
+        report_bredr_channels_error(channels_bad_arg,
+                                    spec_parsed.type, 0,
+                                    bredr_print_usage, argv[0]);
+        return EXIT_FAILURE;
+    }
 
     if (resolve_bredr_window(argv[0], device_selected, spec_parsed.type,
                              0) != 0)
@@ -1577,7 +1648,7 @@ int hybrid_main(int argc, char *argv[])
     argv[0] = (char *)"supertooth hybrid";
     static const struct option long_opts[] = {
         {"view", required_argument, NULL, 'v'},
-        {"channels", required_argument, NULL, 'c'},
+        {"channels", optional_argument, NULL, 'c'},
         {"bottom", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
         {"gain", required_argument, NULL, 'g'},
@@ -1613,7 +1684,10 @@ int hybrid_main(int argc, char *argv[])
     int result;
     int resolve_rc;
     int opt;
+    const char *count_arg = NULL;
 
+    int channels_error = 0;
+    const char *channels_bad_arg = NULL;
     spec_parsed.type = app_default_device_type();
 
     /* Default the BR/EDR channel count to what the radio can sustain and
@@ -1622,7 +1696,7 @@ int hybrid_main(int argc, char *argv[])
     g_num_bredr_channels =
         session_default_bredr_count(spec_parsed.type);
 
-    while ((opt = getopt_long(argc, argv, "v:c:b:d::g:Vh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "v:c::b:d::g:Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
@@ -1631,12 +1705,15 @@ int hybrid_main(int argc, char *argv[])
                 return EXIT_FAILURE;
             break;
         case 'c':
-            if (parse_bredr_channel_count(optarg, &g_num_bredr_channels) != 0)
+            count_arg = take_optional_count_arg(optarg, argc, argv);
+            if (parse_bredr_channel_count(count_arg, &g_num_bredr_channels) != 0)
             {
-                fprintf(stderr, "Invalid --channels value: %s (expected even 2-78, 79 or \"all\")\n",
-                        optarg);
-                hybrid_print_usage(argv[0]);
-                return EXIT_FAILURE;
+                /* Deferred: the valid counts depend on the radio, which is
+                 * only known once the options (notably -d) are parsed and
+                 * the default device is picked. */
+                channels_error = 1;
+                channels_bad_arg = count_arg;
+                break;
             }
             g_channels_explicit = 1;
             break;
@@ -1699,6 +1776,14 @@ int hybrid_main(int argc, char *argv[])
         return EXIT_SUCCESS;
     if (resolve_rc < 0)
         return EXIT_FAILURE;
+
+    if (channels_error)
+    {
+        report_bredr_channels_error(channels_bad_arg,
+                                    spec_parsed.type, 1,
+                                    hybrid_print_usage, argv[0]);
+        return EXIT_FAILURE;
+    }
 
     if (resolve_bredr_window(argv[0], device_selected, spec_parsed.type,
                              1) != 0)
@@ -1917,7 +2002,7 @@ int record_main(int argc, char *argv[])
 {
     argv[0] = (char *)"supertooth record";
     static const struct option long_opts[] = {
-        {"channels", required_argument, NULL, 'c'},
+        {"channels", optional_argument, NULL, 'c'},
         {"bottom", required_argument, NULL, 'b'},
         {"device", optional_argument, NULL, 'd'},
         {"gain", required_argument, NULL, 'g'},
@@ -1939,7 +2024,10 @@ int record_main(int argc, char *argv[])
     app_record_config_t rcfg;
     int resolve_rc;
     int opt;
+    const char *count_arg = NULL;
 
+    int channels_error = 0;
+    const char *channels_bad_arg = NULL;
     spec_parsed.type = app_default_device_type();
 
     /* Default the channel count to what the radio can actually sustain
@@ -1948,17 +2036,20 @@ int record_main(int argc, char *argv[])
     g_num_bredr_channels =
         session_default_bredr_count(spec_parsed.type);
 
-    while ((opt = getopt_long(argc, argv, "c:b:d::g:Vh", long_opts, NULL)) != -1)
+    while ((opt = getopt_long(argc, argv, "c::b:d::g:Vh", long_opts, NULL)) != -1)
     {
         switch (opt)
         {
         case 'c':
-            if (parse_bredr_channel_count(optarg, &g_num_bredr_channels) != 0)
+            count_arg = take_optional_count_arg(optarg, argc, argv);
+            if (parse_bredr_channel_count(count_arg, &g_num_bredr_channels) != 0)
             {
-                fprintf(stderr, "Invalid --channels value: %s (expected even 2-78, 79 or \"all\")\n",
-                        optarg);
-                record_print_usage(argv[0]);
-                return EXIT_FAILURE;
+                /* Deferred: the valid counts depend on the radio, which is
+                 * only known once the options (notably -d) are parsed and
+                 * the default device is picked. */
+                channels_error = 1;
+                channels_bad_arg = count_arg;
+                break;
             }
             g_channels_explicit = 1;
             break;
@@ -2005,6 +2096,14 @@ int record_main(int argc, char *argv[])
         return EXIT_SUCCESS;
     if (resolve_rc < 0)
         return EXIT_FAILURE;
+
+    if (channels_error)
+    {
+        report_bredr_channels_error(channels_bad_arg,
+                                    spec_parsed.type, 0,
+                                    record_print_usage, argv[0]);
+        return EXIT_FAILURE;
+    }
 
     if (resolve_bredr_window(argv[0], device_selected, spec_parsed.type,
                              0) != 0)
