@@ -1147,8 +1147,11 @@ int backend_session_run_bredr(backend_session_t *session,
 
     /* Defensive clamping, mirroring run_bredr validation. The on-air
      * band is channels 0..78. Counts snap down to the nearest supported
-     * lane split (backend devices are HackRF-class: <= 20 channels). */
-    channel_count &= ~1u;
+     * lane split (backend devices are HackRF-class: <= 20 channels).
+     * 79 ("all") is the odd exception: the full 0..78 band at 80 Msps,
+     * LO 2441 MHz -- never force it even (79 & ~1 == 78 snaps to 72). */
+    if (channel_count != BREDR_SESSION_MAX_CHANNELS)
+        channel_count &= ~1u;
     if (channel_count < 2u)
         channel_count = 2u;
     if (channel_count > BREDR_SESSION_MAX_CHANNELS)
@@ -1204,9 +1207,12 @@ int backend_session_run_hybrid(backend_session_t *session,
     /* Hybrid always captures the BR/EDR grid: channel_count MHz (even
      * count) from bottom_channel. BLE fans out inside the window from the
      * shared channelizer, so no LE-grid tune exists anymore. Counts snap
-     * to the lane-split table like the BR/EDR path. */
+     * to the lane-split table like the BR/EDR path. 79 ("all") is the odd
+     * exception: the full 0..78 band at 80 Msps, LO 2441 MHz -- never
+     * force it even (79 & ~1 == 78 snaps to 72). */
     session_protocol_ref_t ref = SESSION_REF_BREDR;
-    channel_count &= ~1u;
+    if (channel_count != BREDR_SESSION_MAX_CHANNELS)
+        channel_count &= ~1u;
     if (channel_count < 2u)
         channel_count = 2u;
     if (channel_count > BREDR_SESSION_MAX_CHANNELS)

@@ -147,6 +147,10 @@ Item {
         if (root.bleLocked) {
             return Math.max(2, Math.min(maxChannels, Math.round(count)))
         }
+        // No valid-counts list yet: even-clamp, but preserve 79 ("all")
+        // when the radio can take it.
+        if (Math.round(count) >= 79 && maxChannels >= 79)
+            return 79
         var c = Math.round(count / 2) * 2
         return Math.max(2, Math.min(maxChannels, c))
     }
@@ -430,9 +434,13 @@ Item {
             var c = root.clampCount(root.bleLocked ? mhz / 2 : mhz)
             var maxForBand = root.bleLocked ? 40 - root.bottomLeIndex
                                             : root.bandChannelCount - root.bottomChannel
+            // Snap the band clip back into the supported lane-split set so
+            // the emitted window is the window the session actually tunes
+            // (a blind even-truncation can emit unsupported counts like 78
+            // that the backend snaps down further, and destroys the 79
+            // "all" sentinel when it fits).
             if (c > maxForBand)
-                c = root.bleLocked ? Math.max(2, maxForBand)
-                                   : Math.max(2, maxForBand - (maxForBand % 2))
+                c = Math.max(2, root.clampCount(maxForBand))
             root.windowEdited(root.bleLocked ? root.bottomLeIndex : root.bottomChannel,
                               c, root.bleLocked)
         }

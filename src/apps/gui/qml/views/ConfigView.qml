@@ -74,8 +74,10 @@ Rectangle {
     readonly property real windowMhz: bleLocked ? numChannels * 2
                                                  : numChannels
     // Sample rate mirrors run_bredr.c: 4 Msps for a 2 MHz window,
-    // else window MHz * 1 Msps.
-    readonly property real sampleRateHz: windowMhz === 2 ? 4e6 : windowMhz * 1e6
+    // else window MHz * 1 Msps -- except 79 ("all"), which captures the
+    // full 0..78 band at 80 Msps (LO 2441 MHz), not a 79 MHz window.
+    readonly property real sampleRateHz: (!bleLocked && numChannels === 79) ? 80e6
+                                          : windowMhz === 2 ? 4e6 : windowMhz * 1e6
     // LO sits at the center of the capture window — a half-MHz frequency
     // when BR/EDR-locked, a whole-MHz frequency when LE-locked.
     readonly property real loFreqHz: (windowLeftMhz + windowMhz / 2.0) * 1e6
@@ -83,11 +85,13 @@ Rectangle {
     // ---- Channel ranges covered by the window ------------------------------
     // LE: when LE-locked the window is exactly numChannels LE channels
     // wide from bottomLeIndex; when BR/EDR-locked the edges never land on
-    // LE centers so the window spans numChannels/2 LE channels.
+    // LE centers so the window spans ceil(numChannels/2) LE channels --
+    // the ceil covers 79 ("all", odd full-band sentinel: all 40 LE
+    // channels), even counts are unaffected.
     readonly property int leFirstRf: bleLocked ? bottomLeIndex
-                                                : Math.max(0, Math.ceil((bottomChannel - 0.5) / 2))
+                                                 : Math.max(0, Math.ceil((bottomChannel - 0.5) / 2))
     readonly property int leLastRf: bleLocked ? bottomLeIndex + numChannels - 1
-                                               : leFirstRf + numChannels / 2 - 1
+                                                : Math.min(39, leFirstRf + Math.ceil(numChannels / 2) - 1)
     // BR/EDR: native range when BR/EDR-locked; when LE-locked, the
     // channels whose centers fall strictly inside the window (channels
     // centered exactly on an edge are half out of band).
@@ -159,6 +163,10 @@ Rectangle {
         }
         if (supportedBredrCounts.length > 0)
             return snapToList(c, supportedBredrCounts)
+        // No list yet (model not populated): even-clamp like the CLI, but
+        // preserve 79 ("all": full 0..78 band) when the radio can take it.
+        if (Math.round(c) >= 79 && maxBredrChannels >= 79)
+            return 79
         c = Math.round(c / 2) * 2
         return Math.max(2, Math.min(maxBredrChannels, c))
     }
