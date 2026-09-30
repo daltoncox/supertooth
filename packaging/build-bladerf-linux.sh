@@ -69,6 +69,29 @@ trap 'rm -rf "$WORK"' EXIT
 echo "=== Cloning bladeRF $VERSION ==="
 git clone --depth 1 --branch "$VERSION" "$REPO_URL" "$WORK/bladeRF"
 
+# Patch upstream -Werror failure on newer Clang (>=17):
+# host/utilities/bladeRF-cli/src/cmd/flash_image.c uses
+#   if (val[i] >= 'a' || val[i] <= 'f')
+# which is always true (overlapping comparison). The intent is clearly a
+# lowercase hex range check, i.e. &&. Fix it in place so -Werror builds
+# (macOS) succeed and serial validation works as intended.
+python3 - "$WORK/bladeRF/host/utilities/bladeRF-cli/src/cmd/flash_image.c" <<'PY'
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    src = f.read()
+old = "if (val[i] >= 'a' || val[i] <= 'f')"
+new = "if (val[i] >= 'a' && val[i] <= 'f')"
+if src.count(old) == 1:
+    with open(path, "w") as f:
+        f.write(src.replace(old, new))
+    print("Patched flash_image.c tautological compare (|| -> &&)")
+elif src.count(new) >= 1:
+    print("flash_image.c already fixed upstream, skipping patch")
+else:
+    raise SystemExit(f"patch target not found in {path}")
+PY
+
 echo "=== Building (prefix=$PREFIX, jobs=$JOBS) ==="
 cmake -S "$WORK/bladeRF/host" -B "$WORK/bladeRF/host/build" \
     -DCMAKE_BUILD_TYPE=Release \
