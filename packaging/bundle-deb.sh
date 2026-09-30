@@ -44,12 +44,17 @@ QT_PREFIX=""
 OUTPUT_DEB=""
 # Custom liquid-dsp install prefix (packaging/build-liquid-linux.sh default).
 LIQUID_PREFIX="${LIQUID_PREFIX:-/opt/liquid-dsp}"
+# Custom libbladeRF install prefix (packaging/build-bladerf-linux.sh
+# default). The release builds libbladeRF >= 2.6.0 from source here because
+# distro packages predate the FX3 firmware v2.6.0 framing change.
+BLADERF_PREFIX="${BLADERF_PREFIX:-/opt/bladerf}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version) VERSION="$2"; shift 2 ;;
         --qt-prefix) QT_PREFIX="$2"; shift 2 ;;
         --liquid-prefix) LIQUID_PREFIX="$2"; shift 2 ;;
+        --bladerf-prefix) BLADERF_PREFIX="$2"; shift 2 ;;
         --output) OUTPUT_DEB="$2"; shift 2 ;;
         --arch) ARCH="$2"; shift 2 ;;
         -*)
@@ -207,6 +212,12 @@ fi
 if [[ -d "$LIQUID_PREFIX/lib64" ]]; then
     SYSTEM_LIB_DIRS+=("$LIQUID_PREFIX/lib64")
 fi
+if [[ -d "$BLADERF_PREFIX/lib" ]]; then
+    SYSTEM_LIB_DIRS+=("$BLADERF_PREFIX/lib")
+fi
+if [[ -d "$BLADERF_PREFIX/lib64" ]]; then
+    SYSTEM_LIB_DIRS+=("$BLADERF_PREFIX/lib64")
+fi
 
 resolve_lib() {
     local soname="$1"
@@ -312,10 +323,11 @@ for binary in "${BINARIES[@]}"; do
             continue
         fi
 
-        # Bundle remaining system libraries (+ custom liquid prefix)
+        # Bundle remaining system libraries (+ custom liquid/bladeRF prefixes)
         if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ||
               "$libpath" == "$QT_PREFIX"/* ||
-              "$libpath" == "$LIQUID_PREFIX"/* ]]; then
+              "$libpath" == "$LIQUID_PREFIX"/* ||
+              "$libpath" == "$BLADERF_PREFIX"/* ]]; then
             copy_lib_with_symlinks "$libpath"
         fi
     done < <(ldd "$binary" 2>/dev/null || true)
@@ -404,8 +416,9 @@ if [[ -d "$QT_PREFIX/qml" ]]; then
 fi
 
 # ------------------------------------------------------------------
-# Also bundle radio libs: hackrf + bladeRF from the system, liquid-dsp
-# from the custom source prefix (/opt/liquid-dsp) or system fallback.
+# Also bundle radio libs: hackrf from the system, bladeRF from the custom
+# source prefix (/opt/bladerf) or system fallback, liquid-dsp from the
+# custom source prefix (/opt/liquid-dsp) or system fallback.
 # NOTE: bladeRF soname uses capital RF (libbladeRF.so.2).
 # ------------------------------------------------------------------
 echo "=== Bundling radio library dependencies ==="
@@ -438,6 +451,7 @@ while IFS= read -r -d '' sofile; do
         if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ||
               "$libpath" == "$QT_PREFIX"/* ||
               "$libpath" == "$LIQUID_PREFIX"/* ||
+              "$libpath" == "$BLADERF_PREFIX"/* ||
               "$libpath" == "$OPT_ROOT"/* ]]; then
             copy_lib_with_symlinks "$libpath"
         fi

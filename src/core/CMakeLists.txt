@@ -10,7 +10,10 @@ if(PkgConfig_FOUND)
         pkg_check_modules(HACKRF libhackrf)
     endif()
     if(ENABLE_BLADERF)
-        pkg_check_modules(BLADERF libbladerf)
+        # Upstream .pc file uses capital RF (libbladeRF.pc); some distro
+        # packages ship a lowercase alias. Take the first match so old and
+        # new prefixes both work.
+        pkg_search_module(BLADERF libbladeRF libbladerf)
     endif()
     pkg_check_modules(LIQUID liquid-dsp)
 endif()
@@ -60,9 +63,9 @@ endif()
 if(ENABLE_BLADERF AND NOT BLADERF_FOUND)
     # NOTE: upstream soname uses capital RF (libbladeRF).
     find_library(BLADERF_LIBRARIES NAMES bladeRF libbladeRF bladerf libbladerf
-        PATHS /opt/homebrew/lib /usr/local/lib)
+        PATHS /opt/bladerf/lib /opt/bladerf/lib64 /opt/homebrew/lib /usr/local/lib)
     find_path(BLADERF_INCLUDE_DIRS libbladeRF.h
-        PATHS /opt/homebrew/include /usr/local/include)
+        PATHS /opt/bladerf/include /opt/homebrew/include /usr/local/include)
 
     if(BLADERF_LIBRARIES AND BLADERF_INCLUDE_DIRS)
         set(BLADERF_FOUND TRUE)

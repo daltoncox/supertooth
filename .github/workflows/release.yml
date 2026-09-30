@@ -28,8 +28,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            cmake build-essential pkg-config \
-            libhackrf-dev libbladerf-dev \
+            cmake build-essential pkg-config git \
+            libhackrf-dev libusb-1.0-0-dev \
+            libcurl4-openssl-dev libncurses-dev \
             libfftw3-dev autoconf automake libtool curl \
             libgl1-mesa-dev libxcb*-dev libfontconfig1-dev \
             libxkbcommon-x11-dev libdbus-1-dev \
@@ -46,6 +47,17 @@ jobs:
         run: |
           sudo bash packaging/build-liquid-linux.sh --prefix /opt/liquid-dsp
 
+      - name: Build libbladeRF from source
+        # Neither Ubuntu's libbladerf-dev (2.5.0) nor the Nuand PPA's 2024.07
+        # snapshot reaches libbladeRF 2.6.0, which FX3 firmware v2.6.0's
+        # larger USB framing requires; the old host stack then delivers 4x
+        # the configured sample rate (all cores saturated, no packets
+        # decoded). Build libbladeRF from source into the isolated
+        # /opt/bladerf prefix (see packaging/build-bladerf-linux.sh),
+        # following the same pattern as the liquid-dsp source build.
+        run: |
+          sudo bash packaging/build-bladerf-linux.sh --prefix /opt/bladerf
+
       - name: Install Qt 6.8.0
         run: |
           python3 -m venv /tmp/qt-venv
@@ -58,9 +70,9 @@ jobs:
 
       - name: Configure
         run: |
-          export PKG_CONFIG_PATH="/opt/liquid-dsp/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export PKG_CONFIG_PATH="/opt/bladerf/lib/pkgconfig:/opt/liquid-dsp/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cmake -S . -B build \
-            -DCMAKE_PREFIX_PATH="/opt/liquid-dsp;/opt/Qt/6.8.0/${{ matrix.qt_arch }}" \
+            -DCMAKE_PREFIX_PATH="/opt/bladerf;/opt/liquid-dsp;/opt/Qt/6.8.0/${{ matrix.qt_arch }}" \
             -DBUILD_GUI=ON \
             -DENABLE_BLADERF=ON \
             -DCMAKE_BUILD_TYPE=Release \
@@ -100,8 +112,17 @@ jobs:
           HOMEBREW_NO_INSTALL_UPGRADE: "1"
           HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
-          brew install --quiet cmake pkg-config hackrf libbladerf qt@6 autoconf automake libtool
+          brew install --quiet cmake pkg-config hackrf libusb ncurses qt@6 autoconf automake libtool
           echo "$(brew --prefix qt@6)/bin" >> "$GITHUB_PATH"
+
+      - name: Build libbladeRF from source
+        # Same firmware-framing reason as the Linux job: Homebrew's libbladerf
+        # bottle predates libbladeRF 2.6.0, which FX3 firmware v2.6.0
+        # requires. Build from source into /opt/bladerf (see
+        # packaging/build-bladerf-macos.sh); bundle-macos.sh vendors the
+        # resulting dylib into the .dmg.
+        run: |
+          sudo bash packaging/build-bladerf-macos.sh --prefix /opt/bladerf
 
       - name: Build liquid-dsp from source
         # Stock liquid-dsp (e.g. the Homebrew bottle, built with the default
@@ -114,8 +135,9 @@ jobs:
 
       - name: Configure
         run: |
+          export PKG_CONFIG_PATH="/opt/bladerf/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
           cmake -S . -B build \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
+            -DCMAKE_PREFIX_PATH="/opt/bladerf;$(brew --prefix qt@6)" \
             -DBUILD_GUI=ON \
             -DENABLE_BLADERF=ON \
             -DCMAKE_BUILD_TYPE=Release \

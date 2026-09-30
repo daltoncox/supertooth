@@ -13,8 +13,9 @@
 #     supertooth-desktop          GUI executable
 #     supertooth                  multiplexed CLI (hybrid, ble, bredr, record)
 #   /Supertooth.app/Contents/Frameworks/
-#     *.dylib                       Homebrew radio libs (hackrf, bladeRF,
-#                                   liquid-dsp) plus transitive deps
+#     *.dylib                       Homebrew radio libs (hackrf,
+#                                   liquid-dsp), source-built bladeRF
+#                                   (/opt/bladerf) plus transitive deps
 #                                   (libusb, fftw), with install names rewritten to
 #                                   @executable_path/../Frameworks/...
 #   /Applications -> /Applications  symlink for drag-to-install
@@ -28,7 +29,7 @@
 #   2. macdeployqt: vendor Qt frameworks / plugins / QML imports
 #   3. Copy the 3 CLI tools into Contents/MacOS
 #   4. Recursively bundle non-system dylibs into Contents/Frameworks
-#      (anything under /opt/homebrew, /usr/local, /opt/local)
+#      (anything under /opt/homebrew, /usr/local, /opt/local, /opt/bladerf)
 #   5. Verify no absolute Homebrew/local refs remain (otool -L)
 #   6. Ad-hoc codesign
 #   7. hdiutil create -> .dmg
@@ -184,7 +185,7 @@ done
 # ------------------------------------------------------------------
 # Bundle non-system shared libraries into Contents/Frameworks.
 # Anything a bundled binary (or bundled dylib) references from
-# /opt/homebrew, /usr/local or /opt/local is copied in and the
+# /opt/homebrew, /usr/local, /opt/local or /opt/bladerf is copied in and the
 # referencing load command is rewritten to
 # @executable_path/../Frameworks/<basename>. Runs to a fixpoint so
 # transitive deps (e.g. hackrf/bladeRF -> libusb, liquid -> fftw) are caught.
@@ -199,7 +200,7 @@ realpath_py() {
 
 is_bundled_ref() {
     case "$1" in
-        /opt/homebrew/*|/usr/local/*|/opt/local/*) return 0 ;;
+        /opt/homebrew/*|/usr/local/*|/opt/local/*|/opt/bladerf/*) return 0 ;;
         *) return 1 ;;
     esac
 }

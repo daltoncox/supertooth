@@ -184,6 +184,119 @@ int bladerf_radio_open(void **out_device,
         return status;
     }
 
+    /* Firmware/libbladeRF/FPGA compatibility gate. FX3 firmware v2.6.0
+     * switched the FX3<->FPGA streaming interface to 4x-larger GPIF buffers
+     * (2048 samples/message, up from 512), which requires libbladeRF
+     * >= 2.6.0 and FPGA >= 0.16.0 on the host side. Upstream handles every
+     * mismatch EXCEPT one by falling back to legacy 512-sample framing
+     * (new lib adapts to old firmware; old lib still frames correctly
+     * while the FPGA stays < 0.16). The single un-adaptable combo is old
+     * lib + new FW + new FPGA: the old host stack silently mis-frames the
+     * stream and delivers 4x the configured sample rate (DSP saturates
+     * every core, drops nearly every block, decodes nothing). Fail fast
+     * only there; warn-and-continue everywhere else so users can still
+     * open the device to reflash it. */
+    {
+        struct bladerf_version libver, fwver, fpgaver;
+
+        memset(&libver, 0, sizeof(libver));
+        memset(&fwver, 0, sizeof(fwver));
+        memset(&fpgaver, 0, sizeof(fpgaver));
+        bladerf_version(&libver);
+        if (bladerf_fw_version(radio->device, &fwver) == 0 &&
+            (fwver.major > 2 ||
+             (fwver.major == 2 && fwver.minor >= 6u)))
+        {
+            int lib_ok = (libver.major > 2 ||
+                          (libver.major == 2 && libver.minor >= 6u));
+            int fpga_known = (bladerf_fpga_version(radio->device, &fpgaver) == 0);
+            int fpga_configured = bladerf_is_fpga_configured(radio->device) == 1;
+            int fpga_loaded = fpga_known && fpga_configured &&
+                (fpgaver.major != 0u || fpgaver.minor != 0u ||
+                 fpgaver.patch != 0u);
+            int fpga_ok = !fpga_loaded ||
+                (fpgaver.major > 0 ||
+                 (fpgaver.major == 0 && fpgaver.minor >= 16u));
+            /* New FPGA means the 2048-sample framing is actually on the
+             * wire; an old lib cannot parse it. Old/absent FPGA means
+             * legacy 512-sample framing, which the old lib still reads. */
+            int fpga_new = fpga_loaded && fpga_ok;
+
+            fprintf(stderr,
+                    "[bladerf] versions: lib %u.%u.%u, fw %u.%u.%u, fpga %u.%u.%u\n",
+                    (unsigned)libver.major, (unsigned)libver.minor,
+                    (unsigned)libver.patch,
+                    (unsigned)fwver.major, (unsigned)fwver.minor,
+                    (unsigned)fwver.patch,
+                    (unsigned)fpgaver.major, (unsigned)fpgaver.minor,
+                    (unsigned)fpgaver.patch);
+            if (!lib_ok && fpga_new)
+            {
+                fprintf(stderr,
+                        "[bladerf] FX3 firmware %u.%u.%u with FPGA %u.%u.%u "
+                        "uses 2048-sample framing, which requires "
+                        "libbladeRF >= 2.6.0, but have libbladeRF %u.%u.%u.\n",
+                        (unsigned)fwver.major, (unsigned)fwver.minor,
+                        (unsigned)fwver.patch,
+                        (unsigned)fpgaver.major, (unsigned)fpgaver.minor,
+                        (unsigned)fpgaver.patch,
+                        (unsigned)libver.major, (unsigned)libver.minor,
+                        (unsigned)libver.patch);
+                fprintf(stderr,
+                        "[bladerf] With this mismatch the device streams at "
+                        "4x the configured sample rate (all cores saturated, "
+                        "no packets decoded). Upgrade libbladeRF (see "
+                        "packaging/build-bladerf-linux.sh) and retry.\n");
+                bladerf_close(radio->device);
+                free(radio);
+                return BLADERF_ERR_UPDATE_FW;
+            }
+            if (!lib_ok)
+            {
+                /* Old lib, but legacy framing is on the wire (old or not
+                 * yet loaded FPGA): streaming works. Warn anyway, since
+                 * loading an FPGA >= 0.16.0 under this lib breaks. */
+                fprintf(stderr,
+                        "[bladerf] WARNING: FX3 firmware %u.%u.%u with "
+                        "libbladeRF %u.%u.%u. Legacy framing is in use, so "
+                        "this works, but loading an FPGA >= 0.16.0 requires "
+                        "libbladeRF >= 2.6.0 -- upgrade before reflashing "
+                        "(see https://www.nuand.com/fpga_images/).\n",
+                        (unsigned)fwver.major, (unsigned)fwver.minor,
+                        (unsigned)fwver.patch,
+                        (unsigned)libver.major, (unsigned)libver.minor,
+                        (unsigned)libver.patch);
+            }
+            else if (!fpga_ok)
+            {
+                /* New lib, old FPGA: upstream falls back to legacy message
+                 * size and streams fine, at reduced throughput. Nudge the
+                 * upgrade without blocking the reflash path. */
+                fprintf(stderr,
+                        "[bladerf] WARNING: FPGA %u.%u.%u predates 0.16.0; "
+                        "using legacy message size at reduced throughput. "
+                        "Load a current FPGA image "
+                        "(see https://www.nuand.com/fpga_images/).\n",
+                        (unsigned)fpgaver.major, (unsigned)fpgaver.minor,
+                        (unsigned)fpgaver.patch);
+            }
+        }
+        else if (radio->debug_enabled)
+        {
+            /* Best-effort version line for older firmware; FPGA query may
+             * fail when no image is loaded, in which case fpgaver stays 0.0.0. */
+            (void)bladerf_fpga_version(radio->device, &fpgaver);
+            fprintf(stderr,
+                    "[bladerf] versions: lib %u.%u.%u, fw %u.%u.%u, fpga %u.%u.%u\n",
+                    (unsigned)libver.major, (unsigned)libver.minor,
+                    (unsigned)libver.patch,
+                    (unsigned)fwver.major, (unsigned)fwver.minor,
+                    (unsigned)fwver.patch,
+                    (unsigned)fpgaver.major, (unsigned)fpgaver.minor,
+                    (unsigned)fpgaver.patch);
+        }
+    }
+
     /* Manual gain control: -g sets the overall gain directly (see
      * bladerf_radio_configure). AGC modes are intentionally left off so
      * captures are reproducible for decoding. */
