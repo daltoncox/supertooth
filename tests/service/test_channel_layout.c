@@ -46,8 +46,9 @@ static int make_session(session_t *s, unsigned int bottom, unsigned int count,
     return session_tune(s, ref, bottom, count);
 }
 
-/* bladeRF-backed sessions for ceiling tests (61.44 Msps). Compiles in
- * every flag combination; the ceiling checks using it are HAVE-gated. */
+/* bladeRF-backed sessions for ceiling tests (80 Msps via 8-bit oversample).
+ * Compiles in every flag combination; the ceiling checks using it are
+ * HAVE-gated. */
 static int make_bladerf_session(session_t *s, unsigned int bottom,
                                 unsigned int count,
                                 session_protocol_ref_t ref, int enable_ble,
@@ -428,8 +429,9 @@ static void test_wideband_lanes(void)
 #endif
 
 #if HAVE_BLADERF
-    /* bladeRF ceiling (61.44 Msps): 60ch tunes at 60 Msps (K=3), 64ch and
-     * "all" exceed the ceiling. */
+    /* bladeRF ceiling (80 Msps via 8-bit oversample): 60ch tunes at
+     * 60 Msps (K=3, SC16), 64ch tunes at 64 Msps (K=4, SC8), and "all"
+     * tunes at 80 Msps (K=4, SC8). */
     {
         session_t s;
         memset(&s, 0, sizeof(s));
@@ -442,17 +444,19 @@ static void test_wideband_lanes(void)
     {
         session_t s;
         memset(&s, 0, sizeof(s));
-        CHECK_U64("bladerf 64ch over ceiling rejected",
+        CHECK_U64("bladerf 64ch tune",
                   make_bladerf_session(&s, 0, 64, SESSION_REF_BREDR, 0, 1),
-                  -1);
+                  0);
+        CHECK_U64("bladerf 64ch rate", s.sample_rate_hz, 64000000u);
         session_destroy(&s);
     }
     {
         session_t s;
         memset(&s, 0, sizeof(s));
-        CHECK_U64("bladerf all over ceiling rejected",
+        CHECK_U64("bladerf all tune",
                   make_bladerf_session(&s, 0, 79, SESSION_REF_BREDR, 0, 1),
-                  -1);
+                  0);
+        CHECK_U64("bladerf all rate", s.sample_rate_hz, 80000000u);
         session_destroy(&s);
     }
     {
@@ -467,9 +471,10 @@ static void test_wideband_lanes(void)
     {
         session_t s;
         memset(&s, 0, sizeof(s));
-        CHECK_U64("bladerf ble 32ch over ceiling rejected",
-                  make_bladerf_session(&s, 0, 32, SESSION_REF_BLE, 1, 0),
-                  -1);
+        CHECK_U64("bladerf ble 40ch tune",
+                  make_bladerf_session(&s, 0, 40, SESSION_REF_BLE, 1, 0),
+                  0);
+        CHECK_U64("bladerf ble 40ch rate", s.sample_rate_hz, 80000000u);
         session_destroy(&s);
     }
 #endif
@@ -560,6 +565,18 @@ static void test_validate_layout(void)
               session_validate_layout(RADIO_DEVICE_BLADERF, 1, 0,
                                       SESSION_REF_BLE, 0u, 30u),
               SESSION_LAYOUT_OK);
+    CHECK_U64("valid bladerf bredr all (8-bit oversample)",
+              session_validate_layout(RADIO_DEVICE_BLADERF, 0, 1,
+                                      SESSION_REF_BREDR, 0u, 79u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid bladerf hybrid all (8-bit oversample)",
+              session_validate_layout(RADIO_DEVICE_BLADERF, 1, 1,
+                                      SESSION_REF_BREDR, 0u, 79u),
+              SESSION_LAYOUT_OK);
+    CHECK_U64("valid bladerf ble 40 (8-bit oversample)",
+              session_validate_layout(RADIO_DEVICE_BLADERF, 1, 0,
+                                      SESSION_REF_BLE, 0u, 40u),
+              SESSION_LAYOUT_OK);
 #endif
 
     /* Range failures: empty, band overflow, hybrid BLE-ref. */
@@ -600,18 +617,18 @@ static void test_validate_layout(void)
               SESSION_LAYOUT_RATE_EXCEEDED);
 #endif
 #if HAVE_BLADERF
-    CHECK_U64("bladerf 64ch over ceiling",
+    CHECK_U64("bladerf 64ch ok (8-bit oversample)",
               session_validate_layout(RADIO_DEVICE_BLADERF, 0, 1,
                                       SESSION_REF_BREDR, 0u, 64u),
-              SESSION_LAYOUT_RATE_EXCEEDED);
-    CHECK_U64("bladerf all (79) over ceiling",
+              SESSION_LAYOUT_OK);
+    CHECK_U64("bladerf all (79) ok (8-bit oversample)",
               session_validate_layout(RADIO_DEVICE_BLADERF, 0, 1,
                                       SESSION_REF_BREDR, 0u, 79u),
-              SESSION_LAYOUT_RATE_EXCEEDED);
-    CHECK_U64("bladerf ble 32ch over ceiling",
+              SESSION_LAYOUT_OK);
+    CHECK_U64("bladerf ble 32ch ok (8-bit oversample)",
               session_validate_layout(RADIO_DEVICE_BLADERF, 1, 0,
                                       SESSION_REF_BLE, 0u, 32u),
-              SESSION_LAYOUT_RATE_EXCEEDED);
+              SESSION_LAYOUT_OK);
 #endif
 
     /* Lane-split gaps fail even where the ceiling allows. */
@@ -631,7 +648,7 @@ static void test_validate_layout(void)
 #endif
 #if HAVE_BLADERF
     CHECK_U64("default bladerf", session_default_bredr_count(RADIO_DEVICE_BLADERF),
-              60u);
+              79u);
 #endif
     CHECK_U64("default file", session_default_bredr_count(RADIO_DEVICE_FILE),
               79u);
@@ -650,7 +667,7 @@ static void test_validate_layout(void)
 #endif
 #if HAVE_BLADERF
     CHECK_U64("bladerf max rate", session_device_max_rate_hz(RADIO_DEVICE_BLADERF),
-              61440000u);
+              80000000u);
     CHECK_U64("bladerf type name non-null",
               session_device_type_name(RADIO_DEVICE_BLADERF) != NULL, 1u);
 #else

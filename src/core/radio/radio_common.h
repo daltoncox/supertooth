@@ -19,8 +19,8 @@
 /* Maximum sample rate the channelization service can stage (80 Msps in four
  * lanes). Individual device types report their own ceiling via
  * radio_get_max_sample_rate_for_type() (HackRF stays at 20 Msps, bladeRF at
- * 61.44 Msps); callers clamp the requested channel count to the selected
- * device before tuning. */
+ * 80 Msps via 8-bit oversample above 61.44 Msps); callers clamp the requested
+ * channel count to the selected device before tuning. */
 #define RADIO_MAX_SAMPLE_RATE_HZ 80000000u
 
 /* HackRF gain limits (see hackrf.h). */

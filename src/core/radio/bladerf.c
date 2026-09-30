@@ -7,6 +7,7 @@
 #include <complex.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,6 +22,23 @@
 #define BLADERF_NUM_TRANSFERS 8u
 #define BLADERF_STREAM_TIMEOUT_MS 4000u
 #define BLADERF_RX_TIMEOUT_MS 4000u
+
+/* AD9361 native ceiling in 16-bit mode (61.44 Msps). Anything above this
+ * (in practice the 80 Msps full-band capture) autoswitches to 8-bit
+ * SC8_Q7 samples with the AD9361 oversample feature (libbladeRF >= 2.5.0,
+ * FW >= 2.4.0, FPGA >= 0.15.0; up to 122.88 Msps). At 80 Msps the 16-bit
+ * stream would need ~320 MB/s over USB3; the 8-bit stream needs ~160 MB/s,
+ * which fits. Bit depth halves (same as HackRF's native 8 bits), but the
+ * full 79-channel band becomes reachable. */
+#define BLADERF_SC16_MAX_SAMPLE_RATE_HZ 61440000u
+
+/* The 8-bit oversample path needs libbladeRF >= 2.5.0 (SC8_Q7 formats +
+ * bladerf_enable_feature); enforced at configure time (see
+ * src/core/CMakeLists.txt) with this compile-time backstop for
+ * hand-rolled include paths. */
+#if !defined(LIBBLADERF_API_VERSION) || (LIBBLADERF_API_VERSION < 0x02050000)
+#error "libbladeRF >= 2.5.0 required (8-bit SC8_Q7 + oversample support)"
+#endif
 
 typedef struct
 {
@@ -37,22 +55,32 @@ typedef struct
     uint64_t lo_freq_hz;
     uint32_t sample_rate;
     int gain_db;
+    int use_sc8;
 } bladerf_radio_t;
 
-static inline float complex bladerf_iq_to_complex(const int16_t *samples,
-                                                  unsigned int sample_index)
+static inline float complex bladerf_iq16_to_complex(const int16_t *samples,
+                                                    unsigned int sample_index)
 {
     return samples[2u * sample_index] / 2048.0f +
            (samples[2u * sample_index + 1u] / 2048.0f) * _Complex_I;
+}
+
+/* 8-bit native DAC format: [-128, 127] maps to [-1.0, 1.0), same scaling
+ * as the HackRF backend. */
+static inline float complex bladerf_iq8_to_complex(const int8_t *samples,
+                                                   unsigned int sample_index)
+{
+    return samples[2u * sample_index] / 128.0f +
+           (samples[2u * sample_index + 1u] / 128.0f) * _Complex_I;
 }
 
 /* Push @p num_samples (interleaved int16 I/Q) into the dispatcher in
  * SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES pieces, exactly like hackrf_rx_cb, so
  * every backend degrades identically under overload. Returns 0 on success,
  * -1 when stop was requested mid-push. */
-static int bladerf_push_samples(bladerf_radio_t *radio,
-                                const int16_t *samples,
-                                unsigned int num_samples)
+static int bladerf_push_samples16(bladerf_radio_t *radio,
+                                  const int16_t *samples,
+                                  unsigned int num_samples)
 {
     unsigned int off = 0u;
 
@@ -80,7 +108,49 @@ static int bladerf_push_samples(bladerf_radio_t *radio,
         block->block_base_sample = radio->samples_received;
         radio->samples_received += n;
         for (unsigned int i = 0u; i < n; i++)
-            block->samples[i] = bladerf_iq_to_complex(samples, off + i);
+            block->samples[i] = bladerf_iq16_to_complex(samples, off + i);
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        sample_dispatcher_push_block(radio->dispatcher, block);
+        sample_block_release(block);
+        off += n;
+    }
+    return 0;
+}
+
+/* 8-bit variant of the above (interleaved int8 I/Q from SC8_Q7 streams).
+ * Kept as a separate loop so the per-sample hot path has no format
+ * branch at 80 Msps. */
+static int bladerf_push_samples8(bladerf_radio_t *radio,
+                                 const int8_t *samples,
+                                 unsigned int num_samples)
+{
+    unsigned int off = 0u;
+
+    while (off < num_samples)
+    {
+        unsigned int n = num_samples - off;
+        sample_block_t *block;
+        if (n > SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES)
+            n = SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES;
+        if (atomic_load_explicit(&radio->stop_requested,
+                                 memory_order_acquire) != 0u)
+            return -1;
+        block = sample_dispatcher_acquire_block(radio->dispatcher);
+        if (!block)
+        {
+            sample_dispatcher_note_drop(radio->dispatcher,
+                                        radio->debug_enabled);
+            /* Keep the sample timeline truthful across the drop (same
+             * reasoning as hackrf_rx_cb): the dropped chunk's duration must
+             * still advance the clock downstream rx_clk_1600/CLKN derive. */
+            radio->samples_received += (uint64_t)(num_samples - off);
+            return 0;
+        }
+        block->num_samples = n;
+        block->block_base_sample = radio->samples_received;
+        radio->samples_received += n;
+        for (unsigned int i = 0u; i < n; i++)
+            block->samples[i] = bladerf_iq8_to_complex(samples, off + i);
         __atomic_thread_fence(__ATOMIC_RELEASE);
         sample_dispatcher_push_block(radio->dispatcher, block);
         sample_block_release(block);
@@ -92,16 +162,21 @@ static int bladerf_push_samples(bladerf_radio_t *radio,
 static void *bladerf_rx_thread(void *arg)
 {
     bladerf_radio_t *radio = (bladerf_radio_t *)arg;
-    int16_t *buf = NULL;
+    void *buf = NULL;
     /* One gulp per sync call: matches the dispatcher chunk size so each
      * transfer fans out to exactly one RF block in the common case. */
     const unsigned int gulp = SAMPLE_BLOCK_RADIO_CHUNK_SAMPLES;
     unsigned long iters = 0u;
+    int use_sc8;
 
     if (!radio)
         return NULL;
 
-    buf = (int16_t *)malloc(sizeof(*buf) * 2u * gulp);
+    /* Latched at configure time; copy locally so the loop has no shared
+     * read per iteration. Allocate the SC16 size (4 bytes/sample); the
+     * SC8 path (2 bytes/sample) reuses the same buffer. */
+    use_sc8 = radio->use_sc8;
+    buf = malloc(sizeof(int16_t) * 2u * gulp);
     if (!buf)
     {
         fprintf(stderr, "[bladerf] RX thread: out of memory\n");
@@ -131,8 +206,16 @@ static void *bladerf_rx_thread(void *arg)
                     bladerf_strerror(status));
             break;
         }
-        if (bladerf_push_samples(radio, buf, gulp) != 0)
-            break;
+        if (use_sc8)
+        {
+            if (bladerf_push_samples8(radio, (const int8_t *)buf, gulp) != 0)
+                break;
+        }
+        else
+        {
+            if (bladerf_push_samples16(radio, (const int16_t *)buf, gulp) != 0)
+                break;
+        }
 
         iters++;
         if (radio->debug_enabled && (iters % 500u) == 0u)
@@ -322,9 +405,31 @@ int bladerf_radio_configure(void *device, const radio_stream_config_t *config)
     bladerf_sample_rate actual_rate = 0u;
     bladerf_bandwidth actual_bw = 0u;
     int status;
+    /* Autoswitch: rates above the SC16 ceiling (i.e. the 80 Msps
+     * full-band capture) use 8-bit SC8_Q7 + the oversample feature at
+     * half the bit depth. Everything at or below 61.44 Msps stays in
+     * 16-bit SC16_Q11 for full fidelity. No flag; the requested rate
+     * alone selects the path. */
+    int want_sc8 = 0;
 
     if (!radio || !radio->device || !config)
         return BLADERF_ERR_INVAL;
+
+    want_sc8 = (config->sample_rate > BLADERF_SC16_MAX_SAMPLE_RATE_HZ) ? 1 : 0;
+
+    /* The oversample feature must be set BEFORE bladerf_set_sample_rate
+     * (it switches the AD9361 into overclock + selects the valid rate
+     * range). Set explicitly both ways so a previous high-rate tune
+     * cannot leak into a later narrow capture (and vice versa). */
+    status = bladerf_enable_feature(radio->device,
+                                    BLADERF_FEATURE_OVERSAMPLE,
+                                    want_sc8 ? true : false);
+    if (status != 0)
+    {
+        fprintf(stderr, "[bladerf] enable oversample=%d failed: %s\n",
+                want_sc8, bladerf_strerror(status));
+        return status;
+    }
 
     status = bladerf_set_frequency(radio->device, ch, config->lo_freq_hz);
     if (status != 0)
@@ -341,6 +446,12 @@ int bladerf_radio_configure(void *device, const radio_stream_config_t *config)
     {
         fprintf(stderr, "[bladerf] set_sample_rate %u failed: %s\n",
                 config->sample_rate, bladerf_strerror(status));
+        if (want_sc8)
+            fprintf(stderr,
+                    "[bladerf] 8-bit rates above %u need FW >= 2.4.0 and "
+                    "FPGA >= 0.15.0 with the oversample feature "
+                    "(see https://www.nuand.com/fpga_images/).\n",
+                    BLADERF_SC16_MAX_SAMPLE_RATE_HZ);
         return status;
     }
     if (actual_rate != config->sample_rate && radio->debug_enabled)
@@ -378,6 +489,12 @@ int bladerf_radio_configure(void *device, const radio_stream_config_t *config)
     radio->lo_freq_hz = config->lo_freq_hz;
     radio->sample_rate = actual_rate != 0u ? actual_rate : config->sample_rate;
     radio->gain_db = config->gain.bladerf_gain_db;
+    radio->use_sc8 = want_sc8;
+    if (radio->debug_enabled)
+        fprintf(stderr, "[bladerf] tune lo=%llu rate=%u (%s, oversample %s)\n",
+                (unsigned long long)radio->lo_freq_hz, radio->sample_rate,
+                radio->use_sc8 ? "SC8_Q7 8-bit" : "SC16_Q11 16-bit",
+                radio->use_sc8 ? "on" : "off");
     return 0;
 }
 
@@ -392,7 +509,8 @@ int bladerf_radio_start_rx(void *device)
         return BLADERF_ERR_INVAL;
 
     status = bladerf_sync_config(radio->device, BLADERF_RX_X1,
-                                 BLADERF_FORMAT_SC16_Q11,
+                                 radio->use_sc8 ? BLADERF_FORMAT_SC8_Q7
+                                                : BLADERF_FORMAT_SC16_Q11,
                                  BLADERF_NUM_BUFFERS, BLADERF_BUFFER_SIZE,
                                  BLADERF_NUM_TRANSFERS,
                                  BLADERF_STREAM_TIMEOUT_MS);
@@ -458,7 +576,9 @@ int bladerf_radio_get_max_sample_rate(void *device, uint32_t *out_rate_hz)
     if (!out_rate_hz)
         return -1;
 
-    *out_rate_hz = 61440000u;
+    /* 8-bit oversample path reaches 122.88 Msps on the part, but the
+     * channelizer stages at most 80 Msps, so the session ceiling wins. */
+    *out_rate_hz = RADIO_MAX_SAMPLE_RATE_HZ;
     return 0;
 }
 

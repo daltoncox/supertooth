@@ -287,8 +287,9 @@ unsigned int session_default_bredr_count(radio_device_type_t device_type)
 }
 
 /* Default LE window for a device: as many 2 MHz RF channels as the radio
- * can sustain (HackRF -> 10, bladeRF -> 30, 80 Msps file replay -> 40),
- * snapped down until the lane planner accepts the span. */
+ * can sustain (HackRF -> 10, bladeRF -> 40 via 8-bit oversample, 80 Msps
+ * file replay -> 40), snapped down until the lane planner accepts the
+ * span. */
 unsigned int session_default_ble_count(radio_device_type_t device_type)
 {
     uint32_t max_rate_hz = session_device_max_rate_hz(device_type);

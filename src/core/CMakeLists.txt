@@ -81,6 +81,14 @@ if(ENABLE_BLADERF AND NOT BLADERF_FOUND)
     message(FATAL_ERROR "bladeRF library not found. Please install with: brew install libbladerf (or configure with -DENABLE_BLADERF=OFF)")
 endif()
 
+# 8-bit SC8_Q7 + oversample support (for sample rates above 61.44 Msps)
+# needs libbladeRF >= 2.5.0. Fail fast at configure time when pkg-config
+# reports an older version (bladerf.c carries a compile-time backstop for
+# hand-rolled include paths that bypass pkg-config).
+if(ENABLE_BLADERF AND BLADERF_FOUND AND BLADERF_VERSION AND BLADERF_VERSION VERSION_LESS "2.5.0")
+    message(FATAL_ERROR "libbladeRF >= 2.5.0 required (found ${BLADERF_VERSION}). Newer Ubuntu releases ship it; otherwise build from source: bash packaging/build-bladerf-linux.sh (or configure with -DENABLE_BLADERF=OFF)")
+endif()
+
 if(NOT ENABLE_HACKRF AND NOT ENABLE_BLADERF)
     message(STATUS "No live radio backends enabled; only file replay will be available")
 endif()

@@ -19,8 +19,11 @@ int bladerf_radio_stop_rx(void *device);
 void bladerf_radio_close(void *device);
 
 /**
- * Maximum sample rate (Hz) a bladeRF 2.0 Micro can sustain over USB3
- * (61.44 Msps). @p device may be NULL (the limit is hardware-wide, not
+ * Maximum sample rate (Hz) a bladeRF 2.0 Micro can sustain over USB3.
+ * Up to 61.44 Msps in 16-bit SC16_Q11 mode; rates above that (up to the
+ * 80 Msps session ceiling) autoswitch to 8-bit SC8_Q7 with the AD9361
+ * oversample feature (needs libbladeRF >= 2.5.0, FW >= 2.4.0,
+ * FPGA >= 0.15.0). @p device may be NULL (the limit is hardware-wide, not
  * per-unit). Sessions tune integer-MHz windows at or below this ceiling.
  */
 int bladerf_radio_get_max_sample_rate(void *device, uint32_t *out_rate_hz);

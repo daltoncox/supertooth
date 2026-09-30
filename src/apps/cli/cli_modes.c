@@ -907,8 +907,9 @@ int ble_main(int argc, char *argv[])
     spec_parsed.type = app_default_device_type();
 
     /* Default the LE window to what the radio can sustain (HackRF -> 10;
-     * bladeRF -> 30; 80 Msps file replay -> 40). Re-resolved below when
-     * the user did not pass -c and a different device was selected. */
+     * bladeRF -> 40 via 8-bit oversample; 80 Msps file replay -> 40).
+     * Re-resolved below when the user did not pass -c and a different
+     * device was selected. */
     ble_num_le_channels = session_default_ble_count(spec_parsed.type);
 
     while ((opt = getopt_long(argc, argv, "v:c:b:d::g:Vh", long_opts, NULL)) != -1)
@@ -1305,8 +1306,8 @@ int bredr_main(int argc, char *argv[])
     spec_parsed.type = app_default_device_type();
 
     /* Default the channel count to what the radio can actually sustain and
-     * the service can stage (HackRF -> 20; bladeRF -> 60; 80 Msps file
-     * replay -> 72). */
+     * the service can stage (HackRF -> 20; bladeRF -> 79 "all" via 8-bit
+     * oversample; 80 Msps file replay -> 72). */
     g_num_bredr_channels =
         session_default_bredr_count(spec_parsed.type);
 
@@ -1616,8 +1617,8 @@ int hybrid_main(int argc, char *argv[])
     spec_parsed.type = app_default_device_type();
 
     /* Default the BR/EDR channel count to what the radio can sustain and
-     * the service can stage (HackRF -> 20; bladeRF -> 60; 80 Msps file
-     * replay -> 72). */
+     * the service can stage (HackRF -> 20; bladeRF -> 79 "all" via 8-bit
+     * oversample; 80 Msps file replay -> 72). */
     g_num_bredr_channels =
         session_default_bredr_count(spec_parsed.type);
 
@@ -1942,7 +1943,8 @@ int record_main(int argc, char *argv[])
     spec_parsed.type = app_default_device_type();
 
     /* Default the channel count to what the radio can actually sustain
-     * (HackRF -> 20; bladeRF -> 60; 80 Msps file replay -> 72). */
+     * (HackRF -> 20; bladeRF -> 79 "all" via 8-bit oversample; 80 Msps
+     * file replay -> 72). */
     g_num_bredr_channels =
         session_default_bredr_count(spec_parsed.type);
 
