@@ -7,9 +7,9 @@
 # then mis-frames the stream and delivers 4x the configured sample rate
 # (all cores saturated, no packets decoded).
 #
-# Mirrors packaging/build-liquid-linux.sh: isolated --prefix (default
-# /opt/bladerf), same --version/--prefix/--jobs flags. Release CI builds
-# this before configuring supertooth (see .github/workflows/release.yml):
+# Isolated --prefix (default /opt/bladerf), same --version/--prefix/--jobs
+# flags. Release CI builds this before configuring supertooth
+# (see .github/workflows/release.yml):
 #   sudo bash packaging/build-bladerf-linux.sh --prefix /opt/bladerf
 #   PKG_CONFIG_PATH=/opt/bladerf/lib/pkgconfig:$PKG_CONFIG_PATH \
 #     cmake -DCMAKE_PREFIX_PATH=/opt/bladerf:... ...

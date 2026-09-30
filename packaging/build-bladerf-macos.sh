@@ -6,9 +6,8 @@
 # requires. The old host stack then mis-frames the stream and delivers 4x
 # the configured sample rate (all cores saturated, no packets decoded).
 #
-# Mirrors packaging/build-liquid-macos.sh: same --version/--prefix/--jobs
-# flags, -headerpad + install_name_tool -id fixup so bundle-macos.sh can
-# vendor the dylib into the .dmg. Release CI builds this before configuring
+# Same --version/--prefix/--jobs flags, -headerpad + install_name_tool -id
+# fixup so bundle-macos.sh can vendor the dylib into the .dmg. Release CI builds this before configuring
 # supertooth (see .github/workflows/release.yml):
 #   sudo bash packaging/build-bladerf-macos.sh --prefix /opt/bladerf
 #   PKG_CONFIG_PATH=/opt/bladerf/lib/pkgconfig:$PKG_CONFIG_PATH \

@@ -52,12 +52,13 @@ The CLI ships inside the bundle alongside the GUI:
 
 | Dependency | CMake Option | Build Default | In Release |
 |---|---|---|---|
-| `liquid-dsp` | Required (None) | - | - | 
 | `libhackrf` | ENABLE_HACKRF | ON | yes |
 | `libbladerf` | ENABLE_BLADERF | OFF | yes |
 | `Qt 6.8+` | BUILD_GUI | OFF | yes |
 | - | BUILD_TESTS | OFF | no |
+| - | SUPERTOOTH_PORTABLE (no AVX512/AMX, keeps AVX2) | OFF | yes |
 
+> **NOTE:** liquid-dsp is also required to build this project. However, it is automatically pulled and statically compiled by CMake into the binaries, so there is no need to install it from a package manager. 
 
 ### Minimal Dependency Install (no GUI, only HackRF)
 
@@ -66,8 +67,8 @@ Linux (Debian-based):
 ```bash
 sudo apt update
 sudo apt install -y \
-  build-essential cmake pkg-config \
-  libhackrf-dev libliquid-dev
+  build-essential cmake pkg-config git \
+  libhackrf-dev
 ```
 
 macOS (Homebrew):
@@ -75,8 +76,6 @@ macOS (Homebrew):
 ```bash
 brew install cmake pkg-config hackrf
 ```
-
-> **WARNING**: As of September 2026, liquid-dsp's Homebrew installation has a major performance issue caused by hot-path logging. It is highly recommended to build and install liquid-dsp from source, which is why it is not listed in the above command.
 
 ### GUI Dependency (needs Qt 6.8+)
 
@@ -148,4 +147,4 @@ src/
 ## References
 - [Ubertooth One](https://greatscottgadgets.com/ubertoothone/) - The primary inspiration for this project (hence the name).
 - [libbtbb](https://github.com/greatscottgadgets/libbtbb) - Reference for many of the algorithms.
-- [Liquid DSP](https://liquidsdr.org/) - A fantastic DSP library.
+- [liquid-dsp](https://liquidsdr.org/) - A fantastic DSP library.

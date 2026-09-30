@@ -15,7 +15,11 @@ if(PkgConfig_FOUND)
         # new prefixes both work.
         pkg_search_module(BLADERF libbladeRF libbladerf)
     endif()
-    pkg_check_modules(LIQUID liquid-dsp)
+endif()
+if(SUPERTOOTH_USE_SYSTEM_LIQUID)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LIQUID liquid-dsp)
+    endif()
 endif()
 
 if(ENABLE_HACKRF AND HACKRF_FOUND)
@@ -36,11 +40,11 @@ if(ENABLE_BLADERF AND BLADERF_FOUND)
     endif()
 endif()
 
-if(NOT LIQUID_FOUND)
+if(SUPERTOOTH_USE_SYSTEM_LIQUID AND NOT LIQUID_FOUND)
     find_library(LIQUID_LIBRARIES NAMES liquid
-        PATHS /opt/liquid-dsp/lib /opt/liquid-dsp/lib64 /opt/homebrew/lib /usr/local/lib)
+        PATHS /opt/homebrew/lib /usr/local/lib)
     find_path(LIQUID_INCLUDE_DIRS liquid/liquid.h
-        PATHS /opt/liquid-dsp/include /opt/homebrew/include /usr/local/include)
+        PATHS /opt/homebrew/include /usr/local/include)
 
     if(LIQUID_LIBRARIES AND LIQUID_INCLUDE_DIRS)
         set(LIQUID_FOUND TRUE)
@@ -93,8 +97,8 @@ if(NOT ENABLE_HACKRF AND NOT ENABLE_BLADERF)
     message(STATUS "No live radio backends enabled; only file replay will be available")
 endif()
 
-if(NOT LIQUID_FOUND)
-    message(FATAL_ERROR "Liquid DSP library not found. Build from source: bash packaging/build-liquid-linux.sh (Linux) or bash packaging/build-liquid-macos.sh (macOS)")
+if(SUPERTOOTH_USE_SYSTEM_LIQUID AND NOT LIQUID_FOUND)
+    message(FATAL_ERROR "Liquid DSP library not found. Install it (e.g. brew install liquid-dsp, apt install libliquid-dev) or configure without -DSUPERTOOTH_USE_SYSTEM_LIQUID to use the vendored static build.")
 endif()
 
 find_package(Threads REQUIRED)
@@ -200,17 +204,38 @@ else()
     target_compile_definitions(supertooth_core PUBLIC HAVE_BLADERF=0)
 endif()
 
-target_link_libraries(supertooth_core
-    ${LIQUID_LIBRARIES}
-)
+if(SUPERTOOTH_USE_SYSTEM_LIQUID)
+    target_link_libraries(supertooth_core
+        ${LIQUID_LIBRARIES}
+    )
 
-target_include_directories(supertooth_core PUBLIC
-    ${LIQUID_INCLUDE_DIRS}
-    ${CORE_INCLUDE_DIRS}
-)
+    target_include_directories(supertooth_core PUBLIC
+        ${LIQUID_INCLUDE_DIRS}
+        ${CORE_INCLUDE_DIRS}
+    )
 
-if(LIQUID_CFLAGS_OTHER)
-    target_compile_options(supertooth_core PRIVATE ${LIQUID_CFLAGS_OTHER})
+    if(LIQUID_CFLAGS_OTHER)
+        target_compile_options(supertooth_core PRIVATE ${LIQUID_CFLAGS_OTHER})
+    endif()
+else()
+    # Vendored static liquid-dsp (FetchContent): the alias target carries
+    # include dirs transitively. Static-only build names it liquid-static
+    # (liquid::liquid-static); fall back to the shared names just in case.
+    if(TARGET liquid::liquid-static)
+        target_link_libraries(supertooth_core liquid::liquid-static)
+    elseif(TARGET liquid::liquid)
+        target_link_libraries(supertooth_core liquid::liquid)
+    elseif(TARGET liquid-static)
+        target_link_libraries(supertooth_core liquid-static)
+    elseif(TARGET liquid)
+        target_link_libraries(supertooth_core liquid)
+    else()
+        message(FATAL_ERROR "Vendored liquid-dsp target not found (expected liquid::liquid-static)")
+    endif()
+
+    target_include_directories(supertooth_core PUBLIC
+        ${CORE_INCLUDE_DIRS}
+    )
 endif()
 
 if(UNIX AND NOT APPLE)

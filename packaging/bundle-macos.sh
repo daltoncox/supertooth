@@ -13,10 +13,11 @@
 #     supertooth-desktop          GUI executable
 #     supertooth                  multiplexed CLI (hybrid, ble, bredr, record)
 #   /Supertooth.app/Contents/Frameworks/
-#     *.dylib                       Homebrew radio libs (hackrf,
-#                                   liquid-dsp), source-built bladeRF
+#     *.dylib                       Homebrew radio libs (hackrf),
+#                                   source-built bladeRF
 #                                   (/opt/bladerf) plus transitive deps
-#                                   (libusb, fftw), with install names rewritten to
+#                                   (libusb; liquid-dsp is statically
+#                                   linked), with install names rewritten to
 #                                   @executable_path/../Frameworks/...
 #   /Applications -> /Applications  symlink for drag-to-install
 #
@@ -188,7 +189,8 @@ done
 # /opt/homebrew, /usr/local, /opt/local or /opt/bladerf is copied in and the
 # referencing load command is rewritten to
 # @executable_path/../Frameworks/<basename>. Runs to a fixpoint so
-# transitive deps (e.g. hackrf/bladeRF -> libusb, liquid -> fftw) are caught.
+# transitive deps (e.g. hackrf/bladeRF -> libusb) are caught.
+# liquid-dsp is statically linked and never appears here.
 # System (/usr/lib, /System) and framework (@rpath, Qt .framework)
 # references are left alone — macdeployqt already handled Qt.
 # ------------------------------------------------------------------

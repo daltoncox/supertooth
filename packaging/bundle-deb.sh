@@ -6,8 +6,9 @@ usage() {
 Usage: $0 <build-dir> --version <ver> --qt-prefix <path> --output <deb-path>
 
 Build a vendor .deb for supertooth.  Bundles both binaries plus Qt 6.8
-and radio library dependencies (hackrf, bladeRF, liquid-dsp) inside the
-package under /opt/supertooth.
+and radio library dependencies (hackrf, bladeRF) inside the
+package under /opt/supertooth. liquid-dsp is statically linked and is
+not bundled.
 
 Layout:
   /opt/supertooth/bin/      supertooth (CLI) + supertooth-desktop (GUI), qt.conf
@@ -42,8 +43,6 @@ BUILD_DIR=""
 VERSION="0.0.0"
 QT_PREFIX=""
 OUTPUT_DEB=""
-# Custom liquid-dsp install prefix (packaging/build-liquid-linux.sh default).
-LIQUID_PREFIX="${LIQUID_PREFIX:-/opt/liquid-dsp}"
 # Custom libbladeRF install prefix (packaging/build-bladerf-linux.sh
 # default). The release builds libbladeRF >= 2.6.0 from source here because
 # distro packages predate the FX3 firmware v2.6.0 framing change.
@@ -53,7 +52,9 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --version) VERSION="$2"; shift 2 ;;
         --qt-prefix) QT_PREFIX="$2"; shift 2 ;;
-        --liquid-prefix) LIQUID_PREFIX="$2"; shift 2 ;;
+        --liquid-prefix)
+            echo "Warning: --liquid-prefix is deprecated and ignored (liquid-dsp is now statically linked)."
+            shift 2 ;;
         --bladerf-prefix) BLADERF_PREFIX="$2"; shift 2 ;;
         --output) OUTPUT_DEB="$2"; shift 2 ;;
         --arch) ARCH="$2"; shift 2 ;;
@@ -142,6 +143,16 @@ trap 'rm -rf "$STAGING"' EXIT
 echo "=== Installing to staging ==="
 DESTDIR="$STAGING" cmake --install "$BUILD_DIR" --prefix /usr
 
+# liquid-dsp is statically linked, but its install() rules still stage
+# libliquid.a + headers + cmake/pc files. Purge them so the .deb ships
+# only supertooth's own files (dpkg-deb packages the whole staging tree).
+echo "=== Purging vendored liquid-dsp install artifacts (statically linked) ==="
+find "$STAGING" -depth -iname '*liquid*' -exec rm -rf {} +
+if find "$STAGING" -iname '*liquid*' | grep -q .; then
+    echo "  ERROR: liquid artifacts remain in staging"
+    exit 1
+fi
+
 # ------------------------------------------------------------------
 # Layout: everything self-contained under /opt/supertooth
 # ------------------------------------------------------------------
@@ -198,20 +209,13 @@ BINARIES=(
 # System library directories to search (bundled only if not standard)
 # Standard libs (glibc, libstdc++, libpthread, libm, librt, libdl, libz)
 # are NOT bundled — they come from the target system.
-# LIQUID_PREFIX (custom source-built liquid-dsp, default /opt/liquid-dsp)
-# is appended when present so ldd-resolved or globbed libliquid is vendored.
+# NOTE: liquid-dsp is statically linked, never bundled.
 SYSTEM_LIB_DIRS=(
     /usr/lib/$MULTIARCH
     /usr/lib
     /lib/$MULTIARCH
     /lib
 )
-if [[ -d "$LIQUID_PREFIX/lib" ]]; then
-    SYSTEM_LIB_DIRS+=("$LIQUID_PREFIX/lib")
-fi
-if [[ -d "$LIQUID_PREFIX/lib64" ]]; then
-    SYSTEM_LIB_DIRS+=("$LIQUID_PREFIX/lib64")
-fi
 if [[ -d "$BLADERF_PREFIX/lib" ]]; then
     SYSTEM_LIB_DIRS+=("$BLADERF_PREFIX/lib")
 fi
@@ -323,10 +327,9 @@ for binary in "${BINARIES[@]}"; do
             continue
         fi
 
-        # Bundle remaining system libraries (+ custom liquid/bladeRF prefixes)
+        # Bundle remaining system libraries (+ custom bladeRF prefix)
         if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ||
               "$libpath" == "$QT_PREFIX"/* ||
-              "$libpath" == "$LIQUID_PREFIX"/* ||
               "$libpath" == "$BLADERF_PREFIX"/* ]]; then
             copy_lib_with_symlinks "$libpath"
         fi
@@ -417,18 +420,24 @@ fi
 
 # ------------------------------------------------------------------
 # Also bundle radio libs: hackrf from the system, bladeRF from the custom
-# source prefix (/opt/bladerf) or system fallback, liquid-dsp from the
-# custom source prefix (/opt/liquid-dsp) or system fallback.
+# source prefix (/opt/bladerf) or system fallback.
+# (liquid-dsp is statically linked into the binaries, never bundled.)
 # NOTE: bladeRF soname uses capital RF (libbladeRF.so.2).
 # ------------------------------------------------------------------
 echo "=== Bundling radio library dependencies ==="
-for libpattern in libhackrf.so* 'libbladeRF.so*' libbladeRf.so* libbladerf.so* libliquid.so*; do
+for libpattern in libhackrf.so* 'libbladeRF.so*' libbladeRf.so* libbladerf.so*; do
     for dir in "${SYSTEM_LIB_DIRS[@]}"; do
         for libpath in "$dir/$libpattern"; do
             [[ -f "$libpath" ]] && copy_lib_with_symlinks "$libpath"
         done
     done
 done
+
+# liquid-dsp must never appear as a shared dependency (static link check).
+if ls "$LIB_DIR"/libliquid.so* 2>/dev/null | grep -q .; then
+    echo "  ERROR: libliquid found in bundle but liquid-dsp must be statically linked"
+    exit 1
+fi
 
 # ------------------------------------------------------------------
 # Second dependency pass: scan plugin + QML .so files for additional
@@ -450,7 +459,6 @@ while IFS= read -r -d '' sofile; do
         is_system_qt_lib "$libpath" && continue
         if [[ "$libpath" == /lib/* || "$libpath" == /usr/lib/* ||
               "$libpath" == "$QT_PREFIX"/* ||
-              "$libpath" == "$LIQUID_PREFIX"/* ||
               "$libpath" == "$BLADERF_PREFIX"/* ||
               "$libpath" == "$OPT_ROOT"/* ]]; then
             copy_lib_with_symlinks "$libpath"
